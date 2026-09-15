@@ -2,9 +2,42 @@
 //!
 //! Copied from STAR/CORD's `ui/keymap.rs`, which explains the design in full;
 //! this is the same three-layer read (a module's own bindings, then the
-//! global table, then nothing) over three modules instead of five.
+//! global table, then nothing) over three modules instead of five, with two
+//! more layers above it that this module supplies the primitives for but
+//! does not run itself.
 //!
-//! ## Where this plan's grouping had to bend
+//! ## Dispatch order
+//!
+//! A key press reaches its action through five layers, tried in order: an
+//! open overlay takes every key while it is up (`ui/overlays`, Phase 2d);
+//! the `/` filter's text entry takes typing next ([`filter_eats`]); a `g`
+//! waiting for its second key comes next ([`g_prefix`]); the focused
+//! module's own bindings are offered the key after that ([`module`]); and
+//! the global table ([`resolve`]) catches whatever nothing above wanted. The
+//! first three layers are stateful -- is an overlay open, does the filter
+//! have focus, was `g` just pressed -- and that state lives in `ui/app.rs`
+//! (Phase 3a), not here: everything in this module is a pure function of one
+//! `KeyEvent`.
+//!
+//! ## `gh` and `gr` are in the table now
+//!
+//! `gh` (home directory) and `gr` (root) are two-key sequences dispatched by
+//! [`g_prefix`], alongside `gg` (top of the list). An earlier draft left `gh`
+//! and `gr` out of [`BINDINGS`] altogether, because the "every binding
+//! reaches its action" test below could not tell a chord from an
+//! unparseable mistake. They are real bindings the help overlay ought to
+//! list, though, so the fix is in the test rather than in the table: a
+//! spelling of the exact shape `g<char>` -- `gg`, `gh`, `gr` -- is recognised
+//! as a chord and checked against [`g_prefix`] instead of
+//! [`starkit::keymap::KeySpec::parse`], which would (correctly) refuse to
+//! parse two characters as one key. That refusal is also what keeps `gh` and
+//! `gr` out of [`GLOBAL`] and [`MODULES`]: `starkit::keymap::Keymap::
+//! from_table` drops whatever alternative it cannot parse rather than
+//! panicking on it, so the chord spellings sit in [`BINDINGS`] for the help
+//! overlay and contribute no dispatch entry of their own -- `g_prefix` is
+//! the only way to reach [`Action::GoHome`] and [`Action::GoRoot`].
+//!
+//! ## Two scopes, one group split in two
 //!
 //! The plan's Keys section describes the OPERATIONS queue's actions in two
 //! scopes at once -- `y`/`p`/`m`/`d`/`X`/`ctrl+x` reach from anywhere, while
@@ -15,22 +48,25 @@
 //! `"operations"` group and the module's own three keys are `"queue"`; both
 //! are documented under those names rather than one.
 //!
-//! `gh` and `gr` (go home, go root) are two-key sequences dispatched by
-//! [`g_prefix`] alongside `gg`, the same as STAR/CORD's. Unlike `gg`, which
-//! is also an alternate spelling on a binding that has a real single-key
-//! spelling of its own (`home`), `gh` and `gr` have no such spelling to ride
-//! along on, so they are not in [`BINDINGS`] at all: a table entry whose only
-//! key cannot be parsed as one key would fail the "every binding reaches its
-//! action" invariant below. They are still real bindings -- `g_prefix` is
-//! tested directly -- just not ones the generated help document lists.
+//! Those three module keys deliberately reuse a global key -- `enter` and
+//! `esc` -- to mean something more specific while OPERATIONS has focus. That
+//! is the only place it happens: [`SHADOWS`] lists the two on purpose, with
+//! why, and a test asserts nothing else in any module shadows a global
+//! binding by accident.
+//!
+//! The PREVIEW module has no group of its own and none is planned here: it
+//! is scrolled with the global navigation keys (`j`/`k`, `pgup`/`pgdn`,
+//! `gg`/`G`) exactly like every other list, and there is nothing preview-
+//! specific to bind yet.
 //!
 //! ## Invariants
 //!
 //! Carried over from STAR/CORD, each one a test at the bottom of this file:
 //! a bare arrow moves one and a shifted one moves ten; every key in the table
-//! can be spelled in the table; `hjkl` navigates and never adjusts a value;
-//! `esc` never quits; a label is at most 19 characters; every group appears
-//! in one run of the table.
+//! can be spelled in the table, chords included, via `g_prefix`; `hjkl`
+//! navigates and never adjusts a value; `esc` never quits; a label is at most
+//! 19 characters; every group appears in one run of the table; no module key
+//! shadows a global one except the ones in [`SHADOWS`].
 
 use std::sync::LazyLock;
 
@@ -49,6 +85,8 @@ pub enum Action {
     CursorDownBig,
     PageUp,
     PageDown,
+    /// `gg`/`home`: to the top of the current listing -- the list, not the
+    /// filesystem. See [`Action::GoHome`] for the directory called home.
     Home,
     End,
     Activate,
@@ -68,8 +106,10 @@ pub enum Action {
     Pop,
     JumpUp,
     JumpDown,
-    /// `gg`: to the top of the list. Not to be confused with `GoHome`.
+    /// `gh`: to the home directory (`~`). Not to be confused with
+    /// [`Action::Home`], which moves the cursor to the top of the list.
     GoHome,
+    /// `gr`: to the filesystem root (`/`).
     GoRoot,
     OpenExternal,
     Rename,
@@ -86,6 +126,9 @@ pub enum Action {
     QueueMove,
     QueueDelete,
     RunQueue,
+    /// `ctrl+x`: stop the running op. Not `ctrl+c` -- that quits, see
+    /// [`Action::Quit`] -- so a slip of the finger during a long copy does
+    /// not kill the whole application.
     CancelRun,
 
     // -- the operations queue's own keys --
@@ -106,6 +149,10 @@ pub enum Action {
 
     // -- application --
     Help,
+    /// `q`/`ctrl+c`: quit. `ctrl+c` is bound here, not to cancel, because
+    /// that is the terminal habit everywhere else; the running op's cancel
+    /// key is `ctrl+x` ([`Action::CancelRun`]), deliberately a different key
+    /// so the two are never confused under one's fingers.
     Quit,
     Redraw,
 }
@@ -129,7 +176,9 @@ pub enum Scope {
 }
 
 /// Every group in [`BINDINGS`], and where it applies. See the module doc for
-/// why the operations queue is two groups rather than one.
+/// why the operations queue is two groups rather than one. `Module::Preview`
+/// appears in no `Scope::Modules` list here -- see the module doc's note on
+/// why the preview has no bindings of its own.
 pub const GROUPS: &[(&str, Scope)] = &[
     ("navigation", Scope::Global),
     ("stack", Scope::Modules(&[Module::Stack])),
@@ -257,6 +306,20 @@ pub const BINDINGS: &[Binding] = &[
         action: Action::JumpDown,
         keys: "alt+down",
         label: "jump back down",
+        group: "stack",
+    },
+    // `gh`/`gr` are chords, spelled but not parsed as one key -- see the
+    // module doc's note on why they are still in this table.
+    Binding {
+        action: Action::GoHome,
+        keys: "gh",
+        label: "the home directory",
+        group: "stack",
+    },
+    Binding {
+        action: Action::GoRoot,
+        keys: "gr",
+        label: "the root",
         group: "stack",
     },
     Binding {
@@ -462,9 +525,18 @@ pub const MOUSE: &[MouseHelp] = &[
 ];
 
 /// The global half of the table, keyed.
+///
+/// `Keymap::from_table` parses each binding's alternatives with
+/// `KeySpec::parse` and silently drops whatever does not parse as one key
+/// (logging it rather than panicking) -- see `starkit::keymap::Keymap::
+/// from_table`. That is what lets `gh`'s and `gr`'s single, two-character
+/// spelling sit in [`BINDINGS`] for the help overlay to print without ever
+/// producing an entry here: `g_prefix` is the only way to reach them.
 static GLOBAL: LazyLock<Keymap<Action>> = LazyLock::new(|| Keymap::from_table(&global_bindings()));
 
-/// A module's own half, one map each, built once.
+/// A module's own half, one map each, built once. The same tolerant parsing
+/// as [`GLOBAL`] applies, which is why `gh` and `gr` do not turn up as
+/// one-key bindings in the stack module's map either.
 static MODULES: LazyLock<Vec<(Module, Keymap<Action>)>> = LazyLock::new(|| {
     ALL_MODULES
         .iter()
@@ -473,6 +545,45 @@ static MODULES: LazyLock<Vec<(Module, Keymap<Action>)>> = LazyLock::new(|| {
 });
 
 const ALL_MODULES: &[Module] = &[Module::Stack, Module::Preview, Module::Operations];
+
+/// One module binding that intentionally claims a key the global table
+/// already uses, and why. `enter` and `esc` are how the plan describes the
+/// OPERATIONS queue's own keys (see the module doc), and both happen to be
+/// spellings the global navigation group also binds. Every other repeat
+/// between a module's own bindings and the global table is a mistake rather
+/// than a decision, which is what the invariant test below is for: it walks
+/// every module's keys, and any overlap with the global table that is not
+/// listed here fails it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shadow {
+    pub module: Module,
+    /// The key spelling, exactly as [`starkit::keymap::KeySpec::parse`]
+    /// accepts it.
+    pub keys: &'static str,
+    pub module_action: Action,
+    pub global_action: Action,
+    pub reason: &'static str,
+}
+
+/// The complete list of deliberate shadows. See [`Shadow`].
+pub const SHADOWS: &[Shadow] = &[
+    Shadow {
+        module: Module::Operations,
+        keys: "enter",
+        module_action: Action::RunOp,
+        global_action: Action::Activate,
+        reason: "enter in the queue runs the op under the cursor, not the \
+                 global \"open\"",
+    },
+    Shadow {
+        module: Module::Operations,
+        keys: "esc",
+        module_action: Action::ClearQueue,
+        global_action: Action::Back,
+        reason: "esc in the queue clears it outright rather than merely \
+                 cancelling",
+    },
+];
 
 fn scope_of(group: &str) -> Scope {
     GROUPS
@@ -524,57 +635,44 @@ pub fn resolve(k: KeyEvent) -> Option<Action> {
     GLOBAL.resolve(k)
 }
 
-/// Where a `g`-prefixed sequence stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrefixKey {
-    Waiting,
-    Action(Action),
-    None,
-}
-
-/// `gg` to the top, `gh` home, `gr` root -- see the module doc for why these
-/// three, and only these three, are not in [`BINDINGS`].
-pub fn g_prefix(pending: &mut bool, k: KeyEvent) -> PrefixKey {
-    let plain = !k
-        .modifiers
-        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-    if *pending {
-        *pending = false;
-        if plain {
-            if let KeyCode::Char(c) = k.code {
-                match c {
-                    'g' => return PrefixKey::Action(Action::Home),
-                    'h' => return PrefixKey::Action(Action::GoHome),
-                    'r' => return PrefixKey::Action(Action::GoRoot),
-                    _ => {}
-                }
-            }
-        }
-        return PrefixKey::None;
-    }
-    if plain && k.code == KeyCode::Char('g') {
-        *pending = true;
-        return PrefixKey::Waiting;
-    }
-    PrefixKey::None
-}
-
-/// Whether the `/` filter's text entry, having focus, takes this key as
-/// typing rather than as a command.
+/// What the key after a `g` means, if `g` was the one before it.
 ///
-/// Every `alt+…` falls through, the same rule and the same reason as STAR/
-/// CORD's composer: closing the OPERATIONS module or switching the theme
-/// while a filter is half-typed has to keep working. `esc` and `enter` are
-/// the ways out and neither is eaten.
-pub fn filter_eats(k: KeyEvent) -> bool {
-    if k.modifiers.contains(KeyModifiers::ALT) {
-        return false;
+/// `gg` to the top, `gh` home, `gr` root -- see the module doc for why these
+/// three, and only these three, are not ordinary one-key entries in
+/// [`GLOBAL`] or [`MODULES`]. This function is pure and stateless: it is
+/// only ever the *second* key of the sequence, and whether a `g` is
+/// currently pending -- whether to call this at all rather than [`module`]
+/// or [`resolve`] -- is state `ui/app.rs` (Phase 3a) owns, one bool beside
+/// its other per-frame state, not this module. That keeps every function
+/// here a function of one `KeyEvent`, which is what makes them easy to test
+/// in isolation, this one included.
+pub fn g_prefix(k: KeyEvent) -> Option<Action> {
+    if k.modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
     }
-    if k.modifiers.contains(KeyModifiers::CONTROL) {
-        return matches!(
-            k.code,
-            KeyCode::Char('u') | KeyCode::Char('w') | KeyCode::Char('a') | KeyCode::Char('e')
-        );
+    match k.code {
+        KeyCode::Char('g') => Some(Action::Home),
+        KeyCode::Char('h') => Some(Action::GoHome),
+        KeyCode::Char('r') => Some(Action::GoRoot),
+        _ => None,
+    }
+}
+
+/// Whether `k`, with no `ctrl`/`alt`, is a key someone typing text would
+/// expect to work: a character, or a plain editing motion.
+///
+/// Factored out of [`filter_eats`] because the two things a text field has
+/// to decide -- "is this a character or motion" and "which control keys
+/// does *this* field also use" -- are different questions; STAR/CORD's
+/// composer answers the second one differently (it also eats plain `enter`,
+/// which sends, where the filter's `enter` is a way out and is not eaten).
+pub fn is_text_key(k: KeyEvent) -> bool {
+    if k.modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return false;
     }
     matches!(
         k.code,
@@ -588,6 +686,35 @@ pub fn filter_eats(k: KeyEvent) -> bool {
     )
 }
 
+/// Whether the `/` filter's text entry, having focus, takes this key as
+/// typing rather than as a command.
+///
+/// Every `alt+…` falls through, the same rule and the same reason as STAR/
+/// CORD's composer: closing the OPERATIONS module or switching the theme
+/// while a filter is half-typed has to keep working. `ctrl+a`/`e`/`u`/`w`
+/// are the line-editing motions the filter implements and nothing else is,
+/// so `ctrl+l` (redraw) and every other `ctrl+…` fall through too. `?` is
+/// the one plain character carved out of [`is_text_key`]'s rule: it is
+/// [`Action::Help`], and help has to stay reachable while a filter is
+/// half-typed the same as it does mid-sentence in STAR/CORD's composer, so
+/// it is not typed into the filter the way every other character is. `esc`
+/// and `enter` are the ways out and neither is a text key to begin with.
+pub fn filter_eats(k: KeyEvent) -> bool {
+    if k.modifiers.contains(KeyModifiers::ALT) {
+        return false;
+    }
+    if k.code == KeyCode::Char('?') {
+        return false;
+    }
+    if k.modifiers.contains(KeyModifiers::CONTROL) {
+        return matches!(
+            k.code,
+            KeyCode::Char('u') | KeyCode::Char('w') | KeyCode::Char('a') | KeyCode::Char('e')
+        );
+    }
+    is_text_key(k)
+}
+
 /// What `docs/keys-and-mouse.md` says before the tables.
 const HEADER: &str = "\
 # Keys and the mouse
@@ -596,11 +723,16 @@ Every key STAR/FOLD knows, in the order the `?` overlay prints them. This
 file is generated from the table in `src/ui/keymap.rs`, and a test fails if
 the two disagree.
 
-A key is offered to the focused module first and to the global table second,
-so a binding under a module heading works while that module has focus and
-the global ones work from everywhere. While the `/` filter has focus it takes
-raw keys, because a letter typed into it is a letter, not a command; every
-`alt+\u{2026}` falls through it, and `esc` and `enter` are always the way out.
+A key reaches its action through five layers, tried in order: an open
+overlay takes every key while it is up; the `/` filter's text entry takes
+typing next, because a letter typed into it is a letter, not a command;
+`g` waiting for a second key (`gg`, `gh`, `gr`) comes next; the focused
+module's own bindings are offered the key after that, so a binding under a
+module heading works while that module has focus; and the global table
+catches whatever nothing above wanted, which is what makes it work from
+everywhere. While the filter has focus, every `alt+\u{2026}` falls through
+it and so does `?`, so help and the appearance and panel keys stay reachable
+mid-search; `esc` and `enter` are always the way out.
 ";
 
 /// The key table as `docs/keys-and-mouse.md`. Run with `STARFOLD_UPDATE_DOCS=1`
@@ -631,7 +763,7 @@ pub fn document() -> String {
         ));
     }
 
-    out.push_str("\n## the mouse\n\n| where | gesture | what it does |\n|---|---|---|\n");
+    out.push_str("\n## The mouse\n\n| where | gesture | what it does |\n|---|---|---|\n");
     for m in MOUSE {
         out.push_str(&format!(
             "| {:<8} | {:<width$} | {} |\n",
@@ -673,6 +805,21 @@ mod tests {
         starkit::keymap::alternatives(b.keys)
             .filter_map(KeySpec::parse)
             .collect()
+    }
+
+    /// The second character of a `g<char>` chord spelling -- `gg`, `gh`,
+    /// `gr` -- or `None` if `alt` is not shaped like one. Exactly two
+    /// characters, the first a plain `g`: `KeySpec::parse` refuses this (it
+    /// is not one key), and `g_prefix` is how it dispatches instead. See the
+    /// module doc's note on `gh`/`gr`.
+    fn chord_char(alt: &str) -> Option<char> {
+        let mut chars = alt.chars();
+        let first = chars.next()?;
+        let second = chars.next()?;
+        if chars.next().is_some() || first != 'g' {
+            return None;
+        }
+        Some(second)
     }
 
     #[test]
@@ -720,22 +867,38 @@ mod tests {
         }
     }
 
+    /// Every key in [`BINDINGS`] can be pressed and reaches its action --
+    /// through [`resolve`]/[`module`] for an ordinary spelling, and through
+    /// [`g_prefix`] for a `g<char>` chord ([`chord_char`]). A spelling that
+    /// is neither is the "gg has no real key" mistake the chord rule exists
+    /// to catch: this test still refuses a binding with no reachable
+    /// alternative at all.
     #[test]
     fn every_binding_reaches_its_action() {
         for b in BINDINGS {
-            let parsed = specs(b);
-            assert!(
-                !parsed.is_empty(),
-                "{:?} has no key anything could press",
-                b.keys
-            );
-            let reachable = parsed.iter().any(|s| {
-                let k = KeyEvent::new(s.code, s.mods);
-                match scope_of(b.group) {
+            let mut reachable = false;
+            for alt in starkit::keymap::alternatives(b.keys) {
+                if let Some(c) = chord_char(alt) {
+                    assert_eq!(
+                        g_prefix(plain(c)),
+                        Some(b.action),
+                        "{:?} ({:?}) is a chord and g_prefix does not dispatch it",
+                        b.keys,
+                        b.action
+                    );
+                    reachable = true;
+                    continue;
+                }
+                let Some(spec) = KeySpec::parse(alt) else {
+                    continue;
+                };
+                let k = KeyEvent::new(spec.code, spec.mods);
+                let hit = match scope_of(b.group) {
                     Scope::Global => resolve(k) == Some(b.action),
                     Scope::Modules(list) => list.iter().any(|&m| module(m, k) == Some(b.action)),
-                }
-            });
+                };
+                reachable |= hit;
+            }
             assert!(
                 reachable,
                 "{:?} ({:?}) is in the help and dispatches to nothing",
@@ -845,37 +1008,31 @@ mod tests {
         }
     }
 
+    /// `g_prefix` is the second half of a chord: it is asked "what does this
+    /// key mean, given a `g` just came before it" and answers for exactly
+    /// `g`/`h`/`r`, with no memory of its own of whether a `g` really did.
     #[test]
     fn the_g_prefix_reaches_home_and_the_two_go_actions() {
-        let mut pending = false;
-        assert_eq!(g_prefix(&mut pending, plain('g')), PrefixKey::Waiting);
-        assert_eq!(
-            g_prefix(&mut pending, plain('g')),
-            PrefixKey::Action(Action::Home)
-        );
-        assert!(!pending);
-
-        assert_eq!(g_prefix(&mut pending, plain('g')), PrefixKey::Waiting);
-        assert_eq!(
-            g_prefix(&mut pending, plain('h')),
-            PrefixKey::Action(Action::GoHome)
-        );
-
-        assert_eq!(g_prefix(&mut pending, plain('g')), PrefixKey::Waiting);
-        assert_eq!(
-            g_prefix(&mut pending, plain('r')),
-            PrefixKey::Action(Action::GoRoot)
-        );
-
-        assert_eq!(g_prefix(&mut pending, plain('g')), PrefixKey::Waiting);
-        assert_eq!(
-            g_prefix(&mut pending, plain('x')),
-            PrefixKey::None,
-            "a mistake cancels the sequence"
-        );
-        assert!(!pending);
+        assert_eq!(g_prefix(plain('g')), Some(Action::Home));
+        assert_eq!(g_prefix(plain('h')), Some(Action::GoHome));
+        assert_eq!(g_prefix(plain('r')), Some(Action::GoRoot));
+        assert_eq!(g_prefix(plain('x')), None, "a mistake reaches nothing");
     }
 
+    /// `ctrl`/`alt` on the second key is never part of the sequence -- it is
+    /// some other binding's, not a mistyped chord.
+    #[test]
+    fn the_g_prefix_ignores_ctrl_and_alt() {
+        assert_eq!(
+            g_prefix(with(KeyCode::Char('h'), KeyModifiers::CONTROL)),
+            None
+        );
+        assert_eq!(g_prefix(with(KeyCode::Char('r'), KeyModifiers::ALT)), None);
+    }
+
+    /// `g` on its own -- with no chord in progress -- resolves to nothing in
+    /// either table, or the first half of `gg`/`gh`/`gr` would do something
+    /// before the second half arrived.
     #[test]
     fn g_on_its_own_resolves_to_nothing() {
         assert_eq!(resolve(plain('g')), None);
@@ -884,9 +1041,21 @@ mod tests {
         }
     }
 
+    /// `gh`/`gr` sit in [`BINDINGS`] for the help overlay, but a bare `h` or
+    /// `r` -- no `g` first -- keeps its ordinary, unprefixed meaning in the
+    /// stack module: the chord costs nothing to the keys it borrows from.
+    #[test]
+    fn chord_spellings_do_not_shadow_their_own_letters() {
+        assert_eq!(module(Module::Stack, plain('h')), Some(Action::Pop));
+        assert_eq!(module(Module::Stack, plain('r')), Some(Action::Rename));
+    }
+
     #[test]
     fn plain_letters_are_typing_in_the_filter_and_esc_and_enter_are_not() {
         for c in ('a'..='z').chain('A'..='Z').chain('0'..='9') {
+            if c == '?' {
+                continue;
+            }
             assert!(
                 filter_eats(plain(c)),
                 "{c:?} should be typed, not dispatched"
@@ -894,6 +1063,34 @@ mod tests {
         }
         assert!(!filter_eats(code(KeyCode::Esc)));
         assert!(!filter_eats(code(KeyCode::Enter)));
+    }
+
+    /// `?` is a plain character and every other one is typed into the
+    /// filter, but this one is reserved for [`Action::Help`], which must
+    /// stay reachable while a search is half-typed.
+    #[test]
+    fn the_filter_does_not_eat_question_mark() {
+        assert!(!filter_eats(plain('?')));
+        assert_eq!(resolve(plain('?')), Some(Action::Help));
+    }
+
+    /// The rest of what the module doc promises about `filter_eats`:
+    /// `up`/`down`, `pgup`/`pgdn`, `tab`/`shift+tab` and `ctrl+l` all fall
+    /// through it, alongside `esc`/`enter` and every `alt+…` covered
+    /// elsewhere.
+    #[test]
+    fn the_filter_does_not_eat_the_navigation_and_redraw_keys() {
+        for k in [
+            code(KeyCode::Up),
+            code(KeyCode::Down),
+            code(KeyCode::PageUp),
+            code(KeyCode::PageDown),
+            code(KeyCode::Tab),
+            code(KeyCode::BackTab),
+            with(KeyCode::Char('l'), KeyModifiers::CONTROL),
+        ] {
+            assert!(!filter_eats(k), "{k:?} should fall through the filter");
+        }
     }
 
     #[test]
@@ -923,6 +1120,55 @@ mod tests {
                     "{m:?} swallowed {c:?}, which is global"
                 );
             }
+        }
+    }
+
+    /// The preview has no group of its own in [`GROUPS`] -- see the module
+    /// doc's note on why -- so it has no module-scoped bindings at all;
+    /// scrolling it is entirely the global navigation group's job.
+    #[test]
+    fn the_preview_module_has_no_bindings_of_its_own() {
+        assert!(
+            module_bindings(Module::Preview).is_empty(),
+            "the preview is meant to scroll on the global navigation keys alone"
+        );
+    }
+
+    /// A module's own binding is allowed to claim a key the global table
+    /// already uses only where [`SHADOWS`] says so. Every other repeat is
+    /// the accident the rest of this file's tests exist to catch, one key at
+    /// a time; this one checks the whole table at once.
+    #[test]
+    fn no_module_key_shadows_a_global_one_except_the_documented_shadows() {
+        for &m in ALL_MODULES {
+            for b in module_bindings(m) {
+                for s in specs(&b) {
+                    let k = KeyEvent::new(s.code, s.mods);
+                    let Some(global_action) = resolve(k) else {
+                        continue;
+                    };
+                    let documented = SHADOWS.iter().any(|sh| {
+                        sh.module == m
+                            && sh.module_action == b.action
+                            && sh.global_action == global_action
+                    });
+                    assert!(
+                        documented,
+                        "{m:?} binds {s:?} to {:?}, shadowing the global {global_action:?}, \
+                         and this is not in SHADOWS",
+                        b.action
+                    );
+                }
+            }
+        }
+
+        // And every declared shadow is a real overlap, not a stale entry.
+        for sh in SHADOWS {
+            let spec = KeySpec::parse(sh.keys).unwrap_or_else(|| panic!("{sh:?} does not parse"));
+            let k = KeyEvent::new(spec.code, spec.mods);
+            assert_eq!(module(sh.module, k), Some(sh.module_action), "{sh:?}");
+            assert_eq!(resolve(k), Some(sh.global_action), "{sh:?}");
+            assert!(!sh.reason.is_empty(), "{sh:?} has no reason");
         }
     }
 }

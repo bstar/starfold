@@ -4,11 +4,16 @@ Every key STAR/FOLD knows, in the order the `?` overlay prints them. This
 file is generated from the table in `src/ui/keymap.rs`, and a test fails if
 the two disagree.
 
-A key is offered to the focused module first and to the global table second,
-so a binding under a module heading works while that module has focus and
-the global ones work from everywhere. While the `/` filter has focus it takes
-raw keys, because a letter typed into it is a letter, not a command; every
-`alt+…` falls through it, and `esc` and `enter` are always the way out.
+A key reaches its action through five layers, tried in order: an open
+overlay takes every key while it is up; the `/` filter's text entry takes
+typing next, because a letter typed into it is a letter, not a command;
+`g` waiting for a second key (`gg`, `gh`, `gr`) comes next; the focused
+module's own bindings are offered the key after that, so a binding under a
+module heading works while that module has focus; and the global table
+catches whatever nothing above wanted, which is what makes it work from
+everywhere. While the filter has focus, every `alt+…` falls through
+it and so does `?`, so help and the appearance and panel keys stay reachable
+mid-search; `esc` and `enter` are always the way out.
 
 ## navigation
 
@@ -42,6 +47,8 @@ _in the stack_
 | `h/left/bs`    | back one level |
 | `alt+up`       | jump to the parent |
 | `alt+down`     | jump back down |
+| `gh`           | the home directory |
+| `gr`           | the root |
 | `o`            | open externally |
 | `r`            | rename |
 | `F5/ctrl+r`    | reload |
@@ -110,7 +117,7 @@ _everywhere_
 | `ctrl+l`       | redraw the screen |
 | `q/ctrl+c`     | quit |
 
-## the mouse
+## The mouse
 
 | where | gesture | what it does |
 |---|---|---|
