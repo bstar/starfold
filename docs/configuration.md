@@ -19,7 +19,7 @@ defaults. Editing one key never means writing the other six.
 | `[ui] graphics` | how the preview draws a picture: `auto` asks the terminal, `kitty` insists on the kitty protocol, `blocks` (also spelled `halfblocks`) draws two pixels to a cell in any terminal at all, `off` draws no picture and leaves a name instead. Default `auto` |
 | `[ui] padding_x` / `padding_y` | blank columns and rows around the whole layout, for a terminal whose window has none. Default `0` |
 | `[ui] show_hidden` | show dotfiles by default. Default `false`. `.` toggles it for the running session |
-| `[ui] sort` | the starting sort key: `name`, `size`, `modified` or `kind`. Default `"name"` |
+| `[ui] sort` | the starting sort key: `name`, `size`, `time` or `ext`. Default `"name"`. `time` sorts newest first; `ext` groups by extension, then by name |
 | `[ui] sort_reverse` | reverse the starting sort. Default `false` |
 | `[ui] dirs_first` | list directories before files under any sort. Default `true` |
 | `[ui] fold_rows` | how many folded parent levels the stack shows before squeezing them into one crumb row. Default `6` |
@@ -52,17 +52,19 @@ than drawing something it cannot draw honestly.
 
 | Key | Does |
 | --- | --- |
-| `[open] command` | argv for opening a file externally, never a shell line. The path is appended. Default `[]`, which is the desktop's own opener — `open` on macOS, `xdg-open` elsewhere |
+| `[open] command` | a whitespace-split argv for opening a file externally, with the path appended as its own argument. Default `""`, which is the desktop's own opener — `open` on macOS, `xdg-open` elsewhere |
 
-`command` is a list because a file name with a space or a semicolon in it is
-somebody else's file name, and it reaches a program without ever reaching a
-shell.
+`command` is one string, split on whitespace into a program and its flags,
+rather than a shell line: a file name with a space or a semicolon in it is
+somebody else's file name, and it reaches the program as one argument without
+ever passing through a shell to be reinterpreted.
 
 ## Theming
 
-`theme = "system"` follows the desktop. STAR/FOLD reads Stylix's
-`~/.config/stylix/palette.json`, so whatever base16 scheme the rest of the
-desktop is set to, it matches it.
+`theme = "system"` follows the desktop: STAR/FOLD reads Stylix's
+`~/.config/stylix/palette.json` (or `palette.yaml`) first, so whatever base16
+scheme the rest of the desktop is set to, it matches it, and falls back to
+COSMIC's own settings when there is no Stylix file to read.
 
 Sixteen themes ship built in, and `t` and `T` cycle them live:
 
@@ -84,27 +86,33 @@ format.
 
 None of the sixteen shared files says anything about a file listing, and none
 of them should have to: a theme is a palette. So the `[fold]` table is
-*derived* from that palette — one rule per role, run over sixteen schemes and
-held to a contrast floor — and a theme file that does state a role has the
-last word.
+*derived* from that palette — one rule per role, read from a base16 slot where
+one applies and held to a contrast floor afterwards — and a theme file that
+does state a role has the last word. [Themes](themes.md) has the format for
+stating one.
 
-| Role | Is |
-| --- | --- |
-| `dir_fg` | a directory's name |
-| `symlink_fg` | a symlink's name |
-| `exec_fg` | a file with an executable bit set |
-| `hidden_fg` | a dotfile, when shown |
-| `marked_fg` | a marked entry, and the mark itself |
-| `crumb_fg` | a folded level's name in the breadcrumb trail |
-| `size_fg` | the size column |
-| `time_fg` | the modified-time column |
-| `progress_fg` | the operations progress bar |
-| `conflict_fg` | a row the queue found a conflict on |
-| `error_fg` | a listing or an operation that failed |
+| Role | Is | Derived from |
+| --- | --- | --- |
+| `dir_fg` | a directory's name, and a symlink to one | base16 `base0D` (blue) |
+| `symlink_fg` | a symlink's name | base16 `base0C` (cyan) |
+| `exec_fg` | a file with the executable bit set | base16 `base0B` (green) |
+| `hidden_fg` | a dotfile, when hidden files are shown | the theme's dim colour |
+| `marked_fg` | the mark glyph and a marked row's text | base16 `base0A` (yellow) |
+| `marked_bg` | a marked row's background tint | the panel background mixed 20% toward the accent |
+| `crumb_fg` | a folded level's line | the theme's dim colour |
+| `crumb_active_fg` | the active level's rule | the theme's header colour |
+| `size_fg` | the size column | the theme's row-metadata colour |
+| `time_fg` | the modified-time column | the theme's row-metadata colour |
+| `kind_fg` | the kind/extension column | the theme's dim colour |
+| `progress_fg` | the running operation's bar | the theme's accent colour |
+| `progress_bg` | the bar's own track | the panel background mixed 15% toward the foreground |
+| `conflict_fg` | a queued operation waiting on a conflict answer | base16 `base09` (orange) |
+| `error_fg` | a listing or an operation that failed | base16 `base08` (red) |
 
 Every built-in is checked against WCAG AA in the test suite. Anything carrying
-words clears 4.5:1 against what it is drawn on; a mark that carries no letters
-clears 3:1.
+words clears 4.5:1 against what it is drawn on; a role that carries no letters
+of its own — the progress bar's fill against its track, a marked row's tint
+against the plain panel — clears 3:1.
 
 ## Where it keeps things
 

@@ -2,46 +2,61 @@
 
 ```
 starfold [--verbose] [DIR]
-starfold list DIR [--hidden] [--sort KEY]
+starfold list DIR [--hidden] [--sort name|size|time|ext]
 ```
 
 `--verbose` raises the log level to debug. It goes to the log file at
 `~/.local/starfold/cache/starfold.log` and never to the terminal: the window
-owns the alternate screen, and `list` writes a report to stdout that a script
-may be reading. `STARFOLD_LOG` overrides the filter entirely, with the syntax
-`tracing`'s `EnvFilter` uses — `STARFOLD_LOG=starfold::fold::ops=trace`, for
-instance.
+owns the alternate screen, and `list` writes its report to stdout, which a
+script may be reading. `STARFOLD_LOG` overrides the filter entirely, with the
+syntax `tracing`'s `EnvFilter` uses — `STARFOLD_LOG=starfold::fold::ops=trace`,
+for instance.
 
-With no subcommand, `starfold` opens the window on `DIR`, or on the current
-directory if none is given.
+With no subcommand, `starfold` opens the window on `DIR`, or on the session's
+last directory (falling back to the current one on a first run) if none is
+given.
 
 ## `starfold list`
 
-Reads one directory and prints it, with no window involved. It is how the
-core is exercised while there is little UI to click through yet, and it is
-meant to stay after there is one: a defect that reproduces with no terminal
-attached is a defect with a much shorter report.
+Reads one directory and prints it, with no window involved — STAR/CORD's
+`probe` equivalent. It exists because the core is written before there is a
+terminal to drive it, and it stays useful afterwards: printing what a
+directory holds with no TTY attached is a much shorter bug report than the
+whole window.
 
 ```sh
 starfold list ~/projects/starfold
 ```
 
 ```
-src/                              dir         -    Sep 12 14:02
-Cargo.toml                        toml    1.2 KB   Sep 14 09:27
-Cargo.lock                        lock  139.5 KB   Sep 14 09:39
-README.md                         md    3.1 KB   Sep 10 09:41
+drwxr-xr-x         -  Sep 12      src/
+-rw-r--r--    1.2 KB  Sep 14      Cargo.toml
+-rw-r--r--  139.5 KB  Sep 14      Cargo.lock
+-rw-r--r--    3.1 KB  Sep 10      README.md
 ```
+
+Four columns: the Unix mode (`ls -l`'s ten characters — type plus the three
+`rwx` triads, with setuid/setgid/sticky folded into the executable position
+the way `ls -l` draws them), the size (`-` for a directory, since a
+directory's own inode size is not one), when it was last modified (a clock
+time for today, month and day for this year, a full date for anything older
+or for a time in the future), and the name. A directory's name is shown with
+a trailing `/`; a symlink to one counts as a directory here too.
 
 | Flag | Does |
 | --- | --- |
-| `--hidden` | include dotfiles |
-| `--sort KEY` | `name`, `size`, `modified` or `kind`. Default `name` |
+| `--hidden` | include entries whose name starts with `.` |
+| `--sort KEY` | `name`, `size`, `time` or `ext`. Default `name` |
+
+If the directory holds more than `[ui] max_entries` entries (50000 by
+default — the same limit the window's own listing uses), the read stops there
+and the last line of output is `(truncated)`.
 
 ### Exit status
 
-`0` on a successful listing. Non-zero, with the reason on stderr, when the
-directory cannot be read — permission denied, or it does not exist.
+`0` on success. Non-zero on any failure, with the reason on stderr — most
+often the directory cannot be read (permission denied) or does not exist, in
+which case the line is `<dir>: <reason>` and the exit code is `1`.
 
 ## Environment variables
 

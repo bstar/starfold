@@ -32,6 +32,25 @@ nix run github:bstar/starfold        # Nix, on Linux or Apple Silicon macOS
 [Installing](docs/installing.md) covers every route, including building from
 source. There are no system libraries to install first.
 
+## Try it
+
+```sh
+starfold ~/projects
+```
+
+Opens the window there: `l` or `enter` drills into a directory, `h` backs out
+one level, `space` marks the entry under the cursor, and `y` queues a copy of
+whatever is marked to wherever you land next — nothing touches disk until you
+run the queue with `enter` or `X`.
+
+```sh
+starfold list .
+```
+
+Prints the current directory and exits, with no window involved — the same
+reader the column itself uses. [On the command line](docs/cli.md) has the
+rest of it.
+
 ## What it does
 
 - **The fold stack.** Entering a directory pushes a level onto a column; every
