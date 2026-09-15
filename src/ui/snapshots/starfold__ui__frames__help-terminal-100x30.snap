@@ -2,33 +2,33 @@
 source: src/ui/frames.rs
 expression: "render(&mut app, 100, 30)"
 ---
-╔═ S T A R╔ STAR/FOLD keys — more below ═════════════════════════════════════════════════╗═ stack ═╗
-║         ║  navigation                         stack                                    ║  filter ║
-║─ ~ ── 3 ║  tab           next module          click                move the cursor     ║─────────║
-║    empty║  shift+tab     previous module      double-click         open it             ║ 10      ║
-║    pictu║  alt+1         the stack            right-click          mark it             ║ 10      ║
-║    proje║  alt+2         the preview          click a crumb        jump there          ║ 10      ║
-║    blob.║  alt+3         operations           wheel                scroll three rows   ║ 10      ║
-║    dangl║  up/k          up one               modules                                  ║ 10      ║
-║    notes║  down/j        down one             click a fold         open it             ║ 10      ║
+╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
+║         ╔═ KEYS ═══════════════════════════════════════════════════════════════════════╗  filter ║
+║─ ~ ── 3 ║  navigation                         stack                                    ║─────────║
+║    empty║  tab           next module          click                move the cursor     ║ 10      ║
+║    pictu║  shift+tab     previous module      double-click         open it             ║ 10      ║
+║    proje║  alt+1         the stack            right-click          mark it             ║ 10      ║
+║    blob.║  alt+2         the preview          click a crumb        jump there          ║ 10      ║
+║    dangl║  alt+3         operations           wheel                scroll three rows   ║ 10      ║
+║    notes║  up/k          up one               modules                                  ║ 10      ║
+║         ║  down/j        down one             click a fold         open it             ║         ║
 ║         ║  shift+up/K    up ten               click a word         what it says        ║         ║
 ║         ║  shift+down/J  down ten             status                                   ║         ║
 ║         ║  pgup          page up              click the bar        open operations     ║         ║
 ║         ║  pgdn          page down                                                     ║         ║
 ║         ║  home/gg       to the top                                                    ║         ║
 ║         ║  end/G         to the bottom                                                 ║         ║
-║         ║  enter         open                                                          ║         ║
-╚═════════║  esc           cancel                                                        ║═════════╝
-╔═ PREVIEW║  stack                                                                       ║═════════╗
-║         ║  l/right       into the directory                                            ║   close ║
+╚═════════║  enter         open                                                          ║═════════╝
+╔═ PREVIEW║  esc           cancel                                                        ║═════════╗
+║         ║  stack                                                                       ║   close ║
+║         ║  l/right       into the directory                                            ║         ║
 ║         ║  h/left/bs     back one level                                                ║         ║
 ║         ║  alt+up        jump to the parent                                            ║         ║
 ║         ║  alt+down      jump back down                                                ║         ║
 ║         ║  gh            the home directory                                            ║         ║
-║         ║  gr            the root                                                      ║         ║
-╚═════════║  o             open externally                                               ║═════════╝
-╔═ OPERATI║  r             rename                                                        ║═════════╗
-║         ║  F5/ctrl+r     reload                                                        ║n  clear ║
-║         ║  selection                                                                   ║         ║
-╚═════════║  space         mark, move down                                               ║═════════╝
-? help  / ╚══════════════════════════════════════════════════════════════════════════════╝    ~  off
+╚═════════║  gr            the root                                                      ║═════════╝
+╔═ OPERATI║  o             open externally                                               ║═════════╗
+║         ║  r             rename                                                        ║n  clear ║
+║         ║  F5/ctrl+r     reload                                                        ║         ║
+╚═════════╚══════════════════════════════════════════════════════ more below · esc close ╝═════════╝
+? help  / filter  space mark  enter open  y copy  m move  d delete                            ~  off

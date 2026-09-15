@@ -30,7 +30,7 @@ pub mod rename;
 use std::path::PathBuf;
 
 use starkit::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use starkit::keymap::HelpView;
+use starkit::keymap::{help_rect, HelpView};
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::widgets::Widget;
@@ -162,12 +162,14 @@ impl Overlays {
                 // overlay has no other use for a key.
                 _ => (true, Answer::Closed),
             },
-            Overlay::Confirm(c) => match k.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                    (true, Answer::Confirmed(c.pending))
-                }
-                KeyCode::Char('n') | KeyCode::Char('N') => (true, Answer::Closed),
-                _ => (false, Answer::Consumed),
+            Overlay::Confirm(c) => match starkit::chrome::confirm::answer(k) {
+                starkit::chrome::confirm::Answer::Yes => (true, Answer::Confirmed(c.pending)),
+                starkit::chrome::confirm::Answer::No => (true, Answer::Closed),
+                // `ctrl+c` is caught above, ahead of every overlay's own
+                // keys, so this arm is unreached in practice; kept exhaustive
+                // rather than assumed away.
+                starkit::chrome::confirm::Answer::Quit => (true, Answer::Quit),
+                starkit::chrome::confirm::Answer::Waiting => (false, Answer::Consumed),
             },
             Overlay::Rename(r) => match r.handle(k) {
                 rename::Action::Taken => (false, Answer::Consumed),
@@ -194,8 +196,8 @@ impl Overlays {
 
     /// A click, while something is open. Outside the box it closes,
     /// whichever overlay it is; inside, the help ignores it, a confirmation's
-    /// `[yes]`/`[no]` words answer, and a conflict prompt's rows move the
-    /// reading cursor while its footer words answer.
+    /// two footer words answer, and a conflict prompt's rows move the
+    /// reading cursor while its own footer words answer.
     pub fn click(&mut self, x: u16, y: u16, area: Rect) -> Answer {
         if self.current.is_none() {
             return Answer::Closed;
@@ -284,7 +286,7 @@ impl Overlays {
                     bindings: BINDINGS,
                     mouse: MOUSE,
                     scroll: *scroll,
-                    title: "STAR/FOLD keys",
+                    title: "keys",
                 }
                 .render(area, buf);
                 None
@@ -299,19 +301,6 @@ impl Overlays {
                 None
             }
         }
-    }
-}
-
-/// The box `HelpView` centres itself in, worked out the same way it does
-/// internally, so a click outside it can be told from a click inside it.
-fn help_rect(area: Rect) -> Rect {
-    let w = area.width.min(80);
-    let h = area.height.min(38);
-    Rect {
-        x: area.x + area.width.saturating_sub(w) / 2,
-        y: area.y + area.height.saturating_sub(h) / 2,
-        width: w,
-        height: h,
     }
 }
 
@@ -542,7 +531,7 @@ mod tests {
         for (open, title) in [
             (
                 (|o: &mut Overlays| o.open_help()) as fn(&mut Overlays),
-                "STAR/FOLD keys",
+                "KEYS",
             ),
             (
                 |o: &mut Overlays| o.open_confirm(Confirm::clear_queue(2)),

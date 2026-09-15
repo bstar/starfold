@@ -2,26 +2,28 @@
 //! queue, and stopping something that is running (plus quitting while it
 //! still is).
 //!
-//! Modelled on STAR/CORD's `overlays::confirm`: raw keys, not the key table,
-//! because while this is open the keyboard means exactly one thing. Unlike
-//! STAR/CORD's dialogue, which always answers "yes" to "delete" on the same
-//! button, STAR/FOLD's four questions do not all want the same word on them --
-//! clearing a queue is not deleting a file, and stopping a copy is not either
-//! -- so `yes`/`no` are carried on the struct instead of fixed in the widget.
+//! The box itself is STAR/KIT's `chrome::confirm` now -- raw keys, not the
+//! key table, because while this is open the keyboard means exactly one
+//! thing, and `y`/`n` rather than `Enter` for the same reason the shared
+//! widget documents: a dialogue whose default key is the one a reader's
+//! thumb is already resting on is a dialogue that answers a keystroke meant
+//! for whatever came before it. Unlike a dialogue that always answers "yes"
+//! on the same button, STAR/FOLD's four questions do not all want the same
+//! word on them -- clearing a queue is not deleting a file, and stopping a
+//! copy is not either -- so `yes`/`no` are carried on this struct, the same
+//! as the shared one underneath it.
 //!
-//! [`layout`] is the one computation both [`render`] and
-//! [`super::Overlays::click`] read, so the box a person sees and the box a
-//! click is tested against can never drift apart.
+//! This module keeps only what is STAR/FOLD's business: the four questions
+//! themselves and the [`Pending`] each answers into. [`layout`] and
+//! [`render`] are thin covers over `chrome::confirm`'s own, so the box a
+//! person sees and the box [`super::Overlays::click`] tests against can
+//! never drift from what the shared widget actually draws.
 
+use starkit::chrome::confirm;
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::{Modifier, Style};
-use starkit::ratatui::text::Span;
-use starkit::ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
-use starkit::wrap;
 
 use crate::fold::ops::OpId;
-use crate::ui::panels::{fit, rgb, width_of};
 use crate::ui::theme::Theme;
 
 use super::Pending;
@@ -101,112 +103,27 @@ impl Confirm {
     }
 }
 
-/// Where the box lands, the body already wrapped, and where the two words on
-/// the footer are -- everything [`render`] draws and a click is tested
-/// against, worked out once so the two cannot disagree.
-pub(super) struct Layout {
-    pub rect: Rect,
-    pub inner: Rect,
-    pub body_rows: Vec<String>,
-    pub footer_y: u16,
-    /// `[start, end)` columns of the `yes` word.
-    pub yes: (u16, u16),
-    /// `[start, end)` columns of the `no` word.
-    pub no: (u16, u16),
+/// This question, as the shared widget spells it: a title lower-cased here
+/// (`chrome::frame` capitals every panel's own title, this one included) and
+/// the body and answers copied across as they are.
+fn kit(c: &Confirm) -> confirm::Confirm {
+    confirm::Confirm {
+        title: c.title.clone(),
+        body: c.body.clone(),
+        yes: c.yes,
+        no: c.no,
+    }
 }
 
-pub(super) fn layout(area: Rect, c: &Confirm) -> Option<Layout> {
-    if area.width == 0 || area.height == 0 {
-        return None;
-    }
-    let w = area.width.saturating_sub(4).clamp(24, 56).min(area.width);
-    let inner_w = w.saturating_sub(2);
-    let mut body_rows = Vec::new();
-    for line in &c.body {
-        for row in wrap::wrap(line, inner_w) {
-            body_rows.push(row.drawn(line).to_string());
-        }
-    }
-    // Two borders, every wrapped body row, and the footer row that carries
-    // the two answers.
-    let h = (body_rows.len() as u16 + 3).clamp(4, area.height);
-    if w < 8 || h < 4 {
-        return None;
-    }
-    let rect = Rect {
-        x: area.x + (area.width - w) / 2,
-        y: area.y + (area.height - h) / 2,
-        width: w,
-        height: h,
-    };
-    let inner = Rect {
-        x: rect.x + 1,
-        y: rect.y + 1,
-        width: rect.width.saturating_sub(2),
-        height: rect.height.saturating_sub(2),
-    };
-    if inner.height == 0 {
-        return None;
-    }
-    let footer_y = inner.y + inner.height - 1;
-    let yes_label = format!("[y] {}", c.yes);
-    let no_label = format!("[n] {}", c.no);
-    let yes = (inner.x, inner.x + width_of(&yes_label));
-    let no = (yes.1 + 3, yes.1 + 3 + width_of(&no_label));
-    Some(Layout {
-        rect,
-        inner,
-        body_rows,
-        footer_y,
-        yes,
-        no,
-    })
+/// Where the box lands and where its two answers sit, so a click can be
+/// tested against the same geometry [`render`] draws -- both read straight
+/// through to `chrome::confirm`'s own, so the two can never disagree.
+pub(super) fn layout(area: Rect, c: &Confirm) -> Option<confirm::Layout> {
+    confirm::layout(area, &kit(c))
 }
 
 pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, c: &Confirm) {
-    let Some(l) = layout(area, c) else {
-        return;
-    };
-    Clear.render(l.rect, buf);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(Style::default().fg(rgb(theme.border_focused)))
-        .title(Span::styled(
-            format!(
-                "{}{} ",
-                starkit::chrome::frame::TITLE_LEAD,
-                c.title.to_uppercase()
-            ),
-            Style::default()
-                .fg(rgb(theme.header_fg))
-                .add_modifier(Modifier::BOLD),
-        ))
-        .style(Style::default().bg(rgb(theme.panel_bg)));
-    block.render(l.rect, buf);
-    starkit::chrome::frame::render_corners(l.rect, buf, theme, true);
-
-    for (i, row) in l.body_rows.iter().enumerate() {
-        let y = l.inner.y + i as u16;
-        if y >= l.footer_y {
-            break;
-        }
-        buf.set_string(
-            l.inner.x,
-            y,
-            fit(row, l.inner.width),
-            Style::default().fg(rgb(theme.fg)),
-        );
-    }
-
-    let footer = format!("[y] {}   [n] {}", c.yes, c.no);
-    buf.set_string(
-        l.inner.x,
-        l.footer_y,
-        fit(&footer, l.inner.width),
-        Style::default().fg(rgb(theme.dim)),
-    );
+    confirm::render(area, buf, theme, &kit(c));
 }
 
 #[cfg(test)]
@@ -247,8 +164,8 @@ mod tests {
             .join("\n");
         assert!(text.contains("DELETE PERMANENTLY"), "{text}");
         assert!(text.contains("4 items"), "{text}");
-        assert!(text.contains("[y] delete"), "{text}");
-        assert!(text.contains("[n] keep"), "{text}");
+        assert!(text.contains("y delete"), "{text}");
+        assert!(text.contains("n keep"), "{text}");
     }
 
     #[test]
@@ -265,7 +182,7 @@ mod tests {
         let l = layout(area, &c).expect("it fits");
         assert!(l.body_rows.len() > 1, "a long line should wrap");
         for row in &l.body_rows {
-            assert!(width_of(row) <= l.inner.width);
+            assert!(starkit::wrap::width_of(row) < l.inner.width);
         }
     }
 }

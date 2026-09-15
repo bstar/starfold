@@ -13,13 +13,12 @@
 
 use std::path::{Path, PathBuf};
 
+use starkit::chrome::overlay::{self, Anchor};
 use starkit::crossterm::event::KeyEvent;
 use starkit::input::{Edit, TextInput};
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::{Modifier, Style};
-use starkit::ratatui::text::Span;
-use starkit::ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
+use starkit::ratatui::style::Style;
 
 use crate::ui::panels::{fit, rgb};
 use crate::ui::theme::Theme;
@@ -105,15 +104,11 @@ fn validate(name: &str, from: &Path) -> Result<PathBuf, &'static str> {
     Ok(from.with_file_name(name))
 }
 
+/// Where the box lands -- the same shape every overlay opens in, just tall
+/// enough for the field and, when there is one, the row underneath it that
+/// says why the last submission was refused.
 pub fn rect(area: Rect) -> Rect {
-    let w = area.width.saturating_sub(6).clamp(24, 60).min(area.width);
-    let h = 4.min(area.height);
-    Rect {
-        x: area.x + (area.width.saturating_sub(w)) / 2,
-        y: area.y + (area.height.saturating_sub(h)) / 2,
-        width: w,
-        height: h,
-    }
+    overlay::rect(area, (24, 60), 4, 3, Anchor::Centre)
 }
 
 /// Draw the field and hand back where the terminal's own cursor belongs, so
@@ -123,22 +118,19 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, r: &mut Rename) -> Op
     if rr.width < 8 || rr.height < 3 {
         return None;
     }
-    Clear.render(rr, buf);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Double)
-        .border_style(Style::default().fg(rgb(theme.border_focused)))
-        .title(Span::styled(
-            format!("{}RENAME ", starkit::chrome::frame::TITLE_LEAD),
-            Style::default()
-                .fg(rgb(theme.header_fg))
-                .add_modifier(Modifier::BOLD),
-        ))
-        .style(Style::default().bg(rgb(theme.panel_bg)));
-    let inner = block.inner(rr);
-    block.render(rr, buf);
-    starkit::chrome::frame::render_corners(rr, buf, theme, true);
+    // The core theme type -- a struct literal is not a coercion site, so the
+    // deref from this crate's own `Theme` is spelled out here.
+    let core: &starkit::theme::Theme = theme;
+    let inner = overlay::render(
+        rr,
+        buf,
+        &overlay::Overlay {
+            theme: core,
+            title: "rename",
+            detail: None,
+            footer: Some("enter rename \u{b7} esc cancel"),
+        },
+    );
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
@@ -154,17 +146,18 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, r: &mut Rename) -> Op
         Style::default().fg(rgb(theme.fg)),
     );
 
+    // Why the last submission was refused, if it was -- the key hints live
+    // on the border footer now, so this row says nothing when there is
+    // nothing to say.
     if inner.height > 1 {
-        let (text, colour) = match &r.error {
-            Some(hint) => (*hint, theme.fold.error_fg),
-            None => ("enter rename \u{b7} esc cancel", theme.dim),
-        };
-        buf.set_string(
-            inner.x,
-            inner.y + 1,
-            fit(text, inner.width),
-            Style::default().fg(rgb(colour)),
-        );
+        if let Some(hint) = &r.error {
+            buf.set_string(
+                inner.x,
+                inner.y + 1,
+                fit(hint, inner.width),
+                Style::default().fg(rgb(theme.fold.error_fg)),
+            );
+        }
     }
 
     cursor

@@ -17,8 +17,8 @@ expression: "render(&mut app, 100, 30)"
 ║              ╔═ CONFLICTS — 1 already exist ══════════════════════════════════════╗              ║
 ║              ║blob.bin                                                            ║              ║
 ║              ║                                                                    ║              ║
-║              ║[o] overwrite  [s] skip  [r] rename new  [esc] leave queued         ║              ║
-╚══════════════╚════════════════════════════════════════════════════════════════════╝══════════════╝
+║              ║                                                                    ║              ║
+╚══════════════╚════════════ o overwrite · s skip · r rename new · esc leave queued ╝══════════════╝
 ╔═ PREVIEW — blob.bin ═════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
 ║                                                                          application/octet-stream║
