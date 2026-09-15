@@ -41,11 +41,26 @@ pub struct View<'a> {
     pub now: Instant,
     /// `"COPYING ████████░░ 78%"`, while an operation is running.
     pub progress: Option<&'a str>,
-    pub hints: &'a str,
+    /// `(key, description)` pairs -- `("/", "filter")`, `("space", "mark")` --
+    /// drawn the same way the `?` cell to its left is: the key in
+    /// `hint_key_fg`/`hint_key_bg` and bold, the word after it in
+    /// `hint_desc_fg`.
+    pub hints: &'a [(&'a str, &'a str)],
     /// `"2 marked · 14.2 MB"`, or empty when nothing is marked.
     pub marked: &'a str,
     pub location: &'a str,
     pub graphics: &'a str,
+}
+
+/// The hint pairs joined back into one line, one space between a key and its
+/// word and two between pairs -- what [`fit`] measures and elides against,
+/// and what a caller comparing against the plain text reads.
+fn hints_text(hints: &[(&str, &str)]) -> String {
+    hints
+        .iter()
+        .map(|(key, desc)| format!("{key} {desc}"))
+        .collect::<Vec<_>>()
+        .join("  ")
 }
 
 /// What the middle field is presently showing -- decides both its colour and
@@ -70,7 +85,7 @@ impl View<'_> {
         if let Some(p) = self.progress {
             return (p.to_string(), MiddleKind::Progress);
         }
-        (self.hints.to_string(), MiddleKind::Hints)
+        (hints_text(self.hints), MiddleKind::Hints)
     }
 
     /// The stable right-hand field: only the parts that have anything to
@@ -274,25 +289,102 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
     }
 
     if f.middle.width > 0 {
-        let style = match kind {
-            MiddleKind::Note(NoteLevel::Error) => base.fg(rgb(t.error)),
-            MiddleKind::Note(NoteLevel::Warning) => base.fg(rgb(t.warn)),
-            MiddleKind::Note(NoteLevel::Info) => base.fg(rgb(t.accent)),
-            MiddleKind::Progress => base.fg(rgb(t.fold.progress_fg)).bg(rgb(t.fold.progress_bg)),
-            MiddleKind::Hints => base,
-        };
-        buf.set_string(
-            f.middle.x,
-            f.middle.y,
-            fit(&middle_text, f.middle.width),
-            style,
-        );
+        match kind {
+            MiddleKind::Hints => {
+                let key_style = Style::default()
+                    .fg(rgb(t.hint_key_fg))
+                    .bg(rgb(t.hint_key_bg))
+                    .add_modifier(Modifier::BOLD);
+                let desc_style = base.fg(rgb(t.hint_desc_fg));
+                render_hints(buf, f.middle, v.hints, key_style, desc_style);
+            }
+            MiddleKind::Note(level) => {
+                let style = match level {
+                    NoteLevel::Error => base.fg(rgb(t.error)),
+                    NoteLevel::Warning => base.fg(rgb(t.warn)),
+                    NoteLevel::Info => base.fg(rgb(t.accent)),
+                };
+                buf.set_string(
+                    f.middle.x,
+                    f.middle.y,
+                    fit(&middle_text, f.middle.width),
+                    style,
+                );
+            }
+            MiddleKind::Progress => {
+                let style = base.fg(rgb(t.fold.progress_fg)).bg(rgb(t.fold.progress_bg));
+                buf.set_string(
+                    f.middle.x,
+                    f.middle.y,
+                    fit(&middle_text, f.middle.width),
+                    style,
+                );
+            }
+        }
     }
 
     if !right.is_empty() {
         let w = width_of(&right).min(area.width);
         let x = area.x + area.width - w;
         buf.set_string(x, area.y, &right, base);
+    }
+}
+
+/// Draw the key hints into `area`, a key at a time in `key_style` and each
+/// word after it in `desc_style` -- the same treatment [`render`] gives the
+/// `?` cell beside them, just repeated for every pair.
+///
+/// Walked over [`hints_text`]'s own flattened line rather than word by word,
+/// so this cuts at exactly the column [`fit`] would have cut the flat string
+/// at: a pair that only half fits is drawn half, not skipped, which is what
+/// kept the field's width identical to before this had colour at all.
+fn render_hints(
+    buf: &mut Buffer,
+    area: Rect,
+    hints: &[(&str, &str)],
+    key_style: Style,
+    desc_style: Style,
+) {
+    if area.width == 0 {
+        return;
+    }
+    let mut text = String::new();
+    let mut key_ranges = Vec::with_capacity(hints.len());
+    for (i, (key, desc)) in hints.iter().enumerate() {
+        if i > 0 {
+            text.push_str("  ");
+        }
+        let start = text.len();
+        text.push_str(key);
+        key_ranges.push((start, text.len()));
+        text.push(' ');
+        text.push_str(desc);
+    }
+
+    let mut used = 0u16;
+    for (start, cluster) in starkit::wrap::clusters(&text) {
+        let w = width_of(cluster);
+        if used + w > area.width {
+            break;
+        }
+        let style = if key_ranges.iter().any(|&(s, e)| start >= s && start < e) {
+            key_style
+        } else {
+            desc_style
+        };
+        buf.set_string(area.x + used, area.y, cluster, style);
+        used += w;
+    }
+    // `fit` always pads a field out to its full width; matched here so a
+    // shorter line this frame still clears whatever a longer one left behind
+    // on the one this widget reuses.
+    if used < area.width {
+        buf.set_string(
+            area.x + used,
+            area.y,
+            " ".repeat(usize::from(area.width - used)),
+            desc_style,
+        );
     }
 }
 
@@ -311,7 +403,7 @@ mod tests {
             note,
             now,
             progress: Some("COPYING \u{2588}\u{2588}\u{2588}\u{2591}\u{2591} 60%"),
-            hints: "/ filter  space mark  enter open",
+            hints: &[("/", "filter"), ("space", "mark"), ("enter", "open")],
             marked: "2 marked \u{b7} 14.2 MB",
             location: "~/projects/starwire",
             graphics: "kitty",
@@ -332,7 +424,50 @@ mod tests {
 
         let mut idle = view(&t, None, at);
         idle.progress = None;
-        assert_eq!(idle.middle().0, idle.hints);
+        assert_eq!(idle.middle().0, hints_text(idle.hints));
+    }
+
+    #[test]
+    fn a_hint_key_is_bold_and_its_word_is_not() {
+        let t = theme("terminal");
+        let mut v = view(&t, None, Instant::now());
+        v.progress = None;
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v);
+        let f = fields(area, &v);
+
+        let key_cell = &buf[(f.middle.x, f.middle.y)];
+        assert_eq!(key_cell.symbol(), "/");
+        assert!(key_cell.style().add_modifier.contains(Modifier::BOLD));
+        assert_eq!(key_cell.style().bg, Some(rgb(t.hint_key_bg)));
+
+        // The space and the word after the first key are not bold and sit on
+        // the status bar's own background rather than the key's.
+        let desc_cell = &buf[(f.middle.x + 2, f.middle.y)];
+        assert_eq!(desc_cell.symbol(), "f");
+        assert!(!desc_cell.style().add_modifier.contains(Modifier::BOLD));
+        assert_eq!(desc_cell.style().bg, Some(rgb(t.status_bg)));
+    }
+
+    /// Colouring the hints must not move a single column of them -- the same
+    /// text at the same width, just recoloured.
+    #[test]
+    fn colouring_the_hints_does_not_move_the_text() {
+        let t = theme("terminal");
+        let mut v = view(&t, None, Instant::now());
+        v.progress = None;
+        for width in [10u16, 20, 24, 40, 80] {
+            let area = Rect::new(0, 0, width, 1);
+            let f = fields(area, &v);
+            let mut buf = Buffer::empty(area);
+            render(area, &mut buf, &v);
+            let drawn: String = (0..f.middle.width)
+                .map(|i| buf[(f.middle.x + i, f.middle.y)].symbol().to_string())
+                .collect();
+            let expected = fit(&hints_text(v.hints), f.middle.width);
+            assert_eq!(drawn, expected, "width {width}");
+        }
     }
 
     #[test]

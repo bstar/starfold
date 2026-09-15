@@ -1013,10 +1013,17 @@ impl App {
     }
 
     fn status_view(&self, now: Instant) -> status::View<'_> {
-        let hints = match self.layout.focus() {
-            ModuleId::Stack => "/ filter  space mark  enter open  y copy  m move  d delete",
-            ModuleId::Operations => "enter run  x drop  esc clear",
-            ModuleId::Preview => "j/k scroll  i fold",
+        let hints: &[(&str, &str)] = match self.layout.focus() {
+            ModuleId::Stack => &[
+                ("/", "filter"),
+                ("space", "mark"),
+                ("enter", "open"),
+                ("y", "copy"),
+                ("m", "move"),
+                ("d", "delete"),
+            ],
+            ModuleId::Operations => &[("enter", "run"), ("x", "drop"), ("esc", "clear")],
+            ModuleId::Preview => &[("j/k", "scroll"), ("i", "fold")],
         };
         status::View {
             theme: &self.theme,
