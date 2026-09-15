@@ -11,10 +11,6 @@
 //! as STAR/CORD's `[chat]` table puts it: one rule per role, run over sixteen
 //! palettes and asserted legible by a test, is a few hundred colours that
 //! are all correct.
-//!
-//! `// TODO(2a)`: this is the bootstrap shape -- the roles, the wrapper and
-//! the `Resolve`. The derivation below is a first cut, and the legibility
-//! test over every built-in is Phase 2a's.
 
 use std::ops::Deref;
 
@@ -108,12 +104,15 @@ impl Fold {
             TEXT_CONTRAST,
         );
         let marked_base = pick(f.marked_fg, b16.map(|b| b.base0A), core.warn);
-        let marked_bg = stated_or(
-            f.marked_bg,
-            bg.mix(core.accent, TINT),
-            core.fg,
-            TEXT_CONTRAST,
-        );
+        // A marked row's tint, checked against the panel rather than against
+        // `fg` -- see STAR/CORD's `spoiler_bg`, which this is copied from.
+        // The tint carries no letters of its own (the marked glyph does, and
+        // is checked against *this* colour below), so what has to hold is
+        // that a marked row can be told apart from an unmarked one, not that
+        // some particular foreground reads on it -- a weak accent, as
+        // winamp-classic's is, would otherwise leave a 20% mix a hair from
+        // invisible.
+        let marked_bg = stated_or(f.marked_bg, bg.mix(core.accent, TINT), bg, MARK_CONTRAST);
         let marked_fg = stated_or(f.marked_fg, marked_base, marked_bg, TEXT_CONTRAST);
         let progress_bg = stated_or(f.progress_bg, bg.mix(core.fg, 0.15), bg, 1.0);
 
@@ -154,6 +153,38 @@ impl Fold {
                 TEXT_CONTRAST,
             ),
         }
+    }
+
+    /// The roles that carry words, and what each is drawn on. The legibility
+    /// test walks this; naming it here is what stops a new role being added
+    /// without one.
+    #[cfg(test)]
+    fn text_roles(&self, panel_bg: Rgb) -> Vec<(&'static str, Rgb, Rgb)> {
+        vec![
+            ("dir_fg", self.dir_fg, panel_bg),
+            ("symlink_fg", self.symlink_fg, panel_bg),
+            ("exec_fg", self.exec_fg, panel_bg),
+            ("hidden_fg", self.hidden_fg, panel_bg),
+            ("marked_fg", self.marked_fg, self.marked_bg),
+            ("crumb_fg", self.crumb_fg, panel_bg),
+            ("crumb_active_fg", self.crumb_active_fg, panel_bg),
+            ("size_fg", self.size_fg, panel_bg),
+            ("time_fg", self.time_fg, panel_bg),
+            ("kind_fg", self.kind_fg, panel_bg),
+            ("conflict_fg", self.conflict_fg, panel_bg),
+            ("error_fg", self.error_fg, panel_bg),
+        ]
+    }
+
+    /// Roles that carry no letters: the progress bar's fill against its own
+    /// track, and the marked row's tint against the plain panel, which has to
+    /// be told apart from an unmarked row at a glance.
+    #[cfg(test)]
+    fn mark_roles(&self, panel_bg: Rgb) -> Vec<(&'static str, Rgb, Rgb)> {
+        vec![
+            ("progress_fg", self.progress_fg, self.progress_bg),
+            ("marked_bg", self.marked_bg, panel_bg),
+        ]
     }
 }
 
@@ -219,13 +250,158 @@ pub mod tests_support {
 
 #[cfg(test)]
 mod tests {
+    use super::tests_support::theme;
     use super::*;
+    use starkit::theme::builtin::BUILTINS;
 
     #[test]
     fn every_builtin_resolves_with_a_fold_table() {
-        for b in starkit::theme::builtin::BUILTINS {
+        for b in BUILTINS {
             let t = Theme::resolve(&ThemeFile::parse(b.toml).unwrap());
             assert_ne!(t.fold.dir_fg, t.panel_bg, "{}: directories vanish", b.id);
         }
+    }
+
+    /// The test the whole derivation exists to pass.
+    ///
+    /// Sixteen palettes, fourteen roles, and nobody looking at any of them.
+    /// A rule that produces an unreadable colour on one scheme in sixteen is
+    /// the normal outcome of writing rules for colours, and this is what
+    /// catches it. A failure here is fixed in [`Fold::derive`], never by
+    /// special-casing the theme that tripped it.
+    #[test]
+    fn every_builtin_fold_role_is_legible() {
+        for b in BUILTINS {
+            assert_legible(b.id, &theme(b.id));
+        }
+
+        // And the desktop's own palette, where there is one -- the one theme
+        // nobody here chose, and exactly the case a rule written against
+        // sixteen known palettes can fail on. Skipped rather than faked where
+        // no desktop theme is set, because a synthesised one would be a
+        // seventeenth builtin with a misleading name.
+        if let Some((file, _)) = starkit::theme::system::theme() {
+            assert_legible("system", &Theme::resolve(&file));
+        }
+    }
+
+    fn assert_legible(id: &str, t: &Theme) {
+        for (role, fg, bg) in t.fold.text_roles(t.panel_bg) {
+            let c = bg.contrast(fg);
+            assert!(
+                c >= TEXT_CONTRAST,
+                "{id}: {role} is {c:.2}:1 against its background"
+            );
+        }
+        for (role, fg, bg) in t.fold.mark_roles(t.panel_bg) {
+            let c = bg.contrast(fg);
+            assert!(
+                c >= MARK_CONTRAST,
+                "{id}: {role} is {c:.2}:1 against its background"
+            );
+        }
+    }
+
+    /// A file that states a role gets that role, unchanged, whatever the
+    /// derivation would have produced. Themes are allowed to be exact.
+    #[test]
+    fn a_stated_role_wins() {
+        let f = ThemeFile::parse(
+            r##"
+            [meta]
+            name = "Stated"
+            variant = "dark"
+            [app]
+            bg = "#000000"
+            fg = "#ffffff"
+            [fold]
+            dir_fg = "#ff0000"
+            "##,
+        )
+        .unwrap();
+        let t = Theme::resolve(&f);
+        assert_eq!(t.fold.dir_fg, Rgb::new(0xff, 0, 0));
+    }
+
+    /// A `[fold]` table that is not a `[fold]` table costs the table and
+    /// nothing else. The core tables still fail loudly; this one is
+    /// decoration over a working palette.
+    #[test]
+    fn a_malformed_fold_table_does_not_lose_the_theme() {
+        let f = ThemeFile::parse(
+            r##"
+            [meta]
+            name = "Broken"
+            variant = "dark"
+            [app]
+            bg = "#101010"
+            fg = "#e0e0e0"
+            [fold]
+            dir_fg = "not a colour"
+            "##,
+        )
+        .unwrap();
+        let t = Theme::resolve(&f);
+        assert_eq!(t.bg, Rgb::new(0x10, 0x10, 0x10));
+        assert!(t.panel_bg.contrast(t.fold.dir_fg) >= TEXT_CONTRAST);
+    }
+
+    /// `[fold]` is TOML written by a person, so every field it can state has
+    /// to survive being read back exactly.
+    #[test]
+    fn the_fold_table_round_trips_through_serde() {
+        let stated = FoldColors {
+            dir_fg: Some(Rgb::new(0x11, 0x22, 0x33)),
+            symlink_fg: Some(Rgb::new(0x44, 0x55, 0x66)),
+            exec_fg: None,
+            hidden_fg: Some(Rgb::new(0x77, 0x88, 0x99)),
+            marked_fg: None,
+            marked_bg: Some(Rgb::new(0xaa, 0xbb, 0xcc)),
+            crumb_fg: None,
+            crumb_active_fg: None,
+            size_fg: Some(Rgb::new(0x01, 0x02, 0x03)),
+            time_fg: None,
+            kind_fg: None,
+            progress_fg: Some(Rgb::new(0x0a, 0x0b, 0x0c)),
+            progress_bg: None,
+            conflict_fg: Some(Rgb::new(0x1a, 0x2b, 0x3c)),
+            error_fg: Some(Rgb::new(0xff, 0x00, 0xff)),
+        };
+        let text = toml::to_string(&stated).expect("a fold table serialises");
+        let back: FoldColors = toml::from_str(&text).expect("it parses back");
+        assert_eq!(back.dir_fg, stated.dir_fg);
+        assert_eq!(back.symlink_fg, stated.symlink_fg);
+        assert_eq!(back.exec_fg, stated.exec_fg);
+        assert_eq!(back.hidden_fg, stated.hidden_fg);
+        assert_eq!(back.marked_fg, stated.marked_fg);
+        assert_eq!(back.marked_bg, stated.marked_bg);
+        assert_eq!(back.crumb_fg, stated.crumb_fg);
+        assert_eq!(back.crumb_active_fg, stated.crumb_active_fg);
+        assert_eq!(back.size_fg, stated.size_fg);
+        assert_eq!(back.time_fg, stated.time_fg);
+        assert_eq!(back.kind_fg, stated.kind_fg);
+        assert_eq!(back.progress_fg, stated.progress_fg);
+        assert_eq!(back.progress_bg, stated.progress_bg);
+        assert_eq!(back.conflict_fg, stated.conflict_fg);
+        assert_eq!(back.error_fg, stated.error_fg);
+
+        // And through a whole theme file, by round-tripping the resolved
+        // table verbatim: what a person wrote in `[fold]` is what they get
+        // back, not a derivation over it.
+        let file = ThemeFile::parse(
+            r##"
+            [meta]
+            name = "Round Trip"
+            variant = "dark"
+            [app]
+            bg = "#101010"
+            fg = "#e0e0e0"
+            [fold]
+            dir_fg = "#112233"
+            "##,
+        )
+        .unwrap();
+        let t = Theme::resolve(&file);
+        assert_eq!(t.fold.dir_fg, Rgb::new(0x11, 0x22, 0x33));
     }
 }
