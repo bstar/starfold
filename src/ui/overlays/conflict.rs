@@ -212,12 +212,14 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, p: &Prompt) {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let dir = conflict
-            .dest
-            .parent()
-            .map(|d| d.display().to_string())
-            .unwrap_or_default();
-        let text = format!("{name}  ({dir})");
+        // The name is what collided; the prompt's title already says where.
+        // A directory says so, because "overwrite" means "merge into" for
+        // one and "replace" for a file, and the answer is the same key.
+        let text = if conflict.both_dirs {
+            format!("{name}/  (directory)")
+        } else {
+            name
+        };
         let style = if i == p.cursor {
             Style::default()
                 .fg(rgb(theme.row_cursor_fg))

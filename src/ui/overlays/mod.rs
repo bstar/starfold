@@ -546,7 +546,7 @@ mod tests {
             ),
             (
                 |o: &mut Overlays| o.open_confirm(Confirm::clear_queue(2)),
-                "clear the queue",
+                "CLEAR THE QUEUE",
             ),
             (
                 |o: &mut Overlays| o.open_rename(PathBuf::from("/tmp/Cargo.toml")),

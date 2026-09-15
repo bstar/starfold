@@ -174,7 +174,11 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, c: &Confirm) {
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(rgb(theme.border_focused)))
         .title(Span::styled(
-            format!("{}{} ", starkit::chrome::frame::TITLE_LEAD, c.title),
+            format!(
+                "{}{} ",
+                starkit::chrome::frame::TITLE_LEAD,
+                c.title.to_uppercase()
+            ),
             Style::default()
                 .fg(rgb(theme.header_fg))
                 .add_modifier(Modifier::BOLD),
@@ -241,7 +245,7 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("delete permanently"), "{text}");
+        assert!(text.contains("DELETE PERMANENTLY"), "{text}");
         assert!(text.contains("4 items"), "{text}");
         assert!(text.contains("[y] delete"), "{text}");
         assert!(text.contains("[n] keep"), "{text}");
