@@ -414,7 +414,11 @@ impl App {
             None => (None, None),
         };
 
-        let ops: Vec<panels::operations::OpRow> = state.queue.iter().map(build_op_row).collect();
+        let ops: Vec<panels::operations::OpRow> = state
+            .queue
+            .iter()
+            .map(|op| build_op_row(op, &state.home))
+            .collect();
         let op_ids: Vec<OpId> = state.queue.iter().map(|op| op.id).collect();
         let running_bar = state
             .queue
@@ -1204,7 +1208,7 @@ fn build_row(
     }
 }
 
-fn build_op_row(op: &Op) -> panels::operations::OpRow {
+fn build_op_row(op: &Op, home: &std::path::Path) -> panels::operations::OpRow {
     use panels::operations::Tone;
 
     let (status, tone) = match op.status {
@@ -1232,10 +1236,24 @@ fn build_op_row(op: &Op) -> panels::operations::OpRow {
     let bar = matches!(op.status, OpStatus::Running).then(|| op.progress.bar(10));
 
     panels::operations::OpRow {
-        title: op.title(),
+        title: op_title(op, home),
         status,
         bar,
         tone,
+    }
+}
+
+/// `Op::title` with the destination spelled the way the status row spells a
+/// directory: `~` for home and relative to it, since the queue is read next
+/// to the location it will land in.
+fn op_title(op: &Op, home: &std::path::Path) -> String {
+    match &op.dest {
+        Some(dest) => {
+            let verb = op.title();
+            let verb = verb.split(" \u{2192} ").next().unwrap_or(&verb).to_string();
+            format!("{verb} \u{2192} {}", home_relative(dest, home))
+        }
+        None => op.title(),
     }
 }
 

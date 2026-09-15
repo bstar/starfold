@@ -76,14 +76,70 @@ impl View<'_> {
     /// The stable right-hand field: only the parts that have anything to
     /// say, in a fixed order, so nothing to the right of an empty one shifts
     /// when it appears.
-    fn right(&self) -> String {
-        [self.marked, self.location, self.graphics]
-            .into_iter()
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("  ")
+    ///
+    /// Held to `max_w` columns: the graphics word goes first, then the
+    /// location loses its head -- `…/scratchpad/tree` -- because the end of a
+    /// path is the part that says where you are. The marks are never cut.
+    /// Returns the field and the location as it was drawn.
+    fn right(&self, max_w: u16) -> (String, String) {
+        let join = |parts: &[&str]| {
+            parts
+                .iter()
+                .filter(|s| !s.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join("  ")
+        };
+        let full = join(&[self.marked, self.location, self.graphics]);
+        if width_of(&full) <= max_w {
+            return (full, self.location.to_string());
+        }
+        let without = join(&[self.marked, self.location]);
+        if width_of(&without) <= max_w {
+            return (without, self.location.to_string());
+        }
+        let marked_w = if self.marked.is_empty() {
+            0
+        } else {
+            width_of(self.marked) + 2
+        };
+        let room = max_w.saturating_sub(marked_w);
+        let location = elide_head(self.location, room);
+        (join(&[self.marked, &location]), location)
     }
 }
+
+/// `…/the/end` -- the tail of `text` that fits in `width`, with an ellipsis
+/// in front of it.
+fn elide_head(text: &str, width: u16) -> String {
+    if width_of(text) <= width {
+        return text.to_string();
+    }
+    if width < 2 {
+        return String::new();
+    }
+    let keep = usize::from(width - 1);
+    let clusters: Vec<&str> = starkit::wrap::clusters(text).map(|(_, c)| c).collect();
+    let mut back = Vec::new();
+    let mut used = 0usize;
+    for c in clusters.iter().rev() {
+        let cw = usize::from(width_of(c));
+        if used + cw > keep {
+            break;
+        }
+        back.push(*c);
+        used += cw;
+    }
+    let mut out = String::from("\u{2026}");
+    for c in back.iter().rev() {
+        out.push_str(c);
+    }
+    out
+}
+
+/// The fewest columns the middle field keeps against a long right-hand one:
+/// enough for a running operation's bar and its percentage.
+const MIDDLE_MIN: u16 = 24;
 
 const HELP: &str = "? help";
 
@@ -119,11 +175,16 @@ pub fn fields(area: Rect, v: &View<'_>) -> Fields {
         height: 1,
     };
 
-    let right = v.right();
+    let max_right = area
+        .width
+        .saturating_sub(help_w + 2)
+        .saturating_sub(MIDDLE_MIN)
+        .max(area.width.saturating_sub(help_w + 2) / 2);
+    let (right, drawn_location) = v.right(max_right);
     let right_w = width_of(&right).min(area.width.saturating_sub(help_w + 2));
     let right_x = area.x + area.width - right_w;
 
-    let location = if v.location.is_empty() || right_w == 0 {
+    let location = if drawn_location.is_empty() || right_w == 0 {
         empty_at(area)
     } else {
         // Whatever the right field joins in front of `location` -- `marked`
@@ -134,7 +195,7 @@ pub fn fields(area: Rect, v: &View<'_>) -> Fields {
             width_of(v.marked) + 2
         };
         let lead_w = lead_w.min(right_w);
-        let loc_w = width_of(v.location).min(right_w.saturating_sub(lead_w));
+        let loc_w = width_of(&drawn_location).min(right_w.saturating_sub(lead_w));
         Rect {
             x: right_x + lead_w,
             y: area.y,
@@ -187,7 +248,12 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
 
     let f = fields(area, v);
     let (middle_text, kind) = v.middle();
-    let right = v.right();
+    let max_right = area
+        .width
+        .saturating_sub(f.help.width + 2)
+        .saturating_sub(MIDDLE_MIN)
+        .max(area.width.saturating_sub(f.help.width + 2) / 2);
+    let (right, _) = v.right(max_right);
 
     if f.help.width > 0 {
         buf.set_string(
@@ -277,7 +343,7 @@ mod tests {
         let f = fields(area, &v);
         assert_eq!(f.help.x, 0);
         assert!(f.location.width > 0, "location should have been drawn");
-        assert!(v.right().contains(v.location));
+        assert!(v.right(200).0.contains(v.location));
     }
 
     #[test]

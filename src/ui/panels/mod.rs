@@ -225,6 +225,48 @@ pub fn fit(text: &str, width: u16) -> String {
     out
 }
 
+/// Cut a string to `width` columns by taking out its middle, so both ends
+/// survive: `/private/tmp/…/scratchpad/tree` keeps the part that says where
+/// and the part that says what.
+pub fn elide_middle(text: &str, width: u16) -> String {
+    let w = width_of(text);
+    if w <= width {
+        return text.to_string();
+    }
+    if width < 4 {
+        return fit(text, width);
+    }
+    let keep = usize::from(width - 1);
+    let head = keep / 2;
+    let tail = keep - head;
+    let clusters: Vec<&str> = starkit::wrap::clusters(text).map(|(_, c)| c).collect();
+    let mut out = String::new();
+    let mut used = 0usize;
+    for c in &clusters {
+        let cw = usize::from(width_of(c));
+        if used + cw > head {
+            break;
+        }
+        out.push_str(c);
+        used += cw;
+    }
+    out.push('\u{2026}');
+    let mut back = Vec::new();
+    let mut used = 0usize;
+    for c in clusters.iter().rev() {
+        let cw = usize::from(width_of(c));
+        if used + cw > tail {
+            break;
+        }
+        back.push(*c);
+        used += cw;
+    }
+    for c in back.iter().rev() {
+        out.push_str(c);
+    }
+    out
+}
+
 /// One dim line in the middle of an empty module.
 pub fn empty(area: Rect, buf: &mut Buffer, theme: &starkit::theme::Theme, text: &str) {
     if area.height == 0 || area.width == 0 {

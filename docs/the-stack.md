@@ -48,7 +48,10 @@ status line says how many: `2 marked · 14.2 MB`.
 
 This is what makes `y` (copy) and `m` (move) make sense as "copy what I
 marked, to here": you gather files from wherever they are, land wherever you
-want them, and press one key.
+want them, and press one key. Once the operation has run, the marks it
+consumed are gone: the copies are not marked, and neither are the originals,
+so a `d` pressed next deletes what is under the cursor and not what you just
+copied.
 
 ## The queue is the confirmation
 

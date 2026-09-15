@@ -256,6 +256,7 @@ fn rule_line(width: u16, rule: &str, truncated: bool, filter: Option<&str>) -> S
     if truncated {
         left.push_str(" (truncated)");
     }
+    left.push(' ');
     let right = filter.map(|f| format!(" /{f} ")).unwrap_or_default();
     let left_w = width_of(&left).min(width);
     let right_w = width_of(&right).min(width.saturating_sub(left_w));
@@ -301,14 +302,14 @@ struct Cols {
     name_w: u16,
 }
 
-fn columns(width: u16, marks_shown: bool) -> Cols {
+fn columns(width: u16) -> Cols {
     let show_ext = width >= 70;
     let show_time = width >= 50;
-    let mark_w = if marks_shown { MARK_W } else { 0 };
-    let mut fixed = 0u16;
-    if marks_shown {
-        fixed += MARK_W + GAP;
-    }
+    // The mark column is always there, blank until something is marked. A
+    // column that appeared with the first mark moved every name two cells to
+    // the right, which read as the whole list jumping.
+    let mark_w = MARK_W;
+    let mut fixed = MARK_W + GAP;
     if show_ext {
         fixed += EXT_W + GAP;
     }
@@ -338,8 +339,7 @@ fn render_list(area: Rect, buf: &mut Buffer, t: &Theme, v: &View<'_>) {
         return;
     }
 
-    let marks_shown = v.rows.iter().any(|r| r.mark != Mark::None);
-    let cols = columns(area.width, marks_shown);
+    let cols = columns(area.width);
 
     for (i, row) in v
         .rows
@@ -663,10 +663,10 @@ mod tests {
 
     #[test]
     fn a_sixty_column_width_drops_the_extension_column() {
-        let cols = columns(60, false);
+        let cols = columns(60);
         assert!(!cols.show_ext);
         assert!(cols.show_time);
-        let narrow = columns(40, false);
+        let narrow = columns(40);
         assert!(!narrow.show_time);
     }
 

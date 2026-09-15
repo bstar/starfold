@@ -1035,10 +1035,12 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
             )));
         }
 
-        // A rename moves its one source just as a move does; a copy leaves
-        // its sources in place and a delete has nowhere for them to have
-        // gone but away, which `forget_paths` treats the same as "moved".
-        if matches!(op.kind, OpKind::Move | OpKind::Delete(_) | OpKind::Rename) {
+        // Every kind consumes its marks. A move, a delete and a rename have
+        // taken the paths away; a copy has not, but the marks were the thing
+        // being copied, and a `d` pressed afterwards that deleted the
+        // originals because they were still marked is a mistake nobody
+        // should be able to make.
+        if !outcome.cancelled {
             for src in &op.sources {
                 if !outcome.failed.iter().any(|(p, _)| p == src) {
                     moved_or_deleted.push(src.clone());

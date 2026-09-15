@@ -10,7 +10,7 @@ use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::Style;
 use starkit::theme::color::Rgb;
 
-use super::{empty, fit, frame, rgb, summary_row, width_of, words, Frame, ModuleId};
+use super::{elide_middle, empty, frame, rgb, summary_row, width_of, words, Frame, ModuleId};
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,12 +90,18 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
 fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
     let row = running(v).or_else(|| v.rows.iter().find(|r| r.tone == Tone::Pending));
     match row {
-        Some(r) => summary_row(
-            area,
-            buf,
-            &format!("{} \u{b7} {}", r.title, r.status),
-            Style::default().fg(rgb(tone_fg(v.theme, r.tone))),
-        ),
+        Some(r) => {
+            // The status is the part worth reading on a folded row; a long
+            // destination gives way in the middle so it stays.
+            let status = format!(" \u{b7} {}", r.status);
+            let title_w = area.width.saturating_sub(width_of(&status));
+            summary_row(
+                area,
+                buf,
+                &format!("{}{status}", elide_middle(&r.title, title_w)),
+                Style::default().fg(rgb(tone_fg(v.theme, r.tone))),
+            )
+        }
         None => empty(area, buf, v.theme, "nothing queued"),
     }
 }
@@ -134,7 +140,7 @@ fn render_open(area: Rect, buf: &mut Buffer, v: &View<'_>) {
         }
         let right_w = width_of(&right).min(area.width);
         let left_w = area.width.saturating_sub(right_w + 1);
-        buf.set_string(area.x, y, fit(&row.title, left_w), style);
+        buf.set_string(area.x, y, elide_middle(&row.title, left_w), style);
         let rx = area.x + area.width.saturating_sub(right_w);
         buf.set_string(rx, y, &right, style);
     }

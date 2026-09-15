@@ -187,16 +187,6 @@ fn render_text(
     name: Option<&str>,
     scroll: usize,
 ) {
-    let rows = lines(preview, area.width);
-    let style = Style::default().fg(rgb(t.row_fg));
-    for (row, text) in rows
-        .iter()
-        .skip(scroll)
-        .take(usize::from(area.height))
-        .enumerate()
-    {
-        buf.set_string(area.x, area.y + row as u16, text, style);
-    }
     if area.height > 0 {
         let meta = format!(
             "{} \u{b7} {}",
@@ -204,6 +194,17 @@ fn render_text(
             crate::fold::format::size(bytes)
         );
         draw_meta(area, buf, t, &meta);
+    }
+    let rows = lines(preview, area.width);
+    let style = Style::default().fg(rgb(t.row_fg));
+    let body = below_meta(area);
+    for (row, text) in rows
+        .iter()
+        .skip(scroll)
+        .take(usize::from(body.height))
+        .enumerate()
+    {
+        buf.set_string(body.x, body.y + row as u16, fit(text, body.width), style);
     }
 }
 
@@ -216,16 +217,6 @@ fn render_binary(
     truncated: bool,
     scroll: usize,
 ) {
-    let rows = lines(preview, area.width);
-    let style = Style::default().fg(rgb(t.row_fg));
-    for (row, text) in rows
-        .iter()
-        .skip(scroll)
-        .take(usize::from(area.height))
-        .enumerate()
-    {
-        buf.set_string(area.x, area.y + row as u16, text, style);
-    }
     if area.height > 0 {
         let meta = if truncated {
             format!("{mime} \u{b7} truncated")
@@ -233,6 +224,17 @@ fn render_binary(
             mime.to_string()
         };
         draw_meta(area, buf, t, &meta);
+    }
+    let rows = lines(preview, area.width);
+    let style = Style::default().fg(rgb(t.row_fg));
+    let body = below_meta(area);
+    for (row, text) in rows
+        .iter()
+        .skip(scroll)
+        .take(usize::from(body.height))
+        .enumerate()
+    {
+        buf.set_string(body.x, body.y + row as u16, fit(text, body.width), style);
     }
 }
 
@@ -246,6 +248,18 @@ fn render_dir(area: Rect, buf: &mut Buffer, t: &Theme, summary: &DirSummary, nam
     let style = Style::default().fg(rgb(t.row_fg));
     for (row, text) in all.iter().enumerate().take(usize::from(area.height)) {
         buf.set_string(area.x, area.y + row as u16, fit(text, area.width), style);
+    }
+}
+
+/// What is left under the meta line. The line has a row of its own rather
+/// than the right end of the first content row: a hexdump row is seventy
+/// columns wide and the mime type drawn over its tail was unreadable both
+/// ways.
+fn below_meta(area: Rect) -> Rect {
+    Rect {
+        y: area.y + 1.min(area.height),
+        height: area.height.saturating_sub(1),
+        ..area
     }
 }
 
@@ -502,11 +516,12 @@ mod tests {
         let area = Rect::new(0, 0, 30, 10);
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &mut v);
+        // The first body row is the meta line; the text starts under it.
         let body = starkit::chrome::header::body(area);
-        let row0: String = (0..10)
-            .map(|x| buf[(body.x + x, body.y)].symbol().to_string())
+        let row1: String = (0..10)
+            .map(|x| buf[(body.x + x, body.y + 1)].symbol().to_string())
             .collect();
-        assert!(row0.starts_with("three"), "{row0:?}");
+        assert!(row1.starts_with("three"), "{row1:?}");
     }
 
     #[test]
