@@ -38,6 +38,7 @@ use starkit::ratatui::widgets::Widget;
 use crate::fold::ops::{ConflictPolicy, OpId};
 use crate::ui::keymap::{BINDINGS, MOUSE};
 use crate::ui::theme::Theme;
+use crate::ui::Bars;
 
 /// What a [`confirm::Confirm`] is asking about, carried through unopened so
 /// the caller learns it again only once the answer is yes.
@@ -99,6 +100,13 @@ impl Overlays {
 
     pub fn current(&self) -> Option<&Overlay> {
         self.current.as_ref()
+    }
+
+    /// The same overlay, mutably -- for a dragged scrollbar to move the one
+    /// piece of it ([`conflict::Prompt::scroll`]) a mouse event ever touches
+    /// straight, rather than through [`Answer`].
+    pub fn current_mut(&mut self) -> Option<&mut Overlay> {
+        self.current.as_mut()
     }
 
     /// Opening any overlay replaces whatever was open; see the module doc
@@ -273,8 +281,16 @@ impl Overlays {
     }
 
     /// Draw whatever is open. Returns where the terminal's own cursor
-    /// belongs -- only the rename field ever wants it there.
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<(u16, u16)> {
+    /// belongs -- only the rename field ever wants it there. `bars` is only
+    /// read by the conflict prompt's own list, but every overlay takes it so
+    /// the caller need not know which one that is.
+    pub fn render(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        theme: &Theme,
+        bars: &mut Bars,
+    ) -> Option<(u16, u16)> {
         match self.current.as_mut()? {
             Overlay::Help { scroll } => {
                 // `HelpView` takes STAR/KIT's own `Theme`, which this crate's
@@ -297,7 +313,7 @@ impl Overlays {
             }
             Overlay::Rename(r) => rename::render(area, buf, theme, r),
             Overlay::Conflict(p) => {
-                conflict::render(area, buf, theme, p);
+                conflict::render(area, buf, theme, p, bars);
                 None
             }
         }
@@ -550,7 +566,7 @@ mod tests {
                 let mut o = Overlays::new();
                 open(&mut o);
                 let mut buf = Buffer::empty(area);
-                o.render(area, &mut buf, &t);
+                o.render(area, &mut buf, &t, &mut Bars::new());
                 let text: String = (0..area.height)
                     .map(|y| {
                         (0..area.width)
@@ -570,7 +586,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 21);
         let mut buf = Buffer::empty(area);
         let before = buf.clone();
-        let cursor = Overlays::new().render(area, &mut buf, &t);
+        let cursor = Overlays::new().render(area, &mut buf, &t, &mut Bars::new());
         assert_eq!(buf, before);
         assert_eq!(cursor, None);
     }

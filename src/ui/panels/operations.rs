@@ -14,6 +14,7 @@ use starkit::theme::color::Rgb;
 
 use super::{elide_middle, empty, rgb, summary_row, width_of, words, ModuleId};
 use crate::ui::theme::Theme;
+use crate::ui::{Bar, Bars};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
@@ -66,7 +67,7 @@ fn running<'a>(v: &View<'a>) -> Option<&'a OpRow> {
     v.rows.iter().find(|r| r.tone == Tone::Running)
 }
 
-pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
+pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
     let detail = running(v).map(|r| r.status.clone());
     let word_list = words(ModuleId::Operations);
     // The core theme type -- a struct literal is not a coercion site, so the
@@ -91,7 +92,7 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
         render_folded(body, buf, v);
         return;
     }
-    render_open(area, body, buf, v);
+    render_open(area, body, buf, v, bars);
 }
 
 fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
@@ -113,7 +114,7 @@ fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
     }
 }
 
-fn render_open(outer: Rect, area: Rect, buf: &mut Buffer, v: &View<'_>) {
+fn render_open(outer: Rect, area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
     if v.rows.is_empty() {
         empty(area, buf, v.theme, "nothing queued");
         return;
@@ -152,9 +153,15 @@ fn render_open(outer: Rect, area: Rect, buf: &mut Buffer, v: &View<'_>) {
         buf.set_string(rx, y, &right, style);
     }
 
-    let thumb = scrollbar::rows(v.scroll, v.rows.len(), area.height);
     let track = scrollbar::track(outer, area);
-    scrollbar::render(track, buf, t, thumb);
+    bars.draw(
+        Bar::Operations,
+        track,
+        buf,
+        t,
+        v.rows.len() as u32,
+        v.scroll as u32,
+    );
 }
 
 pub fn hit(area: Rect, v: &View<'_>, x: u16, y: u16) -> Option<usize> {
@@ -220,7 +227,7 @@ mod tests {
         // Border top, header row, one body row, border bottom.
         let area = Rect::new(0, 0, 60, 4);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v);
+        render(area, &mut buf, &v, &mut Bars::new());
         assert!(dump(&buf, area).contains("copying 78%"));
     }
 
@@ -236,14 +243,14 @@ mod tests {
         v.folded = true;
         let area = Rect::new(0, 0, 60, 4);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v);
+        render(area, &mut buf, &v, &mut Bars::new());
         assert!(dump(&buf, area).contains("queued"));
 
         let empty_rows: Vec<OpRow> = Vec::new();
         let mut v2 = view(&t, &empty_rows);
         v2.folded = true;
         let mut buf2 = Buffer::empty(area);
-        render(area, &mut buf2, &v2);
+        render(area, &mut buf2, &v2, &mut Bars::new());
         assert!(dump(&buf2, area).contains("nothing queued"));
     }
 
@@ -257,7 +264,7 @@ mod tests {
         let v = view(&t, &rows);
         let area = Rect::new(0, 0, 60, 6);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v);
+        render(area, &mut buf, &v, &mut Bars::new());
         let body = frame::body(area, &words(ModuleId::Operations));
         let text = dump(&buf, area);
         assert!(text.contains("COPY 2 items"), "{text:?}");
@@ -279,7 +286,7 @@ mod tests {
         let v = view(&t, &rows);
         let area = Rect::new(0, 0, 60, 4);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v);
+        render(area, &mut buf, &v, &mut Bars::new());
         let title: String = (0..area.width)
             .map(|x| buf[(x, 0)].symbol().to_string())
             .collect();

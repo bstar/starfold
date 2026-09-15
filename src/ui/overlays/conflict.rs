@@ -27,6 +27,7 @@ use starkit::ratatui::style::Style;
 use crate::fold::ops::{Conflict, ConflictPolicy, OpId};
 use crate::ui::panels::{fit, rgb};
 use crate::ui::theme::Theme;
+use crate::ui::{Bar, Bars};
 
 /// What a key did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,7 +197,7 @@ pub(super) fn hit_row(l: &Layout, x: u16, y: u16, p: &Prompt) -> Option<usize> {
     (row < p.conflicts.len()).then_some(row)
 }
 
-pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, p: &Prompt) {
+pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, p: &Prompt, bars: &mut Bars) {
     let Some(l) = layout(area, p) else {
         return;
     };
@@ -257,9 +258,15 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, p: &Prompt) {
         width: l.inner.width,
         height: l.rows_visible,
     };
-    let thumb = scrollbar::rows(p.scroll, p.conflicts.len(), list.height);
     let track = scrollbar::track(l.rect, list);
-    scrollbar::render(track, buf, theme, thumb);
+    bars.draw(
+        Bar::Conflict,
+        track,
+        buf,
+        theme,
+        p.conflicts.len() as u32,
+        p.scroll as u32,
+    );
 }
 
 #[cfg(test)]
@@ -316,7 +323,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 21);
         let mut buf = Buffer::empty(area);
         let p = Prompt::new(OpId(1), vec![conflict("a.txt"), conflict("b.txt")]);
-        render(area, &mut buf, &t, &p);
+        render(area, &mut buf, &t, &p, &mut Bars::new());
         let text: String = (0..area.height)
             .map(|y| {
                 (0..area.width)
@@ -367,7 +374,7 @@ mod tests {
         let text: String = {
             let t = theme("terminal");
             let mut buf = Buffer::empty(area);
-            render(area, &mut buf, &t, &p);
+            render(area, &mut buf, &t, &p, &mut Bars::new());
             (0..area.height)
                 .map(|y| {
                     (0..area.width)

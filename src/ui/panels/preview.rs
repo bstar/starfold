@@ -35,6 +35,7 @@ use super::{empty, fit, rgb, width_of, words, ModuleId};
 use crate::fold::preview::Preview;
 use crate::fold::summary::DirSummary;
 use crate::ui::theme::Theme;
+use crate::ui::{Bar, Bars};
 
 /// Where a picture the app must paint itself belongs, and which one it is --
 /// see the module doc for why painting is not done here.
@@ -57,7 +58,12 @@ pub struct View<'a> {
     pub graphics: Option<&'a mut Graphics>,
 }
 
-pub fn render(area: Rect, buf: &mut Buffer, v: &mut View<'_>) -> Option<Placement> {
+pub fn render(
+    area: Rect,
+    buf: &mut Buffer,
+    v: &mut View<'_>,
+    bars: &mut Bars,
+) -> Option<Placement> {
     let word_list = words(ModuleId::Preview);
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
@@ -93,14 +99,16 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &mut View<'_>) -> Option<Placemen
             None
         }
         Preview::Text { bytes, .. } => {
-            render_text(area, body, buf, v.theme, preview, *bytes, v.name, v.scroll);
+            render_text(
+                area, body, buf, v.theme, preview, *bytes, v.name, v.scroll, bars,
+            );
             None
         }
         Preview::Binary {
             mime, truncated, ..
         } => {
             render_binary(
-                area, body, buf, v.theme, preview, mime, *truncated, v.scroll,
+                area, body, buf, v.theme, preview, mime, *truncated, v.scroll, bars,
             );
             None
         }
@@ -211,6 +219,7 @@ fn render_text(
     bytes: u64,
     name: Option<&str>,
     scroll: usize,
+    bars: &mut Bars,
 ) {
     if area.height > 0 {
         let meta = format!(
@@ -231,7 +240,7 @@ fn render_text(
     {
         buf.set_string(body.x, body.y + row as u16, fit(text, body.width), style);
     }
-    render_scrollbar(outer, body, buf, t, scroll, rows.len());
+    render_scrollbar(outer, body, buf, t, scroll, rows.len(), bars);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -244,6 +253,7 @@ fn render_binary(
     mime: &str,
     truncated: bool,
     scroll: usize,
+    bars: &mut Bars,
 ) {
     if area.height > 0 {
         let meta = if truncated {
@@ -264,12 +274,14 @@ fn render_binary(
     {
         buf.set_string(body.x, body.y + row as u16, fit(text, body.width), style);
     }
-    render_scrollbar(outer, body, buf, t, scroll, rows.len());
+    render_scrollbar(outer, body, buf, t, scroll, rows.len(), bars);
 }
 
 /// The scroll position of a text or binary preview, on the panel's own right
 /// border -- drawn over the rows the content actually occupies, below the
 /// meta line, the same mark every other scrolling list in the column draws.
+/// Recorded through `bars` rather than drawn directly, so a press or a drag
+/// on this same track next frame has something to answer to.
 fn render_scrollbar(
     outer: Rect,
     body: Rect,
@@ -277,10 +289,10 @@ fn render_scrollbar(
     t: &Theme,
     scroll: usize,
     len: usize,
+    bars: &mut Bars,
 ) {
-    let thumb = scrollbar::rows(scroll, len, body.height);
     let track = scrollbar::track(outer, body);
-    scrollbar::render(track, buf, t, thumb);
+    bars.draw(Bar::Preview, track, buf, t, len as u32, scroll as u32);
 }
 
 fn render_dir(area: Rect, buf: &mut Buffer, t: &Theme, summary: &DirSummary, name: Option<&str>) {
@@ -560,7 +572,7 @@ mod tests {
         v.scroll = 2;
         let area = Rect::new(0, 0, 30, 10);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &mut v);
+        render(area, &mut buf, &mut v, &mut Bars::new());
         // The first body row is the meta line; the text starts under it.
         let body = frame::body(area, &words(ModuleId::Preview));
         let row1: String = (0..10)

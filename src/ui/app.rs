@@ -62,10 +62,11 @@ use starkit::term::{self, Tui};
 use super::keymap::{self, Action};
 use super::layout::{self, LayoutState, Regions};
 use super::overlays::confirm::Confirm;
-use super::overlays::{conflict, Answer, Overlays, Pending};
+use super::overlays::{conflict, Answer, Overlay, Overlays, Pending};
 use super::panels::{self, ModuleId};
 use super::status;
 use super::theme::{self, Theme};
+use super::{Bar, Bars};
 use crate::config::Config;
 use crate::fold::entry::{Entry, EntryKind};
 use crate::fold::handle::{Command, Event, Handle, NoteLevel};
@@ -187,6 +188,10 @@ pub struct App {
     preview_scroll: usize,
     ops_cursor: usize,
     ops_scroll: usize,
+    /// Every scrollbar the column drew last frame, and the one a press is
+    /// holding -- see `starkit::chrome::scrollbar::Scrollbars`'s own doc for
+    /// the contract [`App::scroll_bar_to`] keeps with it.
+    bars: Bars,
     clicks: ClickTracker,
     /// Throw away what the diff believes is on the screen next frame -- see
     /// STAR/CORD's own `repaint` field, copied here for the same reason: an
@@ -241,6 +246,7 @@ impl App {
             preview_scroll: 0,
             ops_cursor: 0,
             ops_scroll: 0,
+            bars: Bars::new(),
             clicks: ClickTracker::new(),
             repaint: true,
             quit: false,
@@ -854,6 +860,30 @@ impl App {
             return;
         };
 
+        // Every scrollbar's own drag, ahead of both the overlay dispatch and
+        // the module one below -- a press or a drag that lands on a bar is
+        // never anything else's to answer, overlay open or not, because only
+        // the bars actually recorded this frame (see `draw`'s two
+        // `begin_frame`s) are ones `press` can find.
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some((bar, above)) = self.bars.press(m.column, m.row) {
+                    self.scroll_bar_to(bar, above);
+                    return;
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some((bar, above)) = self.bars.drag(m.row) {
+                    self.scroll_bar_to(bar, above);
+                    return;
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.bars.release();
+            }
+            _ => {}
+        }
+
         if self.overlays.is_open() {
             match m.kind {
                 MouseEventKind::ScrollDown => self.overlays.scroll(false),
@@ -875,6 +905,67 @@ impl App {
             _ => {}
         }
         self.clamp_scrolls();
+    }
+
+    /// Apply a press's or a drag's `above` to whichever scroll position
+    /// `bar` answers for -- the one rule `Scrollbars` asks of a caller (see
+    /// its own doc): the position applied here is what the next `record`/
+    /// `draw` for `bar` must report back, or its thumb snaps to wherever the
+    /// untouched value is still sitting.
+    ///
+    /// The stack and the operations queue both scroll a cursor into view
+    /// with them (`starkit::list::cursor_into_view`), the same inverse of
+    /// `clamp_scroll` their own keyboard paging needs -- otherwise the next
+    /// `clamp_scrolls` would re-derive the scroll from wherever the cursor
+    /// still is and drag it right back. The stack's cursor also goes back
+    /// through `Command::CursorTo`, exactly as a click on a row sends it, so
+    /// the fold core agrees once its own event reaches it; the operations
+    /// cursor is `App`'s own field, moved the same direct way a key already
+    /// moves it in `move_focused`.
+    fn scroll_bar_to(&mut self, bar: Bar, above: u32) {
+        let above = above as usize;
+        match bar {
+            Bar::Preview => {
+                // `clamp_scrolls` only ever caps this to its max, so a value
+                // the drag already kept in range survives it untouched.
+                self.preview_scroll = above;
+            }
+            Bar::Operations => {
+                self.ops_scroll = above;
+                let height = self
+                    .bars
+                    .track_of(Bar::Operations)
+                    .map(|r| r.height)
+                    .unwrap_or(0);
+                self.ops_cursor = starkit::list::cursor_into_view(
+                    self.ops_cursor,
+                    above,
+                    usize::from(height),
+                    self.view.ops.len(),
+                );
+            }
+            Bar::Stack => {
+                self.scroll.insert(self.view.frame_id, above);
+                let height = self
+                    .bars
+                    .track_of(Bar::Stack)
+                    .map(|r| r.height)
+                    .unwrap_or(0);
+                let cursor = starkit::list::cursor_into_view(
+                    self.view.cursor,
+                    above,
+                    usize::from(height),
+                    self.view.rows.len(),
+                );
+                self.view.cursor = cursor;
+                self.core.send(Command::CursorTo(cursor));
+            }
+            Bar::Conflict => {
+                if let Some(Overlay::Conflict(p)) = self.overlays.current_mut() {
+                    p.scroll = above;
+                }
+            }
+        }
     }
 
     fn click(&mut self, regions: &Regions, x: u16, y: u16) {
@@ -1045,10 +1136,20 @@ impl App {
             .fg(panels::rgb(self.theme.fg));
         buf.set_style(area, bg);
 
+        // Taken out for the length of the draw rather than borrowed: every
+        // panel's own `*_view()` builder takes `&self`, which would otherwise
+        // make `&mut self.bars` conflict with it for as long as the view it
+        // returned stays alive. `self.bars` is put back before returning,
+        // held's survival across `begin_frame` included, exactly as if it
+        // had never left.
+        let mut bars = std::mem::take(&mut self.bars);
+        bars.begin_frame();
+
         let padding = (self.cfg.ui.padding_x, self.cfg.ui.padding_y);
         let queued = u16::try_from(self.view.ops.len()).unwrap_or(u16::MAX);
         let Some(regions) = self.layout.regions(area, padding, queued).cloned() else {
             too_small(area, buf, &self.theme);
+            self.bars = bars;
             return;
         };
 
@@ -1056,7 +1157,7 @@ impl App {
 
         {
             let sv = self.stack_view();
-            panels::stack::render(regions.rect_of(ModuleId::Stack), buf, &sv);
+            panels::stack::render(regions.rect_of(ModuleId::Stack), buf, &sv, &mut bars);
         }
 
         let placement = {
@@ -1069,12 +1170,12 @@ impl App {
                 scroll: self.preview_scroll,
                 graphics: Some(&mut self.graphics),
             };
-            panels::preview::render(regions.rect_of(ModuleId::Preview), buf, &mut pv)
+            panels::preview::render(regions.rect_of(ModuleId::Preview), buf, &mut pv, &mut bars)
         };
 
         {
             let ov = self.operations_view();
-            panels::operations::render(regions.rect_of(ModuleId::Operations), buf, &ov);
+            panels::operations::render(regions.rect_of(ModuleId::Operations), buf, &ov, &mut bars);
         }
 
         status::render(regions.status, buf, &self.status_view(Instant::now()));
@@ -1087,7 +1188,18 @@ impl App {
             }
         }
 
-        let overlay_cursor = self.overlays.render(regions.area, buf, &self.theme);
+        // Overlays are modal: while one is open, only its own bar (the
+        // conflict prompt's list) may be pressed, not whatever the stack,
+        // preview and operations just drew behind it. A second
+        // `begin_frame` clears those three back out; a grab already held
+        // survives it regardless, since that is the whole point of a grab
+        // outliving the frame it started on.
+        if self.overlays.is_open() {
+            bars.begin_frame();
+        }
+        let overlay_cursor = self
+            .overlays
+            .render(regions.area, buf, &self.theme, &mut bars);
         match overlay_cursor {
             Some((x, y)) => reverse_cell(buf, regions.area, x, y),
             None => {
@@ -1098,6 +1210,8 @@ impl App {
                 }
             }
         }
+
+        self.bars = bars;
     }
 
     /// Where the live filter text ends on the active level's rule row --
@@ -1342,6 +1456,15 @@ mod tests {
         KeyEvent::new(c, KeyModifiers::NONE)
     }
 
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
     fn app() -> (App, fake::Fake, tempfile::TempDir) {
         let cfg = Config::default();
         let (core, fk) = fake::handle(cfg.core());
@@ -1368,6 +1491,19 @@ mod tests {
             .iter()
             .position(|r| r.name.trim_end_matches('/') == name)
             .unwrap_or_else(|| panic!("{name} is not listed: {:?}", app.view.rows))
+    }
+
+    /// A fresh directory under the fixture's home, with more files in it
+    /// than a 60x21 frame's stack listing has rows for -- see
+    /// `dragging_the_stack_scrollbar_scrolls_and_keeps_the_cursor_in_view`'s
+    /// own comment for the arithmetic that makes that true.
+    fn many_files(fk: &fake::Fake, n: usize) -> std::path::PathBuf {
+        let dir = fk.home().join("many");
+        std::fs::create_dir(&dir).expect("a fresh directory");
+        for i in 0..n {
+            std::fs::write(dir.join(format!("file{i:02}.txt")), b"x").expect("a small file");
+        }
+        dir
     }
 
     /// `App::new` over the fake core draws a whole frame -- the heading, a
@@ -1491,6 +1627,176 @@ mod tests {
         app.tick();
 
         assert!(fk.home().join("empty/blob.bin").exists());
+    }
+
+    /// A 60x21 frame gives the stack listing exactly `LIST_ROWS_MIN` (7)
+    /// rows once a level is pushed under the fixture's home (one crumb row,
+    /// one rule row, both floors -- see `layout`'s own doc for the
+    /// arithmetic): forty files overflow that by a wide margin, so the bar
+    /// dragged here is never in doubt about having something to scroll.
+    #[test]
+    fn dragging_the_stack_scrollbar_scrolls_and_keeps_the_cursor_in_view() {
+        let (mut app, fk, _dir) = app();
+        many_files(&fk, 40);
+        fake::open(&app.core, &fk, "many");
+        app.tick();
+        assert_eq!(app.view.rows.len(), 40, "{:?}", app.view.rows);
+
+        let area = Rect::new(0, 0, 60, 21);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+
+        let track = app
+            .bars
+            .track_of(Bar::Stack)
+            .expect("an overflowing list has a thumb to press");
+
+        // The thumb starts flush with the track's own top -- scroll is
+        // still 0 -- so a press there takes hold of it rather than jumping
+        // it.
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            track.x,
+            track.y,
+        ));
+        assert_eq!(app.bars.held(), Some(Bar::Stack));
+
+        let bottom = track.y + track.height - 1;
+        app.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            track.x,
+            bottom,
+        ));
+
+        let max_scroll = app.view.rows.len() - usize::from(track.height);
+        let scroll = *app
+            .scroll
+            .get(&app.view.frame_id)
+            .expect("the active frame has a scroll entry");
+        assert_eq!(
+            scroll, max_scroll,
+            "dragging to the track's bottom scrolls to the end"
+        );
+        assert!(
+            app.view.cursor >= scroll && app.view.cursor < scroll + usize::from(track.height),
+            "cursor {} is not inside the dragged-to viewport {scroll}..{}",
+            app.view.cursor,
+            scroll + usize::from(track.height)
+        );
+
+        // A fresh draw re-records the same bar with the value the drag just
+        // applied, so `clamp_scrolls` -- which every real mouse event calls,
+        // but a bare `draw` never does -- has nothing left to pull back.
+        app.draw(area, &mut buf);
+        app.clamp_scrolls();
+        assert_eq!(
+            *app.scroll.get(&app.view.frame_id).unwrap(),
+            max_scroll,
+            "clamp_scrolls must leave a value the drag already kept in range alone"
+        );
+
+        app.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            track.x,
+            bottom,
+        ));
+        assert_eq!(app.bars.held(), None, "releasing lets go of the grab");
+    }
+
+    #[test]
+    fn dragging_the_preview_scrollbar_scrolls_it() {
+        let (mut app, fk, _dir) = app();
+        let text: String = (0..200).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(fk.home().join("long.txt"), text).expect("a long text file");
+        app.core.send(Command::Reload);
+        fk.pump();
+        app.tick();
+
+        let idx = row_index(&app, "long.txt");
+        for _ in 0..idx {
+            app.key(key('j'));
+        }
+        fk.pump();
+        app.tick();
+        // The cursor landing on `long.txt` is what asks the core to build
+        // its preview; a second pump-and-tick picks the answer up.
+        fk.pump();
+        app.tick();
+        assert!(
+            matches!(app.view.preview.as_deref(), Some(Preview::Text { .. })),
+            "{:?}",
+            app.view.preview
+        );
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+
+        let track = app
+            .bars
+            .track_of(Bar::Preview)
+            .expect("a 200-line file overflows the preview");
+
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            track.x,
+            track.y,
+        ));
+        assert_eq!(app.bars.held(), Some(Bar::Preview));
+
+        let bottom = track.y + track.height - 1;
+        app.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            track.x,
+            bottom,
+        ));
+        assert!(
+            app.preview_scroll > 0,
+            "dragging the preview's thumb down should scroll it"
+        );
+
+        app.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            track.x,
+            bottom,
+        ));
+        assert_eq!(app.bars.held(), None);
+    }
+
+    #[test]
+    fn a_press_beside_the_thumb_jumps_there() {
+        let (mut app, fk, _dir) = app();
+        many_files(&fk, 40);
+        fake::open(&app.core, &fk, "many");
+        app.tick();
+
+        let area = Rect::new(0, 0, 60, 21);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+
+        let track = app.bars.track_of(Bar::Stack).expect("the list overflows");
+        assert_eq!(*app.scroll.get(&app.view.frame_id).unwrap_or(&0), 0);
+
+        // The thumb sits at the track's top; a press at its bottom is a
+        // press beside it, which jumps it there in this same call rather
+        // than waiting for a drag.
+        let bottom = track.y + track.height - 1;
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            track.x,
+            bottom,
+        ));
+
+        let scroll = *app
+            .scroll
+            .get(&app.view.frame_id)
+            .expect("the active frame has a scroll entry");
+        assert!(scroll > 0, "a press beside the thumb should jump it");
+        assert_eq!(
+            app.bars.held(),
+            Some(Bar::Stack),
+            "the jumped-to thumb is now held"
+        );
     }
 
     #[test]

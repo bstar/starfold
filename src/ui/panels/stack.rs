@@ -15,6 +15,7 @@ use starkit::theme::color::Rgb;
 
 use super::{empty, fit, rgb, width_of, words, ModuleId, HEADING};
 use crate::ui::theme::Theme;
+use crate::ui::{Bar, Bars};
 
 /// Whether a row carries a mark glyph, and which.
 ///
@@ -182,7 +183,7 @@ fn visible_crumbs(crumbs: &[Crumb], fold_rows: u16) -> (usize, &[Crumb]) {
     (crumbs.len() - keep, &crumbs[crumbs.len() - keep..])
 }
 
-pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
+pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
     let t = v.theme;
     let word_list = words(ModuleId::Stack);
     // The core theme type -- a struct literal is not a coercion site, so the
@@ -221,10 +222,18 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
 
     // The listing's own scroll position, on the panel's right border --
     // drawn last, over the corners, on the rows the list actually occupies
-    // rather than the crumbs or the rule above it.
-    let thumb = scrollbar::rows(v.scroll, v.rows.len(), s.list.height);
+    // rather than the crumbs or the rule above it. Recorded through `bars`
+    // rather than drawn directly, so a press or a drag on this same track
+    // next frame has something to answer to.
     let track = scrollbar::track(area, s.list);
-    scrollbar::render(track, buf, t, thumb);
+    bars.draw(
+        Bar::Stack,
+        track,
+        buf,
+        t,
+        v.rows.len() as u32,
+        v.scroll as u32,
+    );
 }
 
 fn render_squeezed(area: Rect, buf: &mut Buffer, t: &Theme, crumbs: &[Crumb]) {
@@ -653,7 +662,7 @@ mod tests {
         v.cursor = 5; // off the marked row, so its own highlight shows through
         let area = Rect::new(0, 0, 60, 20);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v);
+        render(area, &mut buf, &v, &mut Bars::new());
         let body = frame::body(area, &words(ModuleId::Stack));
         let s = split(body, 0, v.fold_rows);
         let first = line(&buf, s.list.y);
@@ -671,7 +680,7 @@ mod tests {
         v.cursor = 0;
         let area = Rect::new(0, 0, 60, 20);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v);
+        render(area, &mut buf, &v, &mut Bars::new());
         let body = frame::body(area, &words(ModuleId::Stack));
         let s = split(body, 0, v.fold_rows);
         let style = buf[(s.list.x, s.list.y)].style();
@@ -696,7 +705,7 @@ mod tests {
         v.loading = true;
         let area = Rect::new(0, 0, 60, 20);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v);
+        render(area, &mut buf, &v, &mut Bars::new());
         assert!(dump(&buf, area).contains("reading"));
     }
 
@@ -709,7 +718,7 @@ mod tests {
         v.error = Some("permission denied");
         let area = Rect::new(0, 0, 60, 20);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v);
+        render(area, &mut buf, &v, &mut Bars::new());
         assert!(dump(&buf, area).contains("permission denied"));
     }
 
@@ -721,7 +730,7 @@ mod tests {
         let v = view(&t, &crumbs, &rows);
         let area = Rect::new(0, 0, 60, 20);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v);
+        render(area, &mut buf, &v, &mut Bars::new());
         assert!(dump(&buf, area).contains("empty"));
     }
 
@@ -750,7 +759,7 @@ mod tests {
             .collect();
         let v = view(&t, &crumbs, &many);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, &v);
+        render(area, &mut buf, &v, &mut Bars::new());
 
         let filled: Vec<u16> = (s.list.y..s.list.y + s.list.height)
             .filter(|&y| buf[(right_x, y)].symbol() == "\u{2588}")
@@ -780,7 +789,7 @@ mod tests {
             .collect();
         let v2 = view(&t, &crumbs, &few);
         let mut buf2 = Buffer::empty(area);
-        render(area, &mut buf2, &v2);
+        render(area, &mut buf2, &v2, &mut Bars::new());
         for y in s.list.y..s.list.y + s.list.height {
             assert_ne!(
                 buf2[(right_x, y)].symbol(),
