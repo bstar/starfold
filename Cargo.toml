@@ -1,0 +1,133 @@
+[package]
+name = "starfold"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.90"
+description = "A stack-based terminal file manager in the STAR family"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/bstar/starfold"
+keywords = ["file-manager", "tui", "files", "terminal"]
+categories = ["command-line-utilities", "filesystem"]
+
+[dependencies]
+# The shared terminal foundation: paths, logging, atomic and private file
+# writes, theming, terminal setup with a panic hook, text entry, wrapping, the
+# key table and its help view, and the image pipeline, all of it already proven
+# in STAR/AMP and STAR/CORD. Only what a file manager needs: `gif` is what a
+# chat client animates, `wsz` is a Winamp skin format, `net` is an HTTP agent,
+# and `default-features = false` keeps all three out.
+#
+# It is also the one copy of `ratatui`, `crossterm`, `ratatui-image` and
+# `image` in the tree. Everything under `src/ui/` reaches them through
+# `starkit::`, and none of the four is a direct dependency here: a widget built
+# against a second copy of ratatui does not satisfy a signature expecting the
+# first, and the compiler reports that as two versions carrying the same
+# number.
+#
+# A sibling checkout is used through an uncommitted `.cargo/config.toml`, as
+# AGENTS.md describes.
+#
+# The `version` is not redundant with the tag: cargo-deny counts a dependency
+# with no version requirement as a wildcard and `wildcards = "deny"` refuses
+# it, whether or not the source is a git URL pinned to a tag.
+starkit = { git = "https://github.com/bstar/starkit", tag = "v0.2.1", version = "0.2", default-features = false, features = [
+    "image",
+] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Errors. `anyhow` where a failure is only ever reported, `thiserror` where the
+# caller has to tell one failure from another -- an operation's plan, above
+# all, where "into itself" is refused outright and "already exists" is a
+# question for the person at the keyboard.
+anyhow = "1"
+thiserror = "2"
+
+# Logging -- file only, through STAR/KIT's writer. stdout belongs to the
+# alternate screen.
+tracing = "0.1"
+
+# Config and the session file on disk.
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+
+# The channels between the window and the two worker threads. The UI loop is
+# synchronous and drains events once per frame; there is no async runtime in
+# this program, because nothing in it waits on a socket.
+crossbeam-channel = "0.5"
+
+# Timestamps. `jiff` rather than `chrono` or `time`, as in STAR/CORD: a file's
+# modification time is shown in the reader's local zone, and it is the one
+# crate that carries a tzdb and gets local time right without a separate
+# database crate.
+jiff = { version = "0.2", features = ["serde"] }
+
+# Deleting to the trash rather than for good. The freedesktop trash
+# specification in pure Rust on Linux, and `NSFileManager` through the `objc2`
+# bindings on macOS -- Rust bindings to a system framework, the same way
+# STAR/CORD's keyring reaches the Keychain, with no `-sys` crate and no
+# bindgen. Default features off: the `chrono` it would bring is not needed.
+trash = { version = "5", default-features = false }
+
+# The `/` filter's ranking. The same matcher Helix and nucleo's own picker use,
+# as a library rather than a picker: this supplies the list and the ordering,
+# and the stack module draws it.
+nucleo-matcher = "0.3"
+
+# What to call the bytes of a file the preview cannot show as text. The only
+# evidence is the name, so the guess is made from the extension and falls back
+# to `application/octet-stream`.
+mime_guess = "2"
+
+[dev-dependencies]
+# Anything that parses foreign input gets a property test, and so does every
+# piece of arithmetic that a hostile directory can drive: sizes, times, names.
+proptest = "1"
+# Listing, copying, moving and deleting are tested against real trees in a
+# temporary directory, with real modes and real symlinks.
+tempfile = "3"
+# The UI's snapshots. A layout regression is a diff of a drawn frame, which is
+# the only form in which anybody can actually see it; `insta` keeps the
+# accepted frame beside the test and shows the change as a diff.
+insta = "1"
+
+[profile.release]
+# Arithmetic on sizes, counts and offsets read out of directories somebody
+# else filled. Wrapping silently in release turns a hostile number into a
+# plausible wrong one, and the debug-built test suite would never see it.
+overflow-checks = true
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# Decoding a picture for the preview must not be slow in a debug build, or
+# nothing can be tried without a release compile.
+[profile.dev.package."*"]
+opt-level = 2
+
+[package.metadata.deb]
+maintainer = "bstar <bob@dinicolas.com>"
+copyright = "2026, bstar"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+A terminal file manager in the STAR family: the directories you drill through
+stack up as a column that folds behind you, the files you mark stay marked
+while you go somewhere else, and copies, moves and deletes queue up to be run
+together. Pictures are drawn where the terminal can draw them."""
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/starfold", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/starfold/README.md", "644"],
+    ["packaging/starfold.desktop", "usr/share/applications/starfold.desktop", "644"],
+    ["packaging/starfold.png", "usr/share/icons/hicolor/256x256/apps/starfold.png", "644"],
+    ["packaging/starfold.svg", "usr/share/icons/hicolor/scalable/apps/starfold.svg", "644"],
+]
+# $auto resolves the real sonames from the built binary, which here is the C
+# runtime and libgcc and nothing else -- so the package has to be built on a
+# Debian-like host. Building it on NixOS produces a package with no dependency
+# information at all.
+depends = "$auto"

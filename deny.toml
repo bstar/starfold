@@ -1,0 +1,73 @@
+# cargo-deny: what the dependency tree is allowed to contain.
+#
+# Two questions, both of which someone has to answer eventually and neither of
+# which anyone answers by hand: is a dependency carrying a known vulnerability,
+# and is one carrying a licence this project cannot ship under.
+
+[advisories]
+# Vulnerabilities and yanked releases stop the build. Those are ours to act on
+# however deep in the tree they are: the fix is a version bump, and if there is
+# not one yet that is worth knowing today rather than at release.
+#
+# Less is at stake here than in a chat client -- nothing in this tree talks to
+# a network -- but everything in it reads directories and files somebody else
+# filled, and the image decoder reads bytes that may have been made to break it.
+yanked = "deny"
+
+# Unmaintained crates only when we depend on one directly. A crate we chose and
+# that has since been abandoned is a decision to revisit; one three levels down
+# is its parent's decision, not ours, and cannot be fixed here.
+unmaintained = "workspace"
+
+
+[licenses]
+# Everything in the tree today, and nothing else. Adding a dependency under a
+# licence not on this list is meant to stop CI and be a decision.
+#
+# The list is STAR/CORD's, which is STAR/AMP's minus everything the C in that
+# tree dragged in. One entry is worth knowing about --
+#
+#   MPL-2.0               nucleo-matcher, which ranks the filter's results.
+#                         Copyleft per *file*: using it as a library carries
+#                         no obligation beyond publishing changes to its own
+#                         files, and there are none.
+#
+# `cargo deny check licenses` warns about an allowance nothing matches, so an
+# entry that stops being needed shows up as a warning rather than sitting here
+# forever.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSL-1.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# A crate offering a choice takes the first of these it can satisfy, so a
+# dual-licensed dependency resolves to the permissive half rather than to
+# whatever its manifest happens to list first.
+[licenses.private]
+ignore = true
+
+[bans]
+# Duplicate versions of one crate are ordinary in a tree this size and are the
+# resolver's business, not a licence question.
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+# Nothing from a git URL or a private registry: everything comes from crates.io,
+# so a compromised or vanished repository cannot reach a build.
+unknown-registry = "deny"
+unknown-git = "deny"
+
+# The one exception, named rather than allowed by loosening the rule above.
+# STAR/KIT is the foundation this and its two siblings stand on and is pinned
+# to a tag; it is not published to crates.io because its API is whatever its
+# consumers need and a version on a registry would suggest otherwise.
+allow-git = ["https://github.com/bstar/starkit"]

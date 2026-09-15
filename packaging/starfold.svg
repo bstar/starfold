@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- STAR/FOLD. A star over a folded sheet, matching STAR/AMP's star over an analyzer. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="48" fill="#121216"/>
+  <path fill="#5ec8f0"
+        d="M128 26 L145.6 71.7 L194.6 74.4 L156.5 105.3 L169.1 152.6
+           L128 126 L86.9 152.6 L99.5 105.3 L61.4 74.4 L110.4 71.7 Z"/>
+  <g>
+    <!-- The sheet, with its top-right corner folded down. -->
+    <path fill="#2f86ad" d="M44 160 L180 160 L212 192 L212 228 L44 228 Z"/>
+    <!-- The underside of the fold, a shade lighter where the paper turns. -->
+    <path fill="#bfe8fa" d="M180 160 L212 192 L180 192 Z"/>
+  </g>
+</svg>

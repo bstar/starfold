@@ -1,0 +1,17 @@
+/target
+/result
+/result-*
+# Release artifacts from scripts/build-dist.sh.
+/dist
+.direnv/
+
+
+# Editor and desktop cruft, so a contributor's tools do not land in a PR.
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# The local starkit checkout override, documented in AGENTS.md. Never committed.
+/.cargo/config.toml

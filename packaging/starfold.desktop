@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=starfold
+GenericName=File manager
+Comment=Unfold your filesystem
+Exec=starfold
+Icon=starfold
+Terminal=true
+Categories=System;FileTools;FileManager;Utility;
+Keywords=files;folders;directories;tui;terminal;
