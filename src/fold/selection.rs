@@ -3,14 +3,46 @@
 //! Marking a file does not depend on where the cursor is or which frame is
 //! open: `space` marks it, and it stays marked while the fold moves elsewhere,
 //! which is what lets `y`/`m` mean "copy or move the marked files *here*"
-//! from any level. The set is paths rather than indices into a listing for
-//! exactly that reason -- an index means nothing once the frame has changed.
+//! from any level. The set is keyed by path rather than by an index into a
+//! listing for exactly that reason -- an index means nothing once the frame
+//! has changed.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::entry::{Entry, EntryKind};
 use super::format::size;
+
+/// What one marked path contributes to the running totals, captured at mark
+/// time (or the last time `sized` measured it) rather than looked up again
+/// by path every time it might unmark -- a path can vanish between being
+/// marked and being forgotten, and the total still has to come out right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Marked {
+    /// How many bytes this path contributes to `Selection::bytes`. `0` for a
+    /// directory whose size is not known yet -- see `unsized_`.
+    bytes: u64,
+    /// A directory marked before `Done::Summarized` measured it. While this
+    /// is `true`, the path counts against `unsized_dirs` instead of `bytes`;
+    /// `Selection::sized` is what flips it.
+    unsized_: bool,
+}
+
+impl Marked {
+    fn file(len: u64) -> Self {
+        Self {
+            bytes: len,
+            unsized_: false,
+        }
+    }
+
+    fn unsized_dir() -> Self {
+        Self {
+            bytes: 0,
+            unsized_: true,
+        }
+    }
+}
 
 /// What is marked, and the running total the status row shows beside it.
 ///
@@ -22,14 +54,14 @@ use super::format::size;
 /// lower bound until it is measured.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Selection {
-    marked: BTreeSet<PathBuf>,
+    marked: BTreeMap<PathBuf, Marked>,
     bytes: u64,
     unsized_dirs: usize,
 }
 
 impl Selection {
     pub fn is_marked(&self, path: &Path) -> bool {
-        self.marked.contains(path)
+        self.marked.contains_key(path)
     }
 
     pub fn len(&self) -> usize {
@@ -41,16 +73,17 @@ impl Selection {
     }
 
     pub fn paths(&self) -> impl Iterator<Item = &Path> {
-        self.marked.iter().map(PathBuf::as_path)
+        self.marked.keys().map(PathBuf::as_path)
     }
 
     /// Mark or unmark one entry, keeping the byte total in step.
     pub fn toggle(&mut self, entry: &Entry) {
-        if self.marked.remove(&entry.path) {
-            self.forget_size(entry);
+        if let Some(m) = self.marked.remove(&entry.path) {
+            self.forget_size(m);
         } else {
-            self.marked.insert(entry.path.clone());
-            self.add_size(entry);
+            let m = mark_of(entry);
+            self.add_size(m);
+            self.marked.insert(entry.path.clone(), m);
         }
     }
 
@@ -58,8 +91,10 @@ impl Selection {
     /// not double-counted.
     pub fn mark_all(&mut self, entries: &[Entry]) {
         for entry in entries {
-            if self.marked.insert(entry.path.clone()) {
-                self.add_size(entry);
+            if !self.marked.contains_key(&entry.path) {
+                let m = mark_of(entry);
+                self.add_size(m);
+                self.marked.insert(entry.path.clone(), m);
             }
         }
     }
@@ -78,19 +113,53 @@ impl Selection {
         self.unsized_dirs = 0;
     }
 
-    fn add_size(&mut self, entry: &Entry) {
-        if entry.kind == EntryKind::Dir {
-            self.unsized_dirs += 1;
-        } else {
-            self.bytes += entry.len;
+    /// Remove every path in `gone` from the selection -- called once a move
+    /// or a delete finishes, so what remains marked does not still count
+    /// paths that are no longer there. Exact, because each path's own
+    /// contribution was captured when it was marked rather than re-derived
+    /// from a listing that may no longer have a row for it.
+    pub fn forget_paths(&mut self, gone: &[PathBuf]) {
+        for path in gone {
+            if let Some(m) = self.marked.remove(path) {
+                self.forget_size(m);
+            }
         }
     }
 
-    fn forget_size(&mut self, entry: &Entry) {
-        if entry.kind == EntryKind::Dir {
+    /// A `Done::Summarized` arrived for a marked directory: fold its byte
+    /// count into the total and move it out of `unsized_dirs`. A no-op for a
+    /// path that is not marked, or not a directory -- a summary racing an
+    /// unmark, or one built for a plain file by mistake, changes nothing.
+    /// Safe to call again for a directory that was already sized (a later
+    /// refresh): the previous measurement is replaced, not added to.
+    pub fn sized(&mut self, dir: &Path, bytes: u64) {
+        let Some(m) = self.marked.get_mut(dir) else {
+            return;
+        };
+        if m.unsized_ {
+            self.unsized_dirs = self.unsized_dirs.saturating_sub(1);
+            m.unsized_ = false;
+            m.bytes = bytes;
+            self.bytes += bytes;
+        } else {
+            self.bytes = self.bytes.saturating_sub(m.bytes) + bytes;
+            m.bytes = bytes;
+        }
+    }
+
+    fn add_size(&mut self, m: Marked) {
+        if m.unsized_ {
+            self.unsized_dirs += 1;
+        } else {
+            self.bytes += m.bytes;
+        }
+    }
+
+    fn forget_size(&mut self, m: Marked) {
+        if m.unsized_ {
             self.unsized_dirs = self.unsized_dirs.saturating_sub(1);
         } else {
-            self.bytes = self.bytes.saturating_sub(entry.len);
+            self.bytes = self.bytes.saturating_sub(m.bytes);
         }
     }
 
@@ -107,6 +176,14 @@ impl Selection {
             self.marked.len(),
             size(self.bytes)
         )
+    }
+}
+
+fn mark_of(entry: &Entry) -> Marked {
+    if entry.kind == EntryKind::Dir {
+        Marked::unsized_dir()
+    } else {
+        Marked::file(entry.len)
     }
 }
 
@@ -207,5 +284,53 @@ mod tests {
         assert_eq!(s.summary(), "1 marked \u{b7} 14.2 MB");
         s.toggle(&dir("/projects"));
         assert_eq!(s.summary(), "2 marked \u{b7} 14.2 MB+");
+    }
+
+    #[test]
+    fn forget_paths_removes_exactly_the_named_paths_and_fixes_the_totals() {
+        let mut s = Selection::default();
+        s.toggle(&file("/a", 100));
+        s.toggle(&file("/b", 200));
+        s.forget_paths(&[PathBuf::from("/a")]);
+        assert!(!s.is_marked(Path::new("/a")));
+        assert!(s.is_marked(Path::new("/b")));
+        assert_eq!(s.bytes, 200);
+    }
+
+    #[test]
+    fn forget_paths_ignores_a_path_that_was_never_marked() {
+        let mut s = Selection::default();
+        s.toggle(&file("/a", 100));
+        s.forget_paths(&[PathBuf::from("/nowhere")]);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.bytes, 100);
+    }
+
+    #[test]
+    fn sizing_a_marked_directory_moves_it_out_of_the_unsized_total() {
+        let mut s = Selection::default();
+        s.toggle(&dir("/projects"));
+        assert_eq!(s.unsized_dirs, 1);
+        s.sized(Path::new("/projects"), 14_200_000);
+        assert_eq!(s.unsized_dirs, 0);
+        assert_eq!(s.bytes, 14_200_000);
+        assert_eq!(s.summary(), "1 marked \u{b7} 14.2 MB");
+    }
+
+    #[test]
+    fn resizing_an_already_sized_directory_replaces_rather_than_adds() {
+        let mut s = Selection::default();
+        s.toggle(&dir("/projects"));
+        s.sized(Path::new("/projects"), 1_000);
+        s.sized(Path::new("/projects"), 2_000);
+        assert_eq!(s.bytes, 2_000, "the second measurement replaced the first");
+    }
+
+    #[test]
+    fn sizing_an_unmarked_directory_does_nothing() {
+        let mut s = Selection::default();
+        s.sized(Path::new("/projects"), 1_000);
+        assert_eq!(s.bytes, 0);
+        assert!(s.is_empty());
     }
 }

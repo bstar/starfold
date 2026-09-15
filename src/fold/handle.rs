@@ -190,20 +190,10 @@ impl EventSink {
 
 /// The UI's view of the core.
 pub struct Handle {
-    io: crossbeam_channel::Sender<Job>,
-    ops: crossbeam_channel::Sender<Job>,
+    senders: worker::Senders,
     events: crossbeam_channel::Receiver<Event>,
     state: Arc<RwLock<State>>,
     sink: EventSink,
-    /// The generation of the newest preview the UI has asked for. Bumped on
-    /// every `Command::Preview`; a `Done::Previewed` whose generation has
-    /// fallen behind this is a stale build and is discarded rather than
-    /// overwriting a newer one.
-    latest_preview: Arc<AtomicU64>,
-    /// Shared with the ops thread: `Command::Cancel` sets it, and the running
-    /// op checks it between files. One flag is enough because the ops thread
-    /// runs one op at a time.
-    cancel: Arc<AtomicBool>,
     threads: (
         Option<std::thread::JoinHandle<()>>,
         Option<std::thread::JoinHandle<()>>,
@@ -213,14 +203,18 @@ pub struct Handle {
 
 /// Everything a [`Handle`] needs, so a fixture can build one with no real
 /// worker threads behind it.
+///
+/// No `latest_preview` or `cancel` field here: the generation a stale
+/// preview is compared against now lives on `State` itself
+/// (`State::preview_generation`), and `Command::Cancel` reaches the running
+/// op's own `Progress` through `state::apply` rather than through a flag
+/// `Handle` holds on the side. Both were vestigial once `State` grew a real
+/// place for what they stood in for.
 pub struct HandleParts {
-    pub io: crossbeam_channel::Sender<Job>,
-    pub ops: crossbeam_channel::Sender<Job>,
+    pub senders: worker::Senders,
     pub events: crossbeam_channel::Receiver<Event>,
     pub state: Arc<RwLock<State>>,
     pub sink: EventSink,
-    pub latest_preview: Arc<AtomicU64>,
-    pub cancel: Arc<AtomicBool>,
     pub threads: (
         Option<std::thread::JoinHandle<()>>,
         Option<std::thread::JoinHandle<()>>,
@@ -231,34 +225,72 @@ pub struct HandleParts {
 impl Handle {
     /// Start the two worker threads.
     ///
-    /// `// TODO(1e)`: this is the bootstrap stub. It builds the state and
-    /// spawns `worker::spawn_io`/`spawn_ops`, which today do nothing but wait
-    /// for `Job::Shutdown`; the directory that is `start` is not actually
-    /// listed until Phase 1a and 1e are both in.
+    /// `start` is listed synchronously, before either thread is spawned, so
+    /// the first frame the UI draws already has content instead of an empty
+    /// panel for however long it takes `starfold-io` to pick the job up.
     pub fn spawn(cfg: FoldConfig, start: PathBuf, home: PathBuf, trash_available: bool) -> Handle {
         let (io_tx, io_rx) = crossbeam_channel::bounded(JOB_CAPACITY);
         let (ops_tx, ops_rx) = crossbeam_channel::bounded(JOB_CAPACITY);
         let (event_tx, event_rx) = crossbeam_channel::bounded(EVENT_CAPACITY);
         let dropped = Arc::new(AtomicU64::new(0));
         let sink = EventSink::new(event_tx, Arc::clone(&dropped));
-        let cancel = Arc::new(AtomicBool::new(false));
-
-        let state = Arc::new(RwLock::new(State::new(&cfg, start, home, trash_available)));
-
-        let io_thread = worker::spawn_io(io_rx, sink.clone(), Arc::clone(&state), cfg.clone());
-        let ops_thread = worker::spawn_ops(ops_rx, sink.clone(), Arc::clone(&state), cfg);
-
-        Handle::from_parts(HandleParts {
+        let senders = worker::Senders {
             io: io_tx,
             ops: ops_tx,
+        };
+
+        let state = Arc::new(RwLock::new(State::new(
+            &cfg,
+            start.clone(),
+            home,
+            trash_available,
+        )));
+
+        {
+            let listing = super::listing::read(&start, &cfg.list);
+            let effects = {
+                let mut s = state.write().unwrap_or_else(|e| e.into_inner());
+                state::apply(&mut s, Change::Done(worker::Done::Listed(listing)))
+            };
+            for job in effects.jobs {
+                senders.dispatch(job);
+            }
+            for event in effects.events {
+                sink.send(event);
+            }
+        }
+
+        let io_thread = worker::spawn_io(
+            io_rx,
+            sink.clone(),
+            Arc::clone(&state),
+            cfg.clone(),
+            senders.clone(),
+        );
+        let ops_thread = worker::spawn_ops(
+            ops_rx,
+            sink.clone(),
+            Arc::clone(&state),
+            cfg,
+            senders.clone(),
+        );
+
+        Handle::from_parts(HandleParts {
+            senders,
             events: event_rx,
             state,
             sink,
-            latest_preview: Arc::new(AtomicU64::new(0)),
-            cancel,
             threads: (Some(io_thread), Some(ops_thread)),
             dropped,
         })
+    }
+
+    /// Whether a trash can be reached from here at all. Probed once, before
+    /// [`spawn`](Self::spawn) is even called, so `main` can decide the
+    /// answer before there is a `State` to put it in -- `spawn` only takes
+    /// it as a `bool`, not a way to find one out.
+    pub fn probe_trash() -> bool {
+        super::ops::trash::available()
     }
 
     /// Build a handle around something that is not the real core -- the UI's
@@ -266,13 +298,10 @@ impl Handle {
     /// functions inline with no threads behind them at all.
     pub fn from_parts(parts: HandleParts) -> Handle {
         Handle {
-            io: parts.io,
-            ops: parts.ops,
+            senders: parts.senders,
             events: parts.events,
             state: parts.state,
             sink: parts.sink,
-            latest_preview: parts.latest_preview,
-            cancel: parts.cancel,
             threads: parts.threads,
             dropped: parts.dropped,
         }
@@ -284,30 +313,16 @@ impl Handle {
     /// `Job`s it produced to the right worker, and lets the lock go before
     /// anything is sent -- a worker taking the lock to report a result must
     /// never wait on a channel send this function is blocked on.
-    ///
     pub fn send(&self, command: Command) {
-        if matches!(command, Command::Preview(_)) {
-            self.latest_preview.fetch_add(1, Ordering::Relaxed);
-        }
         let effects = {
             let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
             state::apply(&mut state, Change::Command(command))
         };
         for job in effects.jobs {
-            self.dispatch(job);
+            self.senders.dispatch(job);
         }
         for event in effects.events {
             self.sink.send(event);
-        }
-    }
-
-    fn dispatch(&self, job: Job) {
-        let sender = match &job {
-            Job::Plan { .. } | Job::Run { .. } => &self.ops,
-            _ => &self.io,
-        };
-        if sender.try_send(job).is_err() {
-            tracing::warn!("a job did not fit its worker's queue");
         }
     }
 
@@ -332,8 +347,8 @@ impl Drop for Handle {
     fn drop(&mut self) {
         // `try_send`, not a blocking send: if a worker's queue is full it is
         // busy, and closing the channel below stops it once it drains.
-        let _ = self.io.try_send(Job::Shutdown);
-        let _ = self.ops.try_send(Job::Shutdown);
+        let _ = self.senders.io.try_send(Job::Shutdown);
+        let _ = self.senders.ops.try_send(Job::Shutdown);
 
         let deadline = Instant::now() + SHUTDOWN_GRACE;
         for thread in [self.threads.0.take(), self.threads.1.take()]
@@ -367,8 +382,10 @@ mod tests {
         let (ops_tx, _ops_rx) = crossbeam_channel::bounded(4);
         let (event_tx, event_rx) = crossbeam_channel::bounded(8);
         let handle = Handle::from_parts(HandleParts {
-            io: io_tx,
-            ops: ops_tx,
+            senders: worker::Senders {
+                io: io_tx,
+                ops: ops_tx,
+            },
             events: event_rx,
             state: Arc::new(RwLock::new(State::new(
                 &FoldConfig::default(),
@@ -377,8 +394,6 @@ mod tests {
                 false,
             ))),
             sink: EventSink::new(event_tx.clone(), Arc::new(AtomicU64::new(0))),
-            latest_preview: Arc::new(AtomicU64::new(0)),
-            cancel: Arc::new(AtomicBool::new(false)),
             threads: (None, None),
             dropped: Arc::new(AtomicU64::new(0)),
         });
@@ -395,20 +410,69 @@ mod tests {
     }
 
     #[test]
-    fn sending_a_command_emits_whatever_apply_implied() {
-        let (handle, _events, _io) = parts();
+    fn sending_a_command_forwards_the_jobs_and_events_apply_implied() {
+        let (handle, _events, io) = parts();
+        // A reload of the root frame is a listing job for the io thread and
+        // a stack notification for the window -- one of each, in that order
+        // of importance: the job goes out before the event, so a window that
+        // reacts to the event finds the work already queued.
         handle.send(Command::Reload);
-        // `apply` is a stub until Phase 1b; the point here is that `send`
-        // forwards exactly what it returned, which today is nothing.
-        assert_eq!(handle.drain().count(), 0);
+        assert!(matches!(io.try_recv(), Ok(Job::List(dir)) if dir == std::path::Path::new("/")));
+        assert!(handle.drain().any(|e| matches!(e, Event::Stack)));
+    }
+
+    /// `Handle::spawn` lists `start` synchronously before either worker
+    /// thread runs, so the first frame is never empty for want of a job
+    /// being picked up. This depends on Phase 1b's `state::apply` folding
+    /// `Done::Listed` into `State::listings` and clearing `State::loading`;
+    /// today `apply` is still the bootstrap stub, so this fails for that
+    /// reason alone until 1b lands, not because `listing::read` or
+    /// `Handle::spawn` themselves are wrong.
+    #[test]
+    fn spawning_lists_the_start_directory_before_either_thread_runs() {
+        let fixture = crate::fold::testing::Fixture::tree();
+        let handle = Handle::spawn(
+            FoldConfig::default(),
+            fixture.home().to_path_buf(),
+            fixture.home().to_path_buf(),
+            false,
+        );
+        assert!(
+            handle.state().listing_of(fixture.home()).is_some(),
+            "state::apply (Phase 1b) is what inserts the listing"
+        );
+        assert!(
+            !handle.state().loading,
+            "state::apply (Phase 1b) is what clears `loading`"
+        );
+    }
+
+    /// `Drop` sends `Job::Shutdown` to both real worker threads and waits for
+    /// them to join; this only exercises the mechanics -- both threads are
+    /// today idle stubs waiting on their channel -- so it holds regardless of
+    /// which other phases have landed.
+    #[test]
+    fn dropping_a_handle_joins_both_worker_threads_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = Handle::spawn(
+            FoldConfig::default(),
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            false,
+        );
+        let started = Instant::now();
+        drop(handle);
+        assert!(
+            started.elapsed() < SHUTDOWN_GRACE,
+            "Drop must join both threads well within the grace period, not merely by it"
+        );
     }
 
     #[test]
-    fn previewing_bumps_the_latest_generation() {
-        let (handle, _events, _io) = parts();
-        assert_eq!(handle.latest_preview.load(Ordering::Relaxed), 0);
-        handle.send(Command::Preview("/a".into()));
-        assert_eq!(handle.latest_preview.load(Ordering::Relaxed), 1);
+    fn probing_the_trash_does_not_panic_and_answers_a_plain_bool() {
+        // `ops::trash::available` is still Phase 1c's stub, which always
+        // answers `false`; this just confirms the plumbing reaches it.
+        let _: bool = Handle::probe_trash();
     }
 
     /// Copied from STAR/CORD's `a_dropped_event_becomes_a_refresh_on_the_next_one_that_fits`:
