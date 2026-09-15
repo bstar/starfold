@@ -23,13 +23,14 @@
 
 use std::sync::Arc;
 
+use starkit::chrome::frame;
 use starkit::graphics::{Graphics, ImageId};
 use starkit::image::RgbaImage;
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::Style;
 
-use super::{empty, fit, frame, rgb, width_of, words, Frame, ModuleId};
+use super::{empty, fit, rgb, width_of, words, ModuleId};
 use crate::fold::preview::Preview;
 use crate::fold::summary::DirSummary;
 use crate::ui::theme::Theme;
@@ -57,15 +58,20 @@ pub struct View<'a> {
 
 pub fn render(area: Rect, buf: &mut Buffer, v: &mut View<'_>) -> Option<Placement> {
     let word_list = words(ModuleId::Preview);
-    let body = frame(
+    // The core theme type -- a struct literal is not a coercion site, so the
+    // deref from this crate's own `Theme` is spelled out here.
+    let core: &starkit::theme::Theme = v.theme;
+    let body = frame::frame(
         area,
         buf,
-        &Frame {
-            theme: v.theme,
+        &frame::Frame {
+            theme: core,
             focused: v.focused,
-            name: ModuleId::Preview.title(),
+            title: ModuleId::Preview.title(),
             detail: v.name,
             heading: false,
+            badge: None,
+            footer: None,
             words: &word_list,
         },
     );
@@ -524,7 +530,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &mut v);
         // The first body row is the meta line; the text starts under it.
-        let body = starkit::chrome::header::body(area);
+        let body = frame::body(area, &words(ModuleId::Preview));
         let row1: String = (0..10)
             .map(|x| buf[(body.x + x, body.y + 1)].symbol().to_string())
             .collect();

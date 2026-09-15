@@ -6,12 +6,13 @@
 //! is -- [`render`] draws from it and [`hit`] tests against it, so a click
 //! can never land on a row the renderer did not draw.
 
+use starkit::chrome::frame::{self, Badge, Tone};
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::Style;
 use starkit::theme::color::Rgb;
 
-use super::{empty, fit, frame, rgb, width_of, words, Frame, ModuleId};
+use super::{empty, fit, rgb, width_of, words, ModuleId, HEADING};
 use crate::ui::theme::Theme;
 
 /// Whether a row carries a mark glyph, and which.
@@ -140,7 +141,7 @@ pub fn split(body: Rect, depth: usize, fold_rows: u16) -> Split {
 
 /// How many list rows fit, for the app's scroll clamping and page keys.
 pub fn visible_rows(area: Rect, depth: usize, fold_rows: u16) -> usize {
-    let body = starkit::chrome::header::body(area);
+    let body = frame::body(area, &words(ModuleId::Stack));
     usize::from(split(body, depth, fold_rows).list.height)
 }
 
@@ -183,15 +184,23 @@ fn visible_crumbs(crumbs: &[Crumb], fold_rows: u16) -> (usize, &[Crumb]) {
 pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
     let t = v.theme;
     let word_list = words(ModuleId::Stack);
-    let body = frame(
+    // The core theme type -- a struct literal is not a coercion site, so the
+    // deref from this crate's own `Theme` is spelled out here.
+    let core: &starkit::theme::Theme = t;
+    let body = frame::frame(
         area,
         buf,
-        &Frame {
-            theme: v.theme,
+        &frame::Frame {
+            theme: core,
             focused: v.focused,
-            name: ModuleId::Stack.title(),
+            title: HEADING,
             detail: None,
             heading: true,
+            badge: Some(Badge {
+                text: ModuleId::Stack.title(),
+                tone: Tone::Dim,
+            }),
+            footer: None,
             words: &word_list,
         },
     );
@@ -486,7 +495,7 @@ pub enum Hit {
 }
 
 pub fn hit(area: Rect, v: &View<'_>, x: u16, y: u16) -> Option<Hit> {
-    let body = starkit::chrome::header::body(area);
+    let body = frame::body(area, &words(ModuleId::Stack));
     let s = split(body, v.crumbs.len(), v.fold_rows);
 
     if y >= s.crumbs.y && y < s.crumbs.y + s.crumbs.height {
@@ -610,7 +619,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 30);
 
         let s = split(
-            starkit::chrome::header::body(area),
+            frame::body(area, &words(ModuleId::Stack)),
             v.crumbs.len(),
             v.fold_rows,
         );
@@ -637,7 +646,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 20);
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &v);
-        let body = starkit::chrome::header::body(area);
+        let body = frame::body(area, &words(ModuleId::Stack));
         let s = split(body, 0, v.fold_rows);
         let first = line(&buf, s.list.y);
         assert!(first.contains('\u{25cf}'), "{first:?}");
@@ -655,7 +664,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 20);
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &v);
-        let body = starkit::chrome::header::body(area);
+        let body = frame::body(area, &words(ModuleId::Stack));
         let s = split(body, 0, v.fold_rows);
         let style = buf[(s.list.x, s.list.y)].style();
         assert_eq!(style.bg, Some(rgb(t.row_cursor_bg)));

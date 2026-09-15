@@ -5,12 +5,13 @@
 //! module never touches `fold::ops` directly; it only draws what it is
 //! handed, the same separation `panels::stack` keeps from `fold::listing`.
 
+use starkit::chrome::frame;
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::Style;
 use starkit::theme::color::Rgb;
 
-use super::{elide_middle, empty, frame, rgb, summary_row, width_of, words, Frame, ModuleId};
+use super::{elide_middle, empty, rgb, summary_row, width_of, words, ModuleId};
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,15 +68,20 @@ fn running<'a>(v: &View<'a>) -> Option<&'a OpRow> {
 pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
     let detail = running(v).map(|r| r.status.clone());
     let word_list = words(ModuleId::Operations);
-    let body = frame(
+    // The core theme type -- a struct literal is not a coercion site, so the
+    // deref from this crate's own `Theme` is spelled out here.
+    let core: &starkit::theme::Theme = v.theme;
+    let body = frame::frame(
         area,
         buf,
-        &Frame {
-            theme: v.theme,
+        &frame::Frame {
+            theme: core,
             focused: v.focused,
-            name: ModuleId::Operations.title(),
+            title: ModuleId::Operations.title(),
             detail: detail.as_deref(),
             heading: false,
+            badge: None,
+            footer: None,
             words: &word_list,
         },
     );
@@ -150,7 +156,7 @@ pub fn hit(area: Rect, v: &View<'_>, x: u16, y: u16) -> Option<usize> {
     if v.folded {
         return None;
     }
-    let body = starkit::chrome::header::body(area);
+    let body = frame::body(area, &words(ModuleId::Operations));
     if x < body.x || x >= body.x + body.width || y < body.y || y >= body.y + body.height {
         return None;
     }
@@ -247,7 +253,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 6);
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &v);
-        let body = starkit::chrome::header::body(area);
+        let body = frame::body(area, &words(ModuleId::Operations));
         let text = dump(&buf, area);
         assert!(text.contains("COPY 2 items"), "{text:?}");
         assert!(text.contains("MOVE 1 item"), "{text:?}");
