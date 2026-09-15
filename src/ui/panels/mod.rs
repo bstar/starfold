@@ -9,6 +9,10 @@
 //! `pub mod stack; pub mod preview; pub mod operations;` are Phase 2c's files
 //! and are deliberately not declared yet.
 
+pub mod operations;
+pub mod preview;
+pub mod stack;
+
 use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
