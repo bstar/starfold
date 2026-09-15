@@ -12,6 +12,7 @@
 //! [`layout`] is, as in [`super::confirm`], the one computation [`render`]
 //! and [`super::Overlays::click`] both read.
 
+use starkit::chrome::scrollbar;
 use starkit::crossterm::event::{KeyCode, KeyEvent};
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
@@ -229,6 +230,19 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, p: &Prompt) {
         };
         buf.set_string(l.inner.x, y, fit(&text, l.inner.width), style);
     }
+
+    // The reading cursor's position in the list, on the box's right border --
+    // drawn after the frame and its corners, over the rows the list actually
+    // occupies rather than the footer below it.
+    let list = Rect {
+        x: l.inner.x,
+        y: l.inner.y,
+        width: l.inner.width,
+        height: l.footer_y.saturating_sub(l.inner.y),
+    };
+    let thumb = scrollbar::rows(p.scroll, p.conflicts.len(), list.height);
+    let track = scrollbar::track(l.rect, list);
+    scrollbar::render(track, buf, theme, thumb);
 
     let footer = WORDS.join("  ");
     buf.set_string(

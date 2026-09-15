@@ -6,6 +6,7 @@
 //! handed, the same separation `panels::stack` keeps from `fold::listing`.
 
 use starkit::chrome::frame;
+use starkit::chrome::scrollbar;
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::Style;
@@ -90,7 +91,7 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
         render_folded(body, buf, v);
         return;
     }
-    render_open(body, buf, v);
+    render_open(area, body, buf, v);
 }
 
 fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
@@ -112,7 +113,7 @@ fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
     }
 }
 
-fn render_open(area: Rect, buf: &mut Buffer, v: &View<'_>) {
+fn render_open(outer: Rect, area: Rect, buf: &mut Buffer, v: &View<'_>) {
     if v.rows.is_empty() {
         empty(area, buf, v.theme, "nothing queued");
         return;
@@ -150,6 +151,10 @@ fn render_open(area: Rect, buf: &mut Buffer, v: &View<'_>) {
         let rx = area.x + area.width.saturating_sub(right_w);
         buf.set_string(rx, y, &right, style);
     }
+
+    let thumb = scrollbar::rows(v.scroll, v.rows.len(), area.height);
+    let track = scrollbar::track(outer, area);
+    scrollbar::render(track, buf, t, thumb);
 }
 
 pub fn hit(area: Rect, v: &View<'_>, x: u16, y: u16) -> Option<usize> {

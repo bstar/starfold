@@ -24,6 +24,7 @@
 use std::sync::Arc;
 
 use starkit::chrome::frame;
+use starkit::chrome::scrollbar;
 use starkit::graphics::{Graphics, ImageId};
 use starkit::image::RgbaImage;
 use starkit::ratatui::buffer::Buffer;
@@ -92,13 +93,15 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &mut View<'_>) -> Option<Placemen
             None
         }
         Preview::Text { bytes, .. } => {
-            render_text(body, buf, v.theme, preview, *bytes, v.name, v.scroll);
+            render_text(area, body, buf, v.theme, preview, *bytes, v.name, v.scroll);
             None
         }
         Preview::Binary {
             mime, truncated, ..
         } => {
-            render_binary(body, buf, v.theme, preview, mime, *truncated, v.scroll);
+            render_binary(
+                area, body, buf, v.theme, preview, mime, *truncated, v.scroll,
+            );
             None
         }
         Preview::Dir(summary) => {
@@ -191,7 +194,9 @@ fn render_plain(area: Rect, buf: &mut Buffer, preview: &Preview, style: Style) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_text(
+    outer: Rect,
     area: Rect,
     buf: &mut Buffer,
     t: &Theme,
@@ -219,9 +224,12 @@ fn render_text(
     {
         buf.set_string(body.x, body.y + row as u16, fit(text, body.width), style);
     }
+    render_scrollbar(outer, body, buf, t, scroll, rows.len());
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_binary(
+    outer: Rect,
     area: Rect,
     buf: &mut Buffer,
     t: &Theme,
@@ -249,6 +257,23 @@ fn render_binary(
     {
         buf.set_string(body.x, body.y + row as u16, fit(text, body.width), style);
     }
+    render_scrollbar(outer, body, buf, t, scroll, rows.len());
+}
+
+/// The scroll position of a text or binary preview, on the panel's own right
+/// border -- drawn over the rows the content actually occupies, below the
+/// meta line, the same mark every other scrolling list in the column draws.
+fn render_scrollbar(
+    outer: Rect,
+    body: Rect,
+    buf: &mut Buffer,
+    t: &Theme,
+    scroll: usize,
+    len: usize,
+) {
+    let thumb = scrollbar::rows(scroll, len, body.height);
+    let track = scrollbar::track(outer, body);
+    scrollbar::render(track, buf, t, thumb);
 }
 
 fn render_dir(area: Rect, buf: &mut Buffer, t: &Theme, summary: &DirSummary, name: Option<&str>) {

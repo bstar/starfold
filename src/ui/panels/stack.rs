@@ -7,6 +7,7 @@
 //! can never land on a row the renderer did not draw.
 
 use starkit::chrome::frame::{self, Badge, Tone};
+use starkit::chrome::scrollbar;
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::Style;
@@ -217,6 +218,13 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
         render_rule(s.rule, buf, t, v);
     }
     render_list(s.list, buf, t, v);
+
+    // The listing's own scroll position, on the panel's right border --
+    // drawn last, over the corners, on the rows the list actually occupies
+    // rather than the crumbs or the rule above it.
+    let thumb = scrollbar::rows(v.scroll, v.rows.len(), s.list.height);
+    let track = scrollbar::track(area, s.list);
+    scrollbar::render(track, buf, t, thumb);
 }
 
 fn render_squeezed(area: Rect, buf: &mut Buffer, t: &Theme, crumbs: &[Crumb]) {
@@ -723,5 +731,62 @@ mod tests {
         assert!(line.contains("(truncated)"));
         assert!(line.contains("/car"));
         assert_eq!(width_of(&line), 50);
+    }
+
+    /// The listing's scroll position shows as a run of `█` on the panel's
+    /// right border, over the list rows only, capped at a quarter of the
+    /// list's height -- and does not appear at all once everything fits.
+    #[test]
+    fn the_list_shows_its_own_scrollbar_only_when_it_overflows() {
+        let t = theme("terminal");
+        let crumbs: Vec<Crumb> = Vec::new();
+        let area = Rect::new(0, 0, 60, 20);
+        let body = frame::body(area, &words(ModuleId::Stack));
+        let s = split(body, 0, 6);
+        let right_x = area.x + area.width - 1;
+
+        let many: Vec<Row> = (0..40)
+            .map(|i| row(&format!("file{i}"), Mark::None))
+            .collect();
+        let v = view(&t, &crumbs, &many);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v);
+
+        let filled: Vec<u16> = (s.list.y..s.list.y + s.list.height)
+            .filter(|&y| buf[(right_x, y)].symbol() == "\u{2588}")
+            .collect();
+        assert!(!filled.is_empty(), "no thumb drawn on an overflowing list");
+        assert!(
+            filled.len() as u16 <= s.list.height / 4,
+            "thumb of {} rows is more than a quarter of {}",
+            filled.len(),
+            s.list.height
+        );
+        for pair in filled.windows(2) {
+            assert_eq!(pair[1], pair[0] + 1, "the thumb is not one contiguous run");
+        }
+        for y in s.list.y..s.list.y + s.list.height {
+            if !filled.contains(&y) {
+                assert_eq!(
+                    buf[(right_x, y)].symbol(),
+                    "\u{2551}",
+                    "row {y} is not plain border"
+                );
+            }
+        }
+
+        let few: Vec<Row> = (0..3)
+            .map(|i| row(&format!("file{i}"), Mark::None))
+            .collect();
+        let v2 = view(&t, &crumbs, &few);
+        let mut buf2 = Buffer::empty(area);
+        render(area, &mut buf2, &v2);
+        for y in s.list.y..s.list.y + s.list.height {
+            assert_ne!(
+                buf2[(right_x, y)].symbol(),
+                "\u{2588}",
+                "a list that fits should draw no thumb"
+            );
+        }
     }
 }
