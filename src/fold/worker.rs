@@ -163,6 +163,136 @@ fn is_stale_preview(state: &Arc<RwLock<State>>, generation: u64) -> bool {
     generation < s.preview_generation
 }
 
+/// Fold one [`Done`] into `state` and dispatch whatever it implies, taking
+/// the write lock only for the fold itself -- the rule the module doc
+/// describes.
+///
+/// A free function rather than the closure each thread loop used to build
+/// for itself, so a fixture that folds a `Done` on the test thread with no
+/// worker behind it at all -- the UI's `fake` module -- goes through exactly
+/// the same code as `starfold-io` and `starfold-ops` do.
+pub fn finish(done: Done, state: &Arc<RwLock<State>>, events: &EventSink, senders: &Senders) {
+    let effects = {
+        let mut s = state.write().unwrap_or_else(|e| e.into_inner());
+        state::apply(&mut s, Change::Done(done))
+    };
+    for job in effects.jobs {
+        senders.dispatch(job);
+    }
+    for event in effects.events {
+        events.send(event);
+    }
+}
+
+/// What running one `starfold-io` job produced, before [`finish`] folds it
+/// into `State`.
+///
+/// Not simply `Option<Done>`: `Job::Open` never produces a `Done` at all --
+/// opening a file changes nothing this program tracks -- but its failure is
+/// still worth a line in the status bar, and a stale preview job (superseded
+/// by a newer generation before it was even picked up) is worth neither a
+/// `Done` nor a `Note`.
+pub enum IoOutcome {
+    Done(Done),
+    Note(Note),
+    None,
+}
+
+/// Do the filesystem work for one io job: read a directory, size one,
+/// build a preview, or ask the desktop to open a file.
+///
+/// Pulled out of [`spawn_io`]'s loop so the UI's `fake` fixture can run the
+/// very same code inline, on the test thread, with no channel or thread
+/// between the job and its result -- see the module doc.
+pub fn perform_io(
+    job: Job,
+    cfg: &FoldConfig,
+    state: &Arc<RwLock<State>>,
+    cancel: &AtomicBool,
+) -> IoOutcome {
+    match job {
+        Job::List(dir) => {
+            let listing = listing::read(&dir, &cfg.list);
+            IoOutcome::Done(Done::Listed(listing))
+        }
+        Job::Summarize(dir) => {
+            let budget = Budget {
+                max_entries: cfg.preview.dir_budget,
+                max_depth: 64,
+            };
+            let summary = summary::summarize(&dir, &budget, cancel);
+            IoOutcome::Done(Done::Summarized { dir, summary })
+        }
+        Job::Preview { path, generation } => {
+            // Builds are synchronous on this one thread, so a preview cannot
+            // be cancelled *mid*-build the way a running op can be; what
+            // matters is not starting a build for a file the cursor has
+            // already left, which this check catches before any bytes are
+            // read.
+            if is_stale_preview(state, generation) {
+                return IoOutcome::None;
+            }
+            let preview = preview::build(&path, &cfg.preview, cancel);
+            IoOutcome::Done(Done::Previewed {
+                path,
+                generation,
+                preview,
+            })
+        }
+        Job::Open(path) => match open::open_external(&path, &cfg.open) {
+            Ok(()) => IoOutcome::None,
+            Err(e) => IoOutcome::Note(Note::error(
+                "open",
+                format!("opening {}: {e}", path.display()),
+            )),
+        },
+        // Not io work: `spawn_io`'s loop handles `Shutdown` and forwards
+        // `Plan`/`Run` to the ops queue before this is ever called. Kept
+        // here, rather than assumed away, so this match stays exhaustive if
+        // `Job` grows another kind.
+        Job::Shutdown | Job::Plan { .. } | Job::Run { .. } => IoOutcome::None,
+    }
+}
+
+/// Do the filesystem work for one `starfold-ops` job: plan a queued
+/// operation's sources and conflicts, or run one that is already planned.
+///
+/// Pulled out of [`spawn_ops`]'s loop for the same reason as [`perform_io`].
+/// `cfg.preserve_times` is the one setting a run needs that a plan does not.
+pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
+    match job {
+        Job::Plan {
+            op,
+            kind,
+            sources,
+            dest,
+        } => {
+            let result =
+                ops::plan::plan(kind, &sources, dest.as_deref()).map_err(|e| e.to_string());
+            Some(Done::Planned { op, result })
+        }
+        Job::Run {
+            op,
+            kind,
+            plan,
+            policy,
+            progress,
+        } => {
+            let options = ops::exec::RunOptions {
+                preserve_times: cfg.preserve_times,
+                force_copy: false,
+            };
+            let outcome = ops::exec::run(kind, &plan, policy, &options, &progress);
+            Some(Done::Finished { op, outcome })
+        }
+        // Not ops work: `spawn_ops`'s loop forwards everything else before
+        // this is called.
+        Job::List(_) | Job::Summarize(_) | Job::Preview { .. } | Job::Open(_) | Job::Shutdown => {
+            None
+        }
+    }
+}
+
 /// Start the io thread: listings, directory summaries, previews, external
 /// opens, and the mtime poll that notices a change this program did not make
 /// itself.
@@ -176,22 +306,6 @@ pub fn spawn_io(
     std::thread::Builder::new()
         .name("starfold-io".into())
         .spawn(move || {
-            // Folds one `Done` into `State` and dispatches whatever it
-            // implies, taking the write lock only for the fold itself -- the
-            // rule the module doc describes.
-            let finish = |done: Done| {
-                let effects = {
-                    let mut s = state.write().unwrap_or_else(|e| e.into_inner());
-                    state::apply(&mut s, Change::Done(done))
-                };
-                for job in effects.jobs {
-                    senders.dispatch(job);
-                }
-                for event in effects.events {
-                    events.send(event);
-                }
-            };
-
             let mut watch = Watch::new();
 
             loop {
@@ -202,7 +316,7 @@ pub fn spawn_io(
                         watch.watch(&dirs);
                         let changed = watch.changed();
                         if !changed.is_empty() {
-                            finish(Done::Changed(changed));
+                            finish(Done::Changed(changed), &state, &events, &senders);
                         }
                         continue;
                     }
@@ -211,50 +325,20 @@ pub fn spawn_io(
 
                 match job {
                     Job::Shutdown => break,
-                    Job::List(dir) => {
-                        let listing = listing::read(&dir, &cfg.list);
-                        finish(Done::Listed(listing));
-                    }
-                    Job::Summarize(dir) => {
-                        let cancel = AtomicBool::new(false);
-                        let budget = Budget {
-                            max_entries: cfg.preview.dir_budget,
-                            max_depth: 64,
-                        };
-                        let summary = summary::summarize(&dir, &budget, &cancel);
-                        finish(Done::Summarized { dir, summary });
-                    }
-                    Job::Preview { path, generation } => {
-                        // Builds are synchronous on this one thread, so a
-                        // preview cannot be cancelled *mid*-build the way a
-                        // running op can be; what matters is not starting a
-                        // build for a file the cursor has already left, which
-                        // this check catches before any bytes are read.
-                        if is_stale_preview(&state, generation) {
-                            continue;
-                        }
-                        let cancel = AtomicBool::new(false);
-                        let preview = preview::build(&path, &cfg.preview, &cancel);
-                        finish(Done::Previewed {
-                            path,
-                            generation,
-                            preview,
-                        });
-                    }
-                    Job::Open(path) => {
-                        if let Err(e) = open::open_external(&path, &cfg.open) {
-                            events.send(Event::Note(Note::error(
-                                "open",
-                                format!("opening {}: {e}", path.display()),
-                            )));
-                        }
-                    }
                     other @ (Job::Plan { .. } | Job::Run { .. }) => {
                         // `Senders::dispatch` always routes these to `ops`;
                         // arriving here would mean something upstream sent a
                         // job to the wrong queue. Forward it rather than
                         // drop it silently.
                         senders.dispatch(other);
+                    }
+                    other => {
+                        let cancel = AtomicBool::new(false);
+                        match perform_io(other, &cfg, &state, &cancel) {
+                            IoOutcome::Done(done) => finish(done, &state, &events, &senders),
+                            IoOutcome::Note(note) => events.send(Event::Note(note)),
+                            IoOutcome::None => {}
+                        }
                     }
                 }
             }
@@ -273,50 +357,15 @@ pub fn spawn_ops(
     std::thread::Builder::new()
         .name("starfold-ops".into())
         .spawn(move || {
-            let finish = |done: Done| {
-                let effects = {
-                    let mut s = state.write().unwrap_or_else(|e| e.into_inner());
-                    state::apply(&mut s, Change::Done(done))
-                };
-                for job in effects.jobs {
-                    senders.dispatch(job);
-                }
-                for event in effects.events {
-                    events.send(event);
-                }
-            };
-
             for job in jobs.iter() {
                 match job {
                     Job::Shutdown => break,
-                    Job::Plan {
-                        op,
-                        kind,
-                        sources,
-                        dest,
-                    } => {
-                        let result = ops::plan::plan(kind, &sources, dest.as_deref())
-                            .map_err(|e| e.to_string());
-                        finish(Done::Planned { op, result });
+                    other @ (Job::Plan { .. } | Job::Run { .. }) => {
+                        if let Some(done) = perform_ops(other, &cfg) {
+                            finish(done, &state, &events, &senders);
+                        }
                     }
-                    Job::Run {
-                        op,
-                        kind,
-                        plan,
-                        policy,
-                        progress,
-                    } => {
-                        let options = ops::exec::RunOptions {
-                            preserve_times: cfg.preserve_times,
-                            force_copy: false,
-                        };
-                        let outcome = ops::exec::run(kind, &plan, policy, &options, &progress);
-                        finish(Done::Finished { op, outcome });
-                    }
-                    other @ (Job::List(_)
-                    | Job::Summarize(_)
-                    | Job::Preview { .. }
-                    | Job::Open(_)) => {
+                    other => {
                         // As in `spawn_io`: not this thread's work, but worth
                         // forwarding rather than dropping.
                         senders.dispatch(other);
