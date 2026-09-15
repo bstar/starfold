@@ -70,6 +70,37 @@ pub enum ConflictPolicy {
 pub struct Conflict {
     pub source: PathBuf,
     pub dest: PathBuf,
+    /// Both sides are directories, so `ConflictPolicy::Overwrite` merges into
+    /// the existing one instead of removing it first -- removing it first
+    /// would throw away whatever was already there under names that are not
+    /// among `sources`.
+    pub both_dirs: bool,
+}
+
+/// What kind of thing one planned [`Item`] is, read the same way
+/// [`super::entry::stat`] reads a listing row: `symlink_metadata`, never
+/// followed. A directory's contents are further [`Item`]s in the same
+/// `Plan`; a symlink is never expanded, whatever it points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemKind {
+    Dir,
+    /// The regular file's length, read once at plan time so `exec` never has
+    /// to stat a source again to total or report progress.
+    File(u64),
+    Symlink,
+}
+
+/// One thing `exec` will touch, in the walk order `plan` found it: parents
+/// before children, so creating a directory always happens before anything
+/// is written inside it.
+#[derive(Debug, Clone)]
+pub struct Item {
+    pub from: PathBuf,
+    /// Where this lands: `dest/<name>/...` for a copy or move, the `to` path
+    /// itself for a rename. `None` for a delete, which sends nothing
+    /// anywhere.
+    pub to: Option<PathBuf>,
+    pub kind: ItemKind,
 }
 
 /// What `plan` worked out before anything is touched: the full list of
@@ -78,9 +109,30 @@ pub struct Conflict {
 #[derive(Debug, Clone, Default)]
 pub struct Plan {
     pub sources: Vec<PathBuf>,
+    /// `dest/` for a copy or move, the rename target for a rename, and an
+    /// empty path for a delete, which has nowhere to go.
     pub dest: PathBuf,
     pub total_bytes: u64,
+    /// `items.len()`, kept separately so a delete's progress -- which counts
+    /// items, not bytes -- does not have to re-count the vector every time
+    /// the status row reads it.
+    pub total_items: usize,
     pub conflicts: Vec<Conflict>,
+    /// Every item `exec` will touch, in walk order, so `exec` never reads a
+    /// directory itself -- it only ever replays what `plan` already found.
+    pub items: Vec<Item>,
+    /// Index into `items` where each `sources[i]`'s own subtree begins, in
+    /// the same order as `sources`. `None` at `i` means `sources[i]` was
+    /// missing (a delete only -- `missing` also names it) and there is
+    /// nothing to walk for it. `exec` uses this to find one top-level
+    /// source's whole subtree as a contiguous slice without re-deriving the
+    /// boundary from paths.
+    pub roots: Vec<Option<usize>>,
+    /// Sources that were already gone when planning a delete. Not fatal --
+    /// unlike a missing copy or move source, which aborts the whole plan --
+    /// because "it's already not there" is the outcome a delete of it was
+    /// asking for in the first place.
+    pub missing: Vec<PathBuf>,
 }
 
 /// How an operation ended: what got done, what was skipped by policy, what
@@ -189,6 +241,13 @@ impl Queue {
             progress: Arc::new(Progress::new(0)),
         });
         id
+    }
+
+    /// One entry by id, to be changed in place: its status, its policy, its
+    /// plan. `state::apply` is the only caller, and the fields it sets are
+    /// the ones `Op` makes public.
+    pub fn get_mut(&mut self, id: OpId) -> Option<&mut Op> {
+        self.ops.iter_mut().find(|op| op.id == id)
     }
 
     /// Drop one entry, wherever it is in the queue. `false` if it was not
