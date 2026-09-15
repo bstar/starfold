@@ -139,8 +139,15 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &mut View<'_>) -> Option<Placemen
 /// against, so a preview never scrolls further than it is actually tall.
 pub fn lines(preview: &Preview, width: u16) -> Vec<String> {
     match preview {
+        // `lines()`, not `split('\n')`: a text file almost always ends in a
+        // newline, and `split` turns that into a phantom empty last line --
+        // one more row than a reader can see, which used to draw a
+        // scrollbar on a preview that did not actually overflow. `lines()`
+        // drops exactly the one optional trailing terminator (and handles
+        // `\r\n` besides); a genuine blank line, in the middle or doubled at
+        // the end, still comes through.
         Preview::Text { head, .. } => head
-            .split('\n')
+            .lines()
             .map(|l| fit(&l.replace('\t', "    "), width))
             .collect(),
         Preview::Binary { rows, .. } => rows.iter().map(|r| fit(r, width)).collect(),
@@ -572,6 +579,35 @@ mod tests {
         let out = lines(&p, 80);
         assert_eq!(out.len(), 1);
         assert!(out[0].starts_with("00000000"));
+    }
+
+    /// A text file's row count is the file's own line count, not one more
+    /// than it -- almost every text file ends in a newline, and counting
+    /// `split('\n')`'s phantom empty last element used to overflow a preview
+    /// that had nothing left to scroll to.
+    #[test]
+    fn lines_counts_a_text_files_rows_the_way_the_file_does() {
+        let text = |head: &str| Preview::Text {
+            head: head.to_string(),
+            truncated: false,
+            bytes: head.len() as u64,
+            lines: 0,
+        };
+        assert_eq!(
+            lines(&text("a\nb\n"), 80).len(),
+            2,
+            "a single trailing newline is not a phantom third line"
+        );
+        assert_eq!(
+            lines(&text("a\n\nb"), 80).len(),
+            3,
+            "a genuine blank line in the middle still counts"
+        );
+        assert_eq!(
+            lines(&text("a\n\n"), 80).len(),
+            2,
+            "a blank line doubled at the end still counts, once"
+        );
     }
 
     #[test]
