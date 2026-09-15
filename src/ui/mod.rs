@@ -5,6 +5,7 @@
 //! either directly -- see the crate doc. `app` is the last module to land
 //! and is declared when it does.
 
+pub mod app;
 #[cfg(test)]
 pub mod fake;
 pub mod keymap;

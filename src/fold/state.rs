@@ -229,6 +229,7 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::Enter => cmd_enter(state),
         Command::Back => cmd_back(state),
         Command::JumpTo(index) => cmd_jump_to(state, index),
+        Command::Forward => cmd_forward(state),
         Command::Push(dir) => push_dir(state, dir),
         Command::Reload => cmd_reload(state),
         Command::CursorTo(row) => set_cursor(state, row),
@@ -531,6 +532,20 @@ fn cmd_back(state: &mut State) -> Effects {
 
 fn cmd_jump_to(state: &mut State, index: usize) -> Effects {
     if !state.tabs.active_mut().active_stack_mut().jump_to(index) {
+        return Effects::default();
+    }
+    let jobs = ensure_listed(state);
+    Effects {
+        jobs,
+        events: vec![Event::Stack],
+    }
+}
+
+/// `Command::Forward` (`alt+down`): step into a child a `JumpTo` left behind
+/// without popping it, the mirror of `cmd_jump_to` calling `Stack::forward`
+/// instead of `Stack::jump_to`.
+fn cmd_forward(state: &mut State) -> Effects {
+    if !state.tabs.active_mut().active_stack_mut().forward() {
         return Effects::default();
     }
     let jobs = ensure_listed(state);
@@ -1226,6 +1241,24 @@ mod tests {
         apply(&mut s, Change::Command(Command::Back));
         assert_eq!(s.tabs.active().active_stack().len(), 1);
         assert_eq!(s.active_frame().dir, PathBuf::from("/home"));
+    }
+
+    #[test]
+    fn forward_steps_into_a_child_a_jump_left_behind() {
+        let mut s = state_at("/a");
+        apply(&mut s, Change::Command(Command::Push("/a/b".into())));
+        apply(&mut s, Change::Command(Command::JumpTo(0)));
+        assert_eq!(s.active_frame().dir, PathBuf::from("/a"));
+
+        let effects = apply(&mut s, Change::Command(Command::Forward));
+        assert_eq!(s.active_frame().dir, PathBuf::from("/a/b"));
+        assert!(matches!(effects.events.as_slice(), [Event::Stack]));
+
+        let effects = apply(&mut s, Change::Command(Command::Forward));
+        assert!(
+            effects.events.is_empty(),
+            "there is nothing past the last frame"
+        );
     }
 
     #[test]

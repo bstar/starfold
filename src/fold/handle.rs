@@ -50,6 +50,10 @@ pub enum Command {
     Back,
     /// Jump to a level by its position in `Stack::crumbs`.
     JumpTo(usize),
+    /// Step one frame towards the end of the trail -- see `Stack::forward`.
+    /// `alt+down`: back into a child a `JumpTo` left behind rather than
+    /// popped.
+    Forward,
     /// Push a directory that did not come from the cursor -- `gh`, `gr`, a
     /// crumb click, a path typed on the command line.
     Push(PathBuf),
