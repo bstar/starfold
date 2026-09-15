@@ -198,6 +198,11 @@ pub struct App {
     /// The path the preview was last asked to build for, so the cursor
     /// moving is what re-asks for one rather than every frame doing it.
     last_preview_for: Option<PathBuf>,
+    /// Set by the frame snapshots ([`Self::set_now`]) so a row's `time`
+    /// column is pinned to [`crate::fold::testing::now`] rather than the
+    /// real clock -- `refresh` falls back to [`std::time::SystemTime::now`]
+    /// whenever this is `None`, which is always true outside a test.
+    now_override: Option<std::time::SystemTime>,
 }
 
 impl App {
@@ -241,6 +246,7 @@ impl App {
             quit: false,
             tz: jiff::tz::TimeZone::system(),
             last_preview_for: None,
+            now_override: None,
         };
         app.refresh();
         app
@@ -389,7 +395,7 @@ impl App {
             })
             .collect();
 
-        let now = std::time::SystemTime::now();
+        let now = self.now_override.unwrap_or_else(std::time::SystemTime::now);
         let rows: Vec<panels::stack::Row> = state
             .rows(active)
             .into_iter()
@@ -409,9 +415,12 @@ impl App {
             None => name.clone(),
         };
 
-        let (preview_name, preview) = match &state.preview {
-            Some((path, p)) => (Some(display_name(path)), Some(Arc::clone(p))),
-            None => (None, None),
+        // A preview is for the entry under the cursor. With no cursor -- an
+        // empty directory, one still loading -- whatever was built last is
+        // for something else, and showing it would say the wrong thing.
+        let (preview_name, preview) = match (&state.preview, state.cursor_entry()) {
+            (Some((path, p)), Some(_)) => (Some(display_name(path)), Some(Arc::clone(p))),
+            _ => (None, None),
         };
 
         let ops: Vec<panels::operations::OpRow> = state
@@ -1095,6 +1104,43 @@ impl App {
             return None;
         }
         Some((split.rule.x + split.rule.width - 2, split.rule.y))
+    }
+
+    // -- frame snapshots --------------------------------------------------
+    //
+    // Three small hooks `ui/frames.rs` needs and nothing else does: a frame
+    // has to be pinned to a fixed clock and zone to be deterministic (see
+    // that module's doc), and it needs to read `ViewData` to find a row by
+    // name the way `key`/`mouse` already do internally.
+
+    /// Read what the last `refresh` copied out of `State` -- everything a
+    /// frame snapshot needs to find a row by name or assert on what is
+    /// marked, queued or previewed.
+    #[cfg(test)]
+    pub(crate) fn view(&self) -> &ViewData {
+        &self.view
+    }
+
+    /// Pin the zone a row's `time` column is formatted in. Invalidates
+    /// `seen_version` and re-runs `refresh` immediately, the same way
+    /// `App::new` primes the first one, so the change is visible without a
+    /// fresh `Event` to react to.
+    #[cfg(test)]
+    pub(crate) fn set_tz(&mut self, tz: jiff::tz::TimeZone) {
+        self.tz = tz;
+        self.seen_version = u64::MAX;
+        self.refresh();
+    }
+
+    /// Pin the clock `refresh` reads a row's `time` column against --
+    /// [`crate::fold::testing::now`], so it agrees with the fixture's own
+    /// pinned mtimes regardless of when the test actually runs. See
+    /// [`Self::set_tz`] for why this re-runs `refresh` on the spot.
+    #[cfg(test)]
+    pub(crate) fn set_now(&mut self, now: std::time::SystemTime) {
+        self.now_override = Some(now);
+        self.seen_version = u64::MAX;
+        self.refresh();
     }
 }
 

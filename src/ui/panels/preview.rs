@@ -149,9 +149,16 @@ pub fn lines(preview: &Preview, width: u16) -> Vec<String> {
 }
 
 fn dir_lines(s: &DirSummary) -> Vec<String> {
+    let plural = |n: usize, one: &str, many: &str| {
+        if n == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{n} {many}")
+        }
+    };
     let mut out = vec![
-        format!("{} files", s.files),
-        format!("{} directories", s.dirs),
+        plural(s.files, "file", "files"),
+        plural(s.dirs, "directory", "directories"),
         crate::fold::format::size(s.bytes),
     ];
     if s.truncated {

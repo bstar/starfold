@@ -132,12 +132,30 @@ fn write(path: &Path, bytes: &[u8]) {
 }
 
 fn touch(path: &Path, at: SystemTime) {
-    // A symlink's own mtime is not what any listing shows, and `File::open`
-    // would follow it to the target, which has its own time; skip them.
+    // A symlink's own mtime is what the listing shows for it, and `File::open`
+    // would follow the link to the target. std has no way to set a link's
+    // own times, so the one program every Unix has that can is asked to:
+    // `touch -h`, in UTC so the stamp means the same thing on every machine.
     if fs::symlink_metadata(path)
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false)
     {
+        let secs = at
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("fixture times are after 1970")
+            .as_secs();
+        let stamp = jiff::Timestamp::from_second(secs as i64)
+            .expect("a fixture time")
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .strftime("%Y%m%d%H%M.%S")
+            .to_string();
+        let status = std::process::Command::new("touch")
+            .env("TZ", "UTC")
+            .args(["-h", "-t", &stamp])
+            .arg(path)
+            .status()
+            .expect("touch is on PATH");
+        assert!(status.success(), "touch -h {}", path.display());
         return;
     }
     let file = fs::File::open(path).unwrap();

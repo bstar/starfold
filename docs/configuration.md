@@ -23,7 +23,7 @@ defaults. Editing one key never means writing the other six.
 | `[ui] sort_reverse` | reverse the starting sort. Default `false` |
 | `[ui] dirs_first` | list directories before files under any sort. Default `true` |
 | `[ui] fold_rows` | how many folded parent levels the stack shows before squeezing them into one crumb row. Default `6` |
-| `[ui] preview_rows` | rows the preview panel gets when it is open and unfocused. Default `10` |
+| `[ui] preview_rows` | rows the preview panel gets when it is open and unfocused, never more than half of what the terminal has to spare above the floor. Default `10` |
 | `[ui] ops_rows` | rows the operations panel may grow to while it is focused. Default `6` |
 | `[ui] max_entries` | the most entries a single listing will hold before it reports itself truncated. Default `50000` |
 

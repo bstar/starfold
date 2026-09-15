@@ -8,6 +8,8 @@
 pub mod app;
 #[cfg(test)]
 pub mod fake;
+#[cfg(test)]
+mod frames;
 pub mod keymap;
 pub mod layout;
 pub mod overlays;

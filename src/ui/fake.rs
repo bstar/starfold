@@ -20,7 +20,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::fold::handle::{Command, Event, EventSink, Handle, HandleParts};
 use crate::fold::state::State;
@@ -157,6 +157,17 @@ impl Fake {
     /// itself, since a test also wants to read `Fake::fixture`.
     pub fn state(&self) -> RwLockReadGuard<'_, State> {
         self.state.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The truth, writable -- for a frame snapshot that needs an `Op` in a
+    /// state no real run leaves it in for long enough to draw, such as
+    /// `Running` at a chosen percentage. Bypasses `state::apply`, so a
+    /// caller that changes anything a drawn frame reads must bump
+    /// `State::version` itself (`state.version += 1`) for `App::tick`'s
+    /// `refresh` to notice; everything under `src/fold/` still runs for
+    /// real, only this one seam is synthetic.
+    pub fn state_mut(&self) -> RwLockWriteGuard<'_, State> {
+        self.state.write().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The fixture's home directory -- `Fixture::home`, spelled the way a

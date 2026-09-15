@@ -167,8 +167,22 @@ impl LayoutState {
         // does not underflow.
         let room = body.height - STACK_MIN_ROWS - 2 * COLLAPSED_ROWS;
 
-        // PREVIEW's extra is served first, so it is the last thing lost as
-        // the terminal shrinks.
+        // OPERATIONS only grows while focused, and then it is served first:
+        // focusing it is asking to see the queue, and a queue that could not
+        // open because the preview had the room was the first thing a real
+        // terminal showed to be wrong.
+        let ops_desired = if self.focus == ModuleId::Operations {
+            // One entry of the queue already shows on the folded line.
+            queued.min(self.ops_rows).saturating_sub(1)
+        } else {
+            0
+        };
+        let ops_extra = ops_desired.min(room);
+
+        // PREVIEW takes what it asked for, but never more than half the room
+        // while the stack has focus: at thirty rows the room is nine, and a
+        // preview of ten pinned the listing to its seven-row floor, which
+        // made a roomy terminal feel like the smallest one allowed.
         let preview_desired = if !self.preview_open {
             0
         } else if self.focus == ModuleId::Preview {
@@ -176,19 +190,9 @@ impl LayoutState {
             // `preview_rows` -- the reader asked to look at it.
             (body.height / 2).saturating_sub(COLLAPSED_ROWS)
         } else {
-            self.preview_rows
+            self.preview_rows.min(room / 2)
         };
-        let preview_extra = preview_desired.min(room);
-
-        // OPERATIONS only grows while focused, and gives up its extra before
-        // PREVIEW does: whatever room PREVIEW left is all it can have.
-        let ops_desired = if self.focus == ModuleId::Operations {
-            // One entry of the queue already shows on the folded line.
-            queued.min(self.ops_rows).saturating_sub(1)
-        } else {
-            0
-        };
-        let ops_extra = ops_desired.min(room - preview_extra);
+        let preview_extra = preview_desired.min(room - ops_extra);
 
         // Whatever is left over goes to the stack.
         let stack_extra = room - preview_extra - ops_extra;
@@ -454,6 +458,26 @@ mod tests {
             .cloned()
             .unwrap();
         assert_eq!(r.rect_of(ModuleId::Operations).height, COLLAPSED_ROWS);
+    }
+
+    /// At thirty rows the room is nine: the preview gets four of it, the
+    /// stack the other five, and a focused queue of three opens fully.
+    #[test]
+    fn a_thirty_row_terminal_shares_the_room_between_the_stack_and_the_preview() {
+        let mut s = state();
+        s.focus = ModuleId::Stack;
+        let full = Rect::new(0, 0, 100, 30);
+        let r = s.regions(full, (0, 0), 0).cloned().unwrap();
+        assert_eq!(r.rect_of(ModuleId::Preview).height, COLLAPSED_ROWS + 4);
+        assert_eq!(r.rect_of(ModuleId::Stack).height, STACK_MIN_ROWS + 5);
+
+        s.focus_set(ModuleId::Operations);
+        let r = s.regions(full, (0, 0), 3).cloned().unwrap();
+        assert_eq!(
+            r.rect_of(ModuleId::Operations).height,
+            COLLAPSED_ROWS + 2,
+            "a focused queue opens before the preview is served"
+        );
     }
 
     /// PREVIEW open and unfocused grows to `preview_rows`; open and focused
