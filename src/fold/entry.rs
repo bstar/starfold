@@ -52,6 +52,39 @@ pub struct Entry {
     pub hidden: bool,
 }
 
+impl Entry {
+    /// The extension, without the dot, lowercased: `"toml"` for both
+    /// `Cargo.toml` and `CARGO.TOML`, `""` when there is none.
+    /// `Path::extension` already treats a dotfile's leading dot as part of
+    /// the stem rather than a separator, so `.gitignore` comes back with no
+    /// extension the same way `Path::new(".gitignore").extension()` does.
+    ///
+    /// Returns an owned `String` rather than a `&str` borrowed from
+    /// `display`: `Entry` has no field to cache a lowercased copy in without
+    /// breaking every other place in this crate that builds one with a
+    /// struct literal (`selection.rs`'s test fixtures, outside this unit's
+    /// files, among them), and a lowercased slice cannot borrow from a
+    /// differently-cased original without allocating somewhere. `sort`
+    /// pays that allocation once per comparison rather than storing it.
+    pub fn ext(&self) -> String {
+        Path::new(&self.display)
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(str::to_lowercase)
+            .unwrap_or_default()
+    }
+
+    /// Whether stepping into this row would take you into a directory: it
+    /// is one, or it is a symlink whose target is one. `sort::order` uses
+    /// this to decide what "directories first" means, because someone
+    /// drilling down with `l` cares where the row takes them, not the row's
+    /// own type -- a symlink to a directory belongs with the directories.
+    pub fn is_dir_like(&self) -> bool {
+        matches!(self.kind, EntryKind::Dir)
+            || matches!(self.kind, EntryKind::Symlink if self.link_kind == Some(EntryKind::Dir))
+    }
+}
+
 fn kind_of(ft: std::fs::FileType) -> EntryKind {
     if ft.is_dir() {
         EntryKind::Dir
@@ -208,5 +241,65 @@ mod tests {
         let e = stat(&dir.path().join("nothing-here"));
         assert_eq!(e.kind, EntryKind::Other);
         assert_eq!(e.len, 0);
+    }
+
+    #[test]
+    fn ext_is_lowercased_and_has_no_dot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("REPORT.PDF");
+        std::fs::write(&path, b"x").unwrap();
+        assert_eq!(stat(&path).ext(), "pdf");
+    }
+
+    #[test]
+    fn a_dotfile_has_no_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(stat(&path).ext(), "");
+    }
+
+    #[test]
+    fn a_name_with_no_dot_has_no_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("README");
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(stat(&path).ext(), "");
+    }
+
+    #[test]
+    fn a_directory_is_dir_like() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        assert!(stat(&sub).is_dir_like());
+    }
+
+    #[test]
+    fn a_plain_file_is_not_dir_like() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.txt");
+        std::fs::write(&path, b"x").unwrap();
+        assert!(!stat(&path).is_dir_like());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_directory_is_dir_like() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&sub, &link).unwrap();
+        assert!(stat(&link).is_dir_like());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_symlink_is_not_dir_like() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("broken");
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), &link).unwrap();
+        assert!(!stat(&link).is_dir_like());
     }
 }

@@ -15,9 +15,9 @@ pub struct Fixture {
     dir: tempfile::TempDir,
 }
 
-/// The one instant every fixture mtime is measured from: 2026-09-14 12:00:00
-/// UTC. Tests that format times pass this as `now`, so "14:02" is the same
-/// string on every machine and on every day the test is run.
+/// The one instant every fixture mtime is measured from: 2026-09-11 12:00:00
+/// UTC (a Friday). Tests that format times pass this as `now`, so "14:02" is
+/// the same string on every machine and on every day the test is run.
 pub fn now() -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_789_128_000)
 }
@@ -112,6 +112,19 @@ impl Fixture {
     pub fn path(&self, relative: &str) -> PathBuf {
         self.dir.path().join(relative)
     }
+}
+
+/// Read one directory under `fixture` with a default [`crate::fold::listing::
+/// ListConfig`] -- the common case for a test that only cares about one
+/// level's rows and would otherwise repeat `listing::read(&f.path(...),
+/// &ListConfig::default())` at every call site.
+pub fn listing(fixture: &Fixture, relative: &str) -> crate::fold::listing::Listing {
+    let dir = if relative.is_empty() {
+        fixture.home().to_path_buf()
+    } else {
+        fixture.path(relative)
+    };
+    crate::fold::listing::read(&dir, &crate::fold::listing::ListConfig::default())
 }
 
 fn write(path: &Path, bytes: &[u8]) {
