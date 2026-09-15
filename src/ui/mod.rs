@@ -9,3 +9,4 @@
 
 pub mod keymap;
 pub mod panels;
+pub mod theme;
