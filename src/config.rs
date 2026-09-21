@@ -106,6 +106,9 @@ pub struct Preview {
     /// The most entries a directory preview's summary walk counts before it
     /// gives up and says so.
     pub dir_budget: usize,
+    /// How a picture smaller than the panel is grown to fill it. `z` cycles
+    /// through the three while it is running.
+    pub image_scale: Scale,
 }
 
 impl Default for Preview {
@@ -115,6 +118,73 @@ impl Default for Preview {
             max_lines: 400,
             max_image_dimension: 4096,
             dir_budget: 20_000,
+            image_scale: Scale::default(),
+        }
+    }
+}
+
+/// How much bigger than itself a picture may be drawn.
+///
+/// The terminal is handed pixels and places them over cells, and
+/// `Resize::Fit` -- what STAR/KIT encodes with -- never upsizes. So a picture
+/// smaller than the panel sits in the middle of it at whatever size it
+/// happens to be, unless something scales it first, and that is a question
+/// of taste rather than of correctness: a screenshot wants its own pixels
+/// back, a piece of pixel art wants them square and enormous, and a
+/// photograph wants the panel filled and no jagged edges. None of the three
+/// touches a picture already bigger than the panel, which is scaled down to
+/// fit in every mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scale {
+    /// Natural size, centred. Never grown.
+    // `1x` is not an identifier, so the name and the setting differ and the
+    // rename is what keeps `config.toml` readable.
+    #[serde(rename = "1x")]
+    #[default]
+    One,
+    /// Grown by whole numbers only, nearest-neighbour: every source pixel
+    /// becomes an exact k by k block, and a hard edge stays hard.
+    Pixels,
+    /// Grown to fill the fitted rectangle at any factor, smoothly.
+    Smooth,
+}
+
+impl Scale {
+    /// The name in `config.toml`, and the one the status note says.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::One => "1x",
+            Self::Pixels => "pixels",
+            Self::Smooth => "smooth",
+        }
+    }
+
+    /// The next mode `z` moves to, wrapping.
+    pub fn next(self) -> Self {
+        match self {
+            Self::One => Self::Pixels,
+            Self::Pixels => Self::Smooth,
+            Self::Smooth => Self::One,
+        }
+    }
+}
+
+impl std::fmt::Display for Scale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl std::str::FromStr for Scale {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "1x" => Ok(Self::One),
+            "pixels" => Ok(Self::Pixels),
+            "smooth" => Ok(Self::Smooth),
+            other => Err(format!("not a picture scale: {other}")),
         }
     }
 }
@@ -238,6 +308,9 @@ max_lines = 400
 max_image_dimension = 4096
 # The most entries a directory preview's summary counts before giving up.
 dir_budget = 20000
+# How a picture smaller than the panel is grown: 1x (natural size, centred),
+# pixels (whole-number steps, hard edges), or smooth. `z` cycles them.
+image_scale = "1x"
 
 [open]
 # argv, whitespace-split, never a shell line. Empty is the desktop's own
@@ -267,6 +340,34 @@ mod tests {
     fn the_template_parses_as_the_defaults() {
         let parsed: Config = toml::from_str(TEMPLATE).expect("the template must parse");
         assert_eq!(parsed, Config::default());
+    }
+
+    /// The name is written into `config.toml` by `z` and read back on the
+    /// next run, so a mode that cannot survive the round trip is a setting
+    /// that silently resets.
+    #[test]
+    fn every_picture_scale_round_trips_through_its_name() {
+        for m in [Scale::One, Scale::Pixels, Scale::Smooth] {
+            assert_eq!(m.name().parse::<Scale>().unwrap(), m, "{m} did not return");
+            assert_eq!(m.to_string(), m.name());
+            let toml = format!("[preview]\nimage_scale = {:?}\n", m.name());
+            let c: Config = toml::from_str(&toml).expect("the name must parse");
+            assert_eq!(c.preview.image_scale, m);
+        }
+        assert!("2x".parse::<Scale>().is_err());
+    }
+
+    /// Three modes, and `z` reaches all three and comes back.
+    #[test]
+    fn the_picture_scales_cycle() {
+        let mut m = Scale::default();
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            seen.push(m);
+            m = m.next();
+        }
+        assert_eq!(seen, vec![Scale::One, Scale::Pixels, Scale::Smooth]);
+        assert_eq!(m, Scale::One, "the cycle must come back round");
     }
 
     #[test]

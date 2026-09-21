@@ -97,6 +97,7 @@ _everywhere_
 | `s`            | next sort key |
 | `S`            | reverse the sort |
 | `/`            | filter this level |
+| `z`            | picture scale |
 
 ## appearance
 

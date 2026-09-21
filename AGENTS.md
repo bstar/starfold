@@ -223,3 +223,11 @@ this milestone:
   fallback).
 - The 60×21 floor, and the row just below it, on a real terminal rather than
   a fixture-sized buffer.
+- The picture scales (`z`) under sixel and iTerm2. `1x` and `pixels` place a
+  pre-scaled picture over a rectangle that is a whole number of cells and so
+  is up to one cell wider and taller than the pixels themselves -- kitty
+  tolerates that slack, and whether sixel and iTerm2 do has only been
+  reasoned about. Checked by eye in kitty; the other two are guesses. What
+  `smooth` and `pixels` look like where the terminal reports no cell size is
+  reasoned about too -- all three fall back to the old fit, which cannot be
+  seen without a terminal that does it.

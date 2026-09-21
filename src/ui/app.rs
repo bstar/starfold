@@ -49,7 +49,8 @@ use starkit::crossterm::event::{
     self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent,
     MouseEventKind,
 };
-use starkit::graphics::{Graphics, Mode};
+use starkit::graphics::{Graphics, ImageId, Mode};
+use starkit::image::RgbaImage;
 use starkit::input::TextInput;
 use starkit::mouse::ClickTracker;
 use starkit::ratatui::buffer::Buffer;
@@ -67,7 +68,7 @@ use super::panels::{self, ModuleId};
 use super::status;
 use super::theme::{self, Theme};
 use super::{Bar, Bars};
-use crate::config::Config;
+use crate::config::{Config, Scale};
 use crate::fold::entry::{Entry, EntryKind};
 use crate::fold::handle::{Command, Event, Handle, NoteLevel};
 use crate::fold::ops::{Op, OpId, OpKind, OpStatus};
@@ -162,6 +163,20 @@ impl ViewData {
     }
 }
 
+/// The one picture this application has grown, kept between frames.
+///
+/// Scaling runs on the drawing thread, so it must not run per frame. It is
+/// rebuilt only when the picture, the mode or the target size changes, and
+/// there is exactly one of these because exactly one picture is ever on
+/// screen: the preview's. Everything downstream -- the encoded protocol --
+/// is STAR/KIT's cache's problem, keyed on the identity this carries.
+struct Scaled {
+    source: ImageId,
+    mode: Scale,
+    pixels: (u32, u32),
+    image: Arc<RgbaImage>,
+}
+
 pub struct App {
     core: Handle,
     cfg: Config,
@@ -203,6 +218,20 @@ pub struct App {
     /// The path the preview was last asked to build for, so the cursor
     /// moving is what re-asks for one rather than every frame doing it.
     last_preview_for: Option<PathBuf>,
+    /// The one picture this application has scaled, and what it was scaled
+    /// from -- see [`Scaled`].
+    scaled: Option<Scaled>,
+    /// Every identity a protocol has been built under for the picture
+    /// currently in the preview, the source's own included.
+    ///
+    /// `ImageId::of_arc` is an address, and an address is only an identity
+    /// for as long as something holds the allocation. STAR/KIT's cache holds
+    /// the source picture, but the ids derived from it name pixels this
+    /// application made, and nothing in the cache ties those back to the
+    /// address they came from. So when the preview's picture changes, every
+    /// id built for the old one is forgotten at once, and a later picture
+    /// landing on the freed address cannot be handed the old protocol.
+    picture_ids: Vec<ImageId>,
     /// Set by the frame snapshots ([`Self::set_now`]) so a row's `time`
     /// column is pinned to [`crate::fold::testing::now`] rather than the
     /// real clock -- `refresh` falls back to [`std::time::SystemTime::now`]
@@ -252,6 +281,8 @@ impl App {
             quit: false,
             tz: jiff::tz::TimeZone::system(),
             last_preview_for: None,
+            scaled: None,
+            picture_ids: Vec::new(),
             now_override: None,
         };
         app.refresh();
@@ -429,6 +460,12 @@ impl App {
             _ => (None, None),
         };
 
+        // The picture on screen is about to be a different picture, or none.
+        // Noted here, while both `Arc`s are alive and can be compared, and
+        // acted on below once the read guard is gone. See `forget_picture`.
+        let picture_changed =
+            picture_address(self.view.preview.as_deref()) != picture_address(preview.as_deref());
+
         let ops: Vec<panels::operations::OpRow> = state
             .queue
             .iter()
@@ -467,6 +504,9 @@ impl App {
             frame_id: active.id,
         };
         drop(state);
+        if picture_changed {
+            self.forget_picture();
+        }
         self.clamp_scrolls();
     }
 
@@ -695,6 +735,8 @@ impl App {
                 self.filter = Some(TextInput::single().with_text(self.view.filter.clone()));
             }
 
+            Action::NextPictureScale => self.cycle_picture_scale(),
+
             Action::NextTheme => self.cycle_theme(true),
             Action::PrevTheme => self.cycle_theme(false),
 
@@ -851,6 +893,79 @@ impl App {
         }
         self.note = Some((format!("theme: {name}"), NoteLevel::Info, Instant::now()));
         self.repaint = true;
+    }
+
+    /// `z`: the next picture scale, remembered.
+    ///
+    /// Written back to `config.toml` the way `t` writes the theme -- this is
+    /// a preference somebody sets once for the way they read screenshots,
+    /// not a per-session mood, and losing it on every quit would mean
+    /// setting it again every time.
+    fn cycle_picture_scale(&mut self) {
+        let next = self.cfg.preview.image_scale.next();
+        self.cfg.preview.image_scale = next;
+        if let Err(e) = starkit::config::edit::set(
+            &self.cfg_path,
+            "preview",
+            "image_scale",
+            &starkit::config::edit::Value::Str(next.name().to_string()),
+        ) {
+            tracing::warn!("could not save the picture scale: {e}");
+        }
+        self.note = Some((
+            format!("picture scale: {next}"),
+            NoteLevel::Info,
+            Instant::now(),
+        ));
+        self.repaint = true;
+    }
+
+    /// The picture at `scaling`, built if this is not the one already held.
+    ///
+    /// One result is kept, because one picture is ever on screen. Scaling
+    /// happens on this thread, so the three things that decide the pixels --
+    /// which picture, which mode, how big -- are all compared before any
+    /// work is done.
+    fn scale_picture(
+        &mut self,
+        source: ImageId,
+        data: &Arc<RgbaImage>,
+        scaling: &panels::preview::Scaling,
+    ) -> Arc<RgbaImage> {
+        let matches = self.scaled.as_ref().is_some_and(|s| {
+            s.source == source && s.mode == scaling.mode && s.pixels == scaling.pixels
+        });
+        if !matches {
+            let (w, h) = scaling.pixels;
+            let started = Instant::now();
+            let image = starkit::image::imageops::resize(&**data, w, h, scaling.filter);
+            tracing::debug!(
+                "scaled a picture to {w}x{h} ({}) in {:?}",
+                scaling.mode,
+                started.elapsed()
+            );
+            self.scaled = Some(Scaled {
+                source,
+                mode: scaling.mode,
+                pixels: scaling.pixels,
+                image: Arc::new(image),
+            });
+        }
+        // Just built, or already matched.
+        Arc::clone(&self.scaled.as_ref().expect("a scaled picture").image)
+    }
+
+    /// Let go of every protocol built for the picture that was in the
+    /// preview, and of the scaled copy made from it.
+    ///
+    /// Called when the preview stops being that picture, whatever the
+    /// reason. See [`Self::picture_ids`] for why an address alone is not
+    /// enough to make this safe to skip.
+    fn forget_picture(&mut self) {
+        for id in std::mem::take(&mut self.picture_ids) {
+            self.graphics.forget(id);
+        }
+        self.scaled = None;
     }
 
     // -- the mouse ----------------------------------------------------------
@@ -1114,7 +1229,7 @@ impl App {
                 ("d", "delete"),
             ],
             ModuleId::Operations => &[("enter", "run"), ("x", "drop"), ("esc", "clear")],
-            ModuleId::Preview => &[("j/k", "scroll"), ("i", "fold")],
+            ModuleId::Preview => &[("j/k", "scroll"), ("i", "fold"), ("z", "scale")],
         };
         status::View {
             theme: &self.theme,
@@ -1169,6 +1284,7 @@ impl App {
                 preview: self.view.preview.as_deref(),
                 scroll: self.preview_scroll,
                 graphics: Some(&mut self.graphics),
+                scale: self.cfg.preview.image_scale,
             };
             panels::preview::render(regions.rect_of(ModuleId::Preview), buf, &mut pv, &mut bars)
         };
@@ -1181,8 +1297,25 @@ impl App {
         status::render(regions.status, buf, &self.status_view(Instant::now()));
 
         if let Some(p) = placement {
-            if let Some(Preview::Image { data, .. }) = self.view.preview.as_deref() {
-                if let Some(proto) = self.graphics.protocol(p.id, data, p.area) {
+            // Taken out of the view for the length of the paint: scaling
+            // needs `&mut self`, and the picture is behind an `Arc` for
+            // exactly this.
+            let data = match self.view.preview.as_deref() {
+                Some(Preview::Image { data, .. }) => Some(Arc::clone(data)),
+                _ => None,
+            };
+            if let Some(data) = data {
+                // The pixels the protocol is built from: the source picture
+                // where the mode asks for nothing, and a scaled copy of it
+                // where the mode asks it to grow.
+                let pixels = match &p.scale {
+                    Some(scaling) => self.scale_picture(p.source, &data, scaling),
+                    None => Arc::clone(&data),
+                };
+                if !self.picture_ids.contains(&p.id) {
+                    self.picture_ids.push(p.id);
+                }
+                if let Some(proto) = self.graphics.protocol(p.id, &pixels, p.area) {
                     Image::new(proto).render(p.area, buf);
                 }
             }
@@ -1305,6 +1438,18 @@ fn home_relative(dir: &std::path::Path, home: &std::path::Path) -> String {
     match dir.strip_prefix(home) {
         Ok(rest) if !rest.as_os_str().is_empty() => format!("~/{}", rest.display()),
         _ => dir.display().to_string(),
+    }
+}
+
+/// Which picture a preview is showing, if it is showing one.
+///
+/// The address rather than the `Arc`, because the answer is only ever
+/// compared with another answer, and the two `Arc`s involved are both alive
+/// at the moment of the comparison.
+fn picture_address(preview: Option<&Preview>) -> Option<ImageId> {
+    match preview {
+        Some(Preview::Image { data, .. }) => Some(ImageId::of_arc(data)),
+        _ => None,
     }
 }
 

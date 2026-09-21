@@ -47,6 +47,18 @@ than drawing something it cannot draw honestly.
 | `[preview] max_lines` | how many lines of that text are drawn. Default `400` |
 | `[preview] max_image_dimension` | a picture wider or taller than this, in pixels, is refused rather than decoded. Default `4096` |
 | `[preview] dir_budget` | the most entries a directory summary will walk before it stops counting and says so. Default `20000` |
+| `[preview] image_scale` | how a picture smaller than the panel is grown: `1x`, `pixels` or `smooth`. Default `1x` |
+
+`image_scale` is the one of those `z` changes while STAR/FOLD is running, and
+what `z` chooses is written back here. `1x` draws a small picture at its own
+pixel size in the middle of the panel; `pixels` grows it by whole numbers
+only, nearest-neighbour, so a screenshot or a piece of pixel art keeps its
+hard edges; `smooth` grows it to fill the fitted rectangle at any factor, with
+a Catmull-Rom filter. A picture already bigger than the panel is scaled down
+to fit in all three, and the meta row under it says which mode is in force and
+by how much it grew — `png · 320 × 200 · pixels ×3`. Where the terminal never
+said how big a cell is, there is nothing to count pixels with and all three
+fall back to fitting the panel.
 
 ### Opening a file elsewhere
 

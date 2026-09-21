@@ -20,28 +20,234 @@
 //! it. `halfblocks` and the quiet `placeholder` need no protocol and no
 //! second pass, so those two are painted here directly and `render` answers
 //! `None` for them.
+//!
+//! ## Growing one
+//!
+//! `Resize::Fit`, which STAR/KIT encodes with, never upsizes -- its own
+//! documentation says so. A picture smaller than the panel therefore sits in
+//! the middle of it at whatever size it happens to be, and growing it is
+//! this application's own work: scale the pixels first, to exactly the size
+//! of the rectangle they will be placed over, and hand *that* picture to
+//! [`Graphics::protocol`]. [`plan`] is the whole of the arithmetic -- which
+//! rectangle, how many pixels into it, and with which filter -- and it is
+//! pure, so the three modes can be read side by side and tested without a
+//! terminal.
 
 use std::sync::Arc;
 
 use starkit::chrome::frame;
 use starkit::chrome::scrollbar;
 use starkit::graphics::{Graphics, ImageId};
+use starkit::image::imageops::FilterType;
 use starkit::image::RgbaImage;
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::Style;
 
 use super::{empty, fit, rgb, width_of, words, ModuleId};
+use crate::config::Scale;
 use crate::fold::preview::Preview;
 use crate::fold::summary::DirSummary;
 use crate::ui::theme::Theme;
 use crate::ui::{Bar, Bars};
 
-/// Where a picture the app must paint itself belongs, and which one it is --
-/// see the module doc for why painting is not done here.
+/// Where a picture the app must paint itself belongs, which one it is, and
+/// what it has to be scaled to first -- see the module doc for why neither
+/// the painting nor the scaling is done here.
 pub struct Placement {
     pub area: Rect,
+    /// The identity to build a protocol under. Not the source picture's --
+    /// see [`scaled_id`].
     pub id: ImageId,
+    /// The source picture's own identity, so the app can tell whether the
+    /// scaled copy it is holding was made from this picture.
+    pub source: ImageId,
+    /// `None` hands the source picture over untouched -- either it is
+    /// already the right size, or it is being scaled *down*, which
+    /// `Resize::Fit` does perfectly well by itself.
+    pub scale: Option<Scaling>,
+}
+
+/// The pixels to make, and how.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Scaling {
+    pub mode: Scale,
+    pub pixels: (u32, u32),
+    pub filter: FilterType,
+}
+
+/// What [`plan`] decided: the rectangle, the pre-scaling if any, and the
+/// factor the meta row reports.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Plan {
+    pub rect: Rect,
+    pub scale: Option<Scaling>,
+    /// How much bigger than itself the picture ends up. `1.0` when it did
+    /// not grow, including when it was scaled down to fit.
+    pub factor: f32,
+}
+
+/// The identity a scaled copy is cached under.
+///
+/// Not the source picture's: the same picture at two scale modes, or at one
+/// mode over two panel sizes, is two different sets of pixels, and a cache
+/// keyed on the source alone would serve the first of them for the second.
+/// The source is in the hash, so these are distinct between pictures too,
+/// but forgetting the source's own id does not forget them -- the app
+/// forgets each derived id it has used alongside it.
+pub fn scaled_id(source: ImageId, scaling: &Scaling) -> ImageId {
+    ImageId::of(&(
+        source.0,
+        scaling.mode.name(),
+        scaling.pixels.0,
+        scaling.pixels.1,
+    ))
+}
+
+/// Which rectangle a picture goes in, and how big to make it first.
+///
+/// `panel` is the space the picture has, in cells, and `cell` is how many
+/// pixels one of those cells is -- `None` where the terminal never said, in
+/// which case there is no honest way to talk about pixels at all and all
+/// three modes fall back to fitting the panel, the behaviour that predates
+/// them.
+///
+/// Every mode leaves a picture already bigger than the panel alone: the
+/// rectangle is the fitted one and the encoder scales it down, which is what
+/// `Resize::Fit` is for.
+pub fn plan(mode: Scale, img: (u32, u32), panel: Rect, cell: Option<(u16, u16)>) -> Plan {
+    let (img_w, img_h) = img;
+    let aspect = cell.map_or(2.0, |(w, h)| f32::from(h) / f32::from(w));
+    let fitted = Plan {
+        rect: fit_aspect(panel, img_w, img_h, aspect),
+        scale: None,
+        factor: 1.0,
+    };
+    let Some((cell_w, cell_h)) = cell else {
+        return fitted;
+    };
+    if img_w == 0 || img_h == 0 || cell_w == 0 || cell_h == 0 {
+        return fitted;
+    }
+    if panel.width == 0 || panel.height == 0 {
+        return fitted;
+    }
+
+    // What the picture covers at a whole-number magnification, in cells, or
+    // `None` if that does not fit the panel. The last cell is usually part
+    // empty -- a picture is not a whole number of cells wide -- and rounding
+    // down instead would crop it, which `Fit` would then make up for by
+    // shrinking it: a `1x` that is not 1x.
+    let cells = |k: u32| -> Option<(u16, u16)> {
+        let w = u16::try_from(img_w.checked_mul(k)?.div_ceil(u32::from(cell_w))).ok()?;
+        let h = u16::try_from(img_h.checked_mul(k)?.div_ceil(u32::from(cell_h))).ok()?;
+        (w > 0 && h > 0 && w <= panel.width && h <= panel.height).then_some((w, h))
+    };
+
+    match mode {
+        Scale::One => match cells(1) {
+            Some((w, h)) => Plan {
+                rect: centre(panel, w, h),
+                scale: None,
+                factor: 1.0,
+            },
+            // Bigger than the panel: there is no natural size to place.
+            None => fitted,
+        },
+        Scale::Pixels => {
+            // The largest whole number that still fits, walked upwards
+            // rather than solved for: the ceiling in `cells` is not a smooth
+            // function of `k`, and a closed form is off by one at exactly
+            // the sizes this is for. Bounded by the panel, since a factor
+            // can never exceed the number of cells across it.
+            let mut best = None;
+            for k in 1..=u32::from(panel.width.max(panel.height)) + 1 {
+                match cells(k) {
+                    Some(wh) => best = Some((k, wh)),
+                    None => break,
+                }
+            }
+            match best {
+                // One is the natural size, and nothing has to be made.
+                Some((1, (w, h))) => Plan {
+                    rect: centre(panel, w, h),
+                    scale: None,
+                    factor: 1.0,
+                },
+                Some((k, (w, h))) => Plan {
+                    rect: centre(panel, w, h),
+                    scale: Some(Scaling {
+                        mode,
+                        pixels: (img_w * k, img_h * k),
+                        filter: FilterType::Nearest,
+                    }),
+                    factor: k as f32,
+                },
+                None => fitted,
+            }
+        }
+        Scale::Smooth => {
+            let rect = fitted.rect;
+            let room = (
+                u32::from(rect.width) * u32::from(cell_w),
+                u32::from(rect.height) * u32::from(cell_h),
+            );
+            // The rectangle already has the picture's own shape, so the two
+            // ratios are within a rounding of each other; the smaller is
+            // taken so the result cannot spill past the rectangle and be
+            // shrunk straight back by the encoder.
+            let factor = (room.0 as f32 / img_w as f32).min(room.1 as f32 / img_h as f32);
+            if !factor.is_finite() || factor <= 1.0 {
+                return fitted;
+            }
+            let pixels = (
+                ((img_w as f32 * factor).round() as u32).clamp(1, room.0),
+                ((img_h as f32 * factor).round() as u32).clamp(1, room.1),
+            );
+            Plan {
+                rect,
+                scale: Some(Scaling {
+                    mode,
+                    pixels,
+                    filter: SMOOTH_FILTER,
+                }),
+                factor,
+            }
+        }
+    }
+}
+
+/// The filter `smooth` grows with.
+///
+/// Catmull-Rom rather than Lanczos3. Both are sharp enough at these sizes,
+/// and Lanczos3's negative lobes ring on a hard edge -- a preview panel is
+/// as likely to be showing a screenshot of text, or a diagram, all hard
+/// edges, as a photograph. A halo around every letter is the worse failure
+/// of the two, and the one somebody would report as a bug.
+const SMOOTH_FILTER: FilterType = FilterType::CatmullRom;
+
+/// A `w` by `h` rectangle in the middle of `area`.
+fn centre(area: Rect, w: u16, h: u16) -> Rect {
+    Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width: w.min(area.width),
+        height: h.min(area.height),
+    }
+}
+
+/// `pixels ×3`, `smooth ×2.4`, or just `1x` -- what the meta row says about
+/// the mode once it has been applied.
+fn scale_label(mode: Scale, factor: f32) -> String {
+    match mode {
+        // The name is already the factor.
+        Scale::One => mode.name().to_string(),
+        // At or below one it did not grow, and `×1.0` would only invite the
+        // question of where the tenth went.
+        _ if factor <= 1.0 => format!("{} \u{d7}1", mode.name()),
+        Scale::Pixels => format!("{} \u{d7}{}", mode.name(), factor.round() as u32),
+        Scale::Smooth => format!("{} \u{d7}{factor:.1}", mode.name()),
+    }
 }
 
 pub struct View<'a> {
@@ -56,6 +262,8 @@ pub struct View<'a> {
     /// `None` means draw with half blocks or a quiet placeholder rather
     /// than a real protocol -- see the module doc.
     pub graphics: Option<&'a mut Graphics>,
+    /// How much a picture smaller than the panel is grown by. See [`plan`].
+    pub scale: Scale,
 }
 
 pub fn render(
@@ -340,8 +548,11 @@ fn render_image(
     if area.height == 0 || area.width == 0 {
         return None;
     }
-    let meta = format!("{format} \u{b7} {width} \u{d7} {height}");
     if area.height == 1 {
+        let meta = format!(
+            "{format} \u{b7} {width} \u{d7} {height} \u{b7} {}",
+            scale_label(v.scale, 1.0)
+        );
         draw_meta(area, buf, v.theme, &meta);
         return None;
     }
@@ -355,12 +566,12 @@ fn render_image(
         ..area
     };
 
-    let aspect = v
-        .graphics
-        .as_deref()
-        .and_then(Graphics::cell_aspect)
-        .unwrap_or(2.0);
-    let fitted = fit_aspect(pic, width, height, aspect);
+    let cell = v.graphics.as_deref().and_then(Graphics::cell_size);
+    let p = plan(v.scale, (width, height), pic, cell);
+    let meta = format!(
+        "{format} \u{b7} {width} \u{d7} {height} \u{b7} {}",
+        scale_label(v.scale, p.factor)
+    );
 
     let usable = v
         .graphics
@@ -370,15 +581,26 @@ fn render_image(
 
     let placement = if usable {
         // Left for the app's second pass -- see the module doc.
+        let source = ImageId::of_arc(data);
         Some(Placement {
-            area: fitted,
-            id: ImageId::of_arc(data),
+            area: p.rect,
+            id: match &p.scale {
+                Some(scaling) => scaled_id(source, scaling),
+                None => source,
+            },
+            source,
+            scale: p.scale,
         })
     } else if width == 0 || height == 0 {
-        starkit::graphics::placeholder(fitted, buf, Style::default().fg(rgb(v.theme.dim)));
+        starkit::graphics::placeholder(p.rect, buf, Style::default().fg(rgb(v.theme.dim)));
         None
     } else {
-        starkit::graphics::halfblocks(data, fitted, buf);
+        // No pre-scaling: half blocks sample the picture themselves, at
+        // whatever size the rectangle is, so growing the pixels first would
+        // only cost the time and change nothing on screen. The rectangle
+        // still follows the mode, so `1x` and `pixels` are honest about size
+        // wherever a cell has been measured.
+        starkit::graphics::halfblocks(data, p.rect, buf);
         None
     };
 
@@ -468,6 +690,7 @@ fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
 mod tests {
     use super::*;
     use crate::ui::theme::tests_support::theme;
+    use proptest::prelude::*;
     use std::path::PathBuf;
 
     fn view<'a>(theme: &'a Theme, preview: Option<&'a Preview>, name: Option<&'a str>) -> View<'a> {
@@ -479,6 +702,7 @@ mod tests {
             preview,
             scroll: 0,
             graphics: None,
+            scale: Scale::default(),
         }
     }
 
@@ -620,6 +844,193 @@ mod tests {
             2,
             "a blank line doubled at the end still counts, once"
         );
+    }
+
+    // -- the three picture scales ------------------------------------------
+
+    /// A cell that is not square, because a square one hides the one bug
+    /// worth having a test for.
+    const CELL: Option<(u16, u16)> = Some((10, 20));
+
+    /// A panel 40 cells across is 400 pixels; 20 rows is 400 pixels too.
+    fn panel() -> Rect {
+        Rect::new(3, 5, 40, 20)
+    }
+
+    /// 1x places the picture at exactly the cells its own pixels cover, in
+    /// the middle of the panel, and grows nothing.
+    #[test]
+    fn one_x_centres_a_small_picture_at_its_own_size() {
+        // 100x60 pixels is 10 by 3 cells.
+        let p = plan(Scale::One, (100, 60), panel(), CELL);
+        assert_eq!(p.scale, None, "1x never makes a new picture");
+        assert_eq!(p.factor, 1.0);
+        assert_eq!((p.rect.width, p.rect.height), (10, 3));
+        assert_eq!(p.rect.x, 3 + (40 - 10) / 2);
+        assert_eq!(p.rect.y, 5 + (20 - 3) / 2);
+    }
+
+    /// A picture that is not a whole number of cells across still gets a
+    /// whole cell for its last few pixels -- rounding down would crop it.
+    #[test]
+    fn one_x_rounds_a_part_cell_up_rather_than_cropping() {
+        let p = plan(Scale::One, (101, 61), panel(), CELL);
+        assert_eq!((p.rect.width, p.rect.height), (11, 4));
+    }
+
+    /// The largest whole number that still fits, and never zero.
+    #[test]
+    fn pixels_takes_the_largest_whole_factor_that_fits() {
+        // 100x60 in a 400x400 panel: 4 across, 6 down, so 4.
+        let p = plan(Scale::Pixels, (100, 60), panel(), CELL);
+        assert_eq!(p.factor, 4.0);
+        let s = p.scale.expect("a whole-number growth makes a picture");
+        assert_eq!(s.pixels, (400, 240));
+        assert_eq!(s.filter, FilterType::Nearest);
+        assert_eq!((p.rect.width, p.rect.height), (40, 12));
+
+        // One pixel more than a quarter of the panel and 4 no longer fits.
+        let p = plan(Scale::Pixels, (101, 60), panel(), CELL);
+        assert_eq!(p.factor, 3.0);
+    }
+
+    /// Growing by one is the natural size, and nothing has to be made for
+    /// it -- the same rectangle 1x would have chosen.
+    #[test]
+    fn a_factor_of_one_scales_nothing() {
+        let p = plan(Scale::Pixels, (300, 300), panel(), CELL);
+        assert_eq!(p.factor, 1.0);
+        assert_eq!(p.scale, None);
+        assert_eq!(p.rect, plan(Scale::One, (300, 300), panel(), CELL).rect);
+    }
+
+    /// Smooth fills the fitted rectangle: one of the two dimensions is the
+    /// rectangle's own, to the pixel.
+    #[test]
+    fn smooth_fills_the_fitted_rectangle() {
+        let p = plan(Scale::Smooth, (100, 60), panel(), CELL);
+        let s = p.scale.expect("smooth grows a small picture");
+        assert_eq!(s.filter, SMOOTH_FILTER);
+        let room = (u32::from(p.rect.width) * 10, u32::from(p.rect.height) * 20);
+        assert!(
+            s.pixels.0 == room.0 || s.pixels.1 == room.1,
+            "{:?} fills neither dimension of {room:?}",
+            s.pixels
+        );
+        assert!(
+            s.pixels.0 <= room.0 && s.pixels.1 <= room.1,
+            "{:?}",
+            s.pixels
+        );
+        assert!(p.factor > 1.0, "{}", p.factor);
+    }
+
+    /// A picture bigger than the panel is the encoder's job in every mode:
+    /// same rectangle, no pre-scaling, and the meta row says it did not
+    /// grow.
+    #[test]
+    fn a_picture_bigger_than_the_panel_is_the_same_in_all_three_modes() {
+        let big = (4000, 3000);
+        let one = plan(Scale::One, big, panel(), CELL);
+        for mode in [Scale::Pixels, Scale::Smooth] {
+            let p = plan(mode, big, panel(), CELL);
+            assert_eq!(p.rect, one.rect, "{mode} chose a different rectangle");
+            assert_eq!(p.scale, None, "{mode} scaled a picture it need not");
+            assert_eq!(p.factor, 1.0);
+            assert!(scale_label(mode, p.factor).ends_with("\u{d7}1"), "{mode}");
+        }
+        assert!(one.rect.width <= panel().width && one.rect.height <= panel().height);
+    }
+
+    /// With no cell measured there is nothing to say how many pixels a
+    /// rectangle holds, so every mode is the fit that predates them.
+    #[test]
+    fn an_unmeasured_cell_leaves_all_three_modes_fitting() {
+        let want = fit_aspect(panel(), 100, 60, 2.0);
+        for mode in [Scale::One, Scale::Pixels, Scale::Smooth] {
+            let p = plan(mode, (100, 60), panel(), None);
+            assert_eq!(p.rect, want, "{mode}");
+            assert_eq!(p.scale, None, "{mode}");
+            assert_eq!(p.factor, 1.0, "{mode}");
+        }
+    }
+
+    #[test]
+    fn the_meta_row_names_the_mode_and_what_it_did() {
+        assert_eq!(scale_label(Scale::One, 1.0), "1x");
+        assert_eq!(scale_label(Scale::Pixels, 3.0), "pixels \u{d7}3");
+        assert_eq!(scale_label(Scale::Smooth, 2.4375), "smooth \u{d7}2.4");
+        assert_eq!(scale_label(Scale::Smooth, 1.0), "smooth \u{d7}1");
+        assert_eq!(scale_label(Scale::Pixels, 1.0), "pixels \u{d7}1");
+    }
+
+    /// The whole meta row, drawn, for each mode -- headless graphics has no
+    /// protocol, so the picture is half blocks and the row is the only
+    /// visible difference between the three.
+    #[test]
+    fn each_mode_draws_its_own_meta_row() {
+        let t = theme("terminal");
+        let data = Arc::new(RgbaImage::from_pixel(
+            4,
+            4,
+            starkit::image::Rgba([200, 100, 50, 255]),
+        ));
+        for (mode, want) in [
+            (Scale::One, "png \u{b7} 320 \u{d7} 200 \u{b7} 1x"),
+            (
+                Scale::Pixels,
+                "png \u{b7} 320 \u{d7} 200 \u{b7} pixels \u{d7}1",
+            ),
+            (
+                Scale::Smooth,
+                "png \u{b7} 320 \u{d7} 200 \u{b7} smooth \u{d7}1",
+            ),
+        ] {
+            let mut v = view(&t, None, Some("harbour.png"));
+            v.scale = mode;
+            let body = Rect::new(0, 0, 60, 6);
+            let mut buf = Buffer::empty(body);
+            render_image(body, &mut buf, &mut v, &data, 320, 200, "png");
+            let row: String = (0..body.width)
+                .map(|x| buf[(x, body.height - 1)].symbol().to_string())
+                .collect();
+            assert_eq!(row.trim(), want);
+        }
+    }
+
+    proptest! {
+        /// Foreign pixels, a panel of any shape and a cell of any size: the
+        /// rectangle stays inside the panel, the pixels asked for are never
+        /// nothing, and nothing panics or overflows on the way.
+        #[test]
+        fn no_size_makes_a_plan_that_escapes_its_panel(
+            img_w in 0u32..9000,
+            img_h in 0u32..9000,
+            w in 0u16..200,
+            h in 0u16..200,
+            cell in proptest::option::of((0u16..64, 0u16..64)),
+            mode in prop_oneof![Just(Scale::One), Just(Scale::Pixels), Just(Scale::Smooth)],
+        ) {
+            let panel = Rect::new(7, 11, w, h);
+            let p = plan(mode, (img_w, img_h), panel, cell);
+            prop_assert!(p.rect.x >= panel.x && p.rect.y >= panel.y, "{:?}", p.rect);
+            prop_assert!(
+                p.rect.right() <= panel.right() && p.rect.bottom() <= panel.bottom(),
+                "{:?} escapes {panel:?}",
+                p.rect
+            );
+            prop_assert!(p.factor >= 1.0 && p.factor.is_finite(), "{}", p.factor);
+            if let Some(s) = p.scale {
+                prop_assert!(s.pixels.0 > 0 && s.pixels.1 > 0, "{:?}", s.pixels);
+                // Nothing is ever made larger than the rectangle it goes in:
+                // the encoder would only shrink it back.
+                let (cw, ch) = cell.expect("no cell means no scaling");
+                prop_assert!(s.pixels.0 <= u32::from(p.rect.width) * u32::from(cw));
+                prop_assert!(s.pixels.1 <= u32::from(p.rect.height) * u32::from(ch));
+            }
+            // The label is a string for every factor, decimal or not.
+            prop_assert!(!scale_label(mode, p.factor).is_empty());
+        }
     }
 
     #[test]

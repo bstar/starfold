@@ -142,6 +142,10 @@ pub enum Action {
     NextSortKey,
     ReverseSort,
     Filter,
+    /// `z`: the next of the preview's three picture scales. Global, like
+    /// every other `view` key, because the preview has no bindings of its
+    /// own -- see the module doc.
+    NextPictureScale,
 
     // -- appearance --
     NextTheme,
@@ -444,6 +448,12 @@ pub const BINDINGS: &[Binding] = &[
         action: Action::Filter,
         keys: "/",
         label: "filter this level",
+        group: "view",
+    },
+    Binding {
+        action: Action::NextPictureScale,
+        keys: "z",
+        label: "picture scale",
         group: "view",
     },
     // -- appearance ------------------------------------------------------------

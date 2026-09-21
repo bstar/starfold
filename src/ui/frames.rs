@@ -429,6 +429,29 @@ fn preview_image_falls_back_to_half_blocks() {
     insta::assert_snapshot!("preview-image-blocks", text);
 }
 
+/// `z` through the three picture scales. Graphics are disabled here, so the
+/// picture is half blocks in all three and the meta row is the whole of the
+/// visible difference -- which is the point: the row has to say which mode
+/// is in force even where nothing can act on it.
+#[test]
+fn preview_image_scales_cycle_on_z() {
+    let (mut app, fk) = build("terminal");
+    cursor_to(&mut app, &fk, "pictures");
+    enter(&mut app, &fk);
+    cursor_to(&mut app, &fk, "harbour.png");
+    settle(&mut app, &fk);
+    app.key(alt('2'));
+    settle(&mut app, &fk);
+
+    for name in ["pixels", "smooth", "1x"] {
+        app.key(key('z'));
+        settle(&mut app, &fk);
+        let text = render(&mut app, 100, 30);
+        assert!(text.contains('\u{2580}'), "no half block in:\n{text}");
+        insta::assert_snapshot!(format!("preview-image-{name}"), text);
+    }
+}
+
 // -- help ---------------------------------------------------------------
 
 #[test]

@@ -28,6 +28,14 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
   the STAR family: the stack, preview and operations modules, a status row,
   every key and mouse gesture, and the `[fold]` colour roles derived from
   STAR/KIT's sixteen built-in themes.
+- **Three picture scales, on `z`.** `Resize::Fit` never upsizes, so a picture
+  smaller than the preview panel used to sit in the middle of it at whatever
+  size it happened to be. `z` now cycles that behaviour (`1x`) with `pixels`,
+  which grows it by whole numbers only so every source pixel is an exact
+  square block, and `smooth`, which fills the fitted rectangle at any factor.
+  The mode and the factor go in the meta row under the picture — `png · 320 ×
+  200 · pixels ×3` — a picture already bigger than the panel is scaled down to
+  fit in all three, and the choice is remembered in `[preview] image_scale`.
 - **`starfold list`.** A headless listing for a script or a bug report, with
   the same reader the window itself uses underneath.
 - **Fixture-driven tests.** A tempdir fixture tree (`src/fold/testing.rs`)
