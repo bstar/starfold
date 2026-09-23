@@ -184,14 +184,18 @@ fn startup_redraw_and_resize_need_no_cursor_position_reply() {
         assert!(Instant::now() < deadline, "Quit key was not handled");
         std::thread::sleep(Duration::from_millis(5));
     }
-    // An ordinary error or successful exit must both give the keyboard back.
-    let mut modes = std::mem::MaybeUninit::<libc::termios>::uninit();
-    // SAFETY: tcgetattr writes a complete termios on success.
-    assert_eq!(
-        unsafe { libc::tcgetattr(slave.as_raw_fd(), modes.as_mut_ptr()) },
-        0
-    );
-    let modes = unsafe { modes.assume_init() };
-    assert_ne!(modes.c_lflag & libc::ICANON, 0);
-    assert_ne!(modes.c_lflag & libc::ECHO, 0);
+    // Linux keeps the slave usable after its session leader exits. macOS
+    // revokes it, so tcgetattr cannot inspect its modes after a clean exit.
+    #[cfg(target_os = "linux")]
+    {
+        let mut modes = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: tcgetattr writes a complete termios on success.
+        assert_eq!(
+            unsafe { libc::tcgetattr(slave.as_raw_fd(), modes.as_mut_ptr()) },
+            0
+        );
+        let modes = unsafe { modes.assume_init() };
+        assert_ne!(modes.c_lflag & libc::ICANON, 0);
+        assert_ne!(modes.c_lflag & libc::ECHO, 0);
+    }
 }
