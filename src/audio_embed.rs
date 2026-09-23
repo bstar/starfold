@@ -353,8 +353,14 @@ impl Client {
         Self::with_executable(PathBuf::from("staramp"))
     }
 
-    /// Also useful for a packaged player path and for fixture executables.
+    /// Also useful for a packaged player path.
     pub fn with_executable(executable: PathBuf) -> Self {
+        let mut command = Command::new(executable);
+        command.args(["embed", "--stdio"]);
+        Self::with_command(command)
+    }
+
+    fn with_command(command: Command) -> Self {
         let (requests, receiver) = bounded(32);
         let shared = Arc::new(Mutex::new(Shared::default()));
         let quitting = Arc::new(AtomicBool::new(false));
@@ -365,7 +371,7 @@ impl Client {
             let stopping = Arc::clone(&stopping);
             thread::Builder::new()
                 .name("starfold-audio".into())
-                .spawn(move || supervise(executable, receiver, shared, quitting, stopping))
+                .spawn(move || supervise(command, receiver, shared, quitting, stopping))
                 .expect("the audio supervisor thread can start")
         };
         Self {
@@ -537,7 +543,7 @@ impl Drop for Client {
 }
 
 fn supervise(
-    executable: PathBuf,
+    mut command: Command,
     requests: Receiver<Request>,
     shared: Arc<Mutex<Shared>>,
     quitting: Arc<AtomicBool>,
@@ -579,7 +585,7 @@ fn supervise(
                         player.activation = activation;
                     }
                 } else {
-                    match spawn_child(&executable, activation) {
+                    match spawn_child(&mut command, activation) {
                         Ok(player) => running = Some(player),
                         Err((token, path, reason)) => push_event(
                             &shared,
@@ -769,13 +775,12 @@ fn supervise(
 }
 
 fn spawn_child(
-    executable: &Path,
+    command: &mut Command,
     activation: Activation,
 ) -> Result<Running, (u64, PathBuf, String)> {
     let token = activation.token;
     let path = activation.selected.clone();
-    let mut child = Command::new(executable)
-        .args(["embed", "--stdio"])
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1335,14 +1340,13 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn fake_executable(dir: &tempfile::TempDir, source: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let script = dir.path().join("fake-amp");
-        std::fs::write(&script, source).unwrap();
-        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&script, permissions).unwrap();
-        script
+    fn fake_helper(source: &str) -> Command {
+        // Execute an installed shell, not a freshly written executable that
+        // can race with concurrent process creation and fail with ETXTBSY.
+        // The script is an argument, leaving stdin for the real protocol.
+        let mut command = Command::new("sh");
+        command.args(["-c", source, "fake-staramp", "embed", "--stdio"]);
+        command
     }
 
     fn presentation(generation: u64) -> Presentation {
@@ -1563,39 +1567,48 @@ mod tests {
     #[test]
     fn fake_child_handshake_play_and_shutdown() {
         let dir = tempfile::tempdir().unwrap();
-        let script = fake_executable(&dir, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"]}'\nwhile IFS= read -r line; do\n  case \"$line\" in\n    *play*) printf '%s\\n' '{\"type\":\"status\",\"playing\":true,\"paused\":false,\"title\":\"Song\"}' ;;\n    *shutdown*) exit 0 ;;\n  esac\ndone\n");
+        let script = fake_helper("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"]}'\nwhile IFS= read -r line; do\n  case \"$line\" in\n    *play*) printf '%s\\n' '{\"type\":\"status\",\"playing\":true,\"paused\":false,\"title\":\"Song\"}' ;;\n    *shutdown*) exit 0 ;;\n  esac\ndone\n");
         let song = dir.path().join("song.mp3");
         std::fs::write(&song, b"audio").unwrap();
-        let mut client = Client::with_executable(script);
-        client
-            .activate(song.clone(), vec![song], presentation(1))
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        let mut accepted = false;
-        while Instant::now() < deadline && !accepted {
-            accepted = client
-                .take_events()
-                .iter()
-                .any(|e| matches!(e, Event::Accepted { generation: 1 }));
-            thread::sleep(Duration::from_millis(10));
+        let mut client = Client::with_command(script);
+        // A stopped helper can be launched again with fresh protocol pipes.
+        for generation in 1..=2 {
+            client
+                .activate(song.clone(), vec![song.clone()], presentation(generation))
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut accepted = false;
+            while Instant::now() < deadline && !accepted {
+                accepted = client
+                    .take_events()
+                    .iter()
+                    .any(|e| matches!(e, Event::Accepted { generation: g } if *g == generation));
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert!(accepted);
+            assert_eq!(client.supports(Path::new("/tmp/other.mp3")), Some(true));
+            assert_eq!(client.supports(Path::new("/tmp/other.txt")), Some(false));
+            client.stop().unwrap();
+            // stop is asynchronous; let the supervisor observe it before
+            // asking this test's helper to start a separate session.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while client.stopping.load(Ordering::Acquire) {
+                assert!(Instant::now() < deadline, "stop was not observed");
+                thread::sleep(Duration::from_millis(10));
+            }
         }
-        assert!(accepted);
-        assert_eq!(client.supports(Path::new("/tmp/other.mp3")), Some(true));
-        assert_eq!(client.supports(Path::new("/tmp/other.txt")), Some(false));
-        client.stop().unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn helper_capability_is_available_after_handshake() {
         let dir = tempfile::tempdir().unwrap();
-        let script = fake_executable(
-            &dir,
+        let script = fake_helper(
             "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"],\"capabilities\":[\"transport_images\"]}'\nwhile IFS= read -r line; do\n  case \"$line\" in\n    *shutdown*) exit 0 ;;\n  esac\ndone\n",
         );
         let song = dir.path().join("song.mp3");
         std::fs::write(&song, b"audio").unwrap();
-        let mut client = Client::with_executable(script);
+        let mut client = Client::with_command(script);
         assert!(!client.transport_images_available());
         client
             .activate(song.clone(), vec![song], presentation(1))
@@ -1616,8 +1629,7 @@ mod tests {
     #[test]
     fn stale_image_frames_after_button_toggle_and_resize_are_ignored() {
         let dir = tempfile::tempdir().unwrap();
-        let script = fake_executable(
-            &dir,
+        let script = fake_helper(
             r##"#!/bin/sh
 printf '%s\n' '{"type":"hello","protocol":1,"extensions":["mp3"],"capabilities":["transport_images"]}'
 while IFS= read -r line; do
@@ -1637,7 +1649,7 @@ done
         );
         let song = dir.path().join("song.mp3");
         std::fs::write(&song, b"audio").unwrap();
-        let mut client = Client::with_executable(script);
+        let mut client = Client::with_command(script);
         let mut initial = presentation(1);
         initial.graphics = Some(GraphicsConfig {
             cell_width: 1,
@@ -1709,10 +1721,10 @@ done
     #[test]
     fn rapid_activation_and_resize_keep_only_the_new_request() {
         let dir = tempfile::tempdir().unwrap();
-        let script = fake_executable(&dir, "#!/bin/sh\nsleep 0.08\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"]}'\nwhile IFS= read -r line; do\n  case \"$line\" in\n    *play*) sleep 0.08; printf '%s\\n' '{\"type\":\"frame\",\"generation\":3,\"width\":1,\"height\":1,\"cells\":[{\"symbol\":\"x\",\"fg\":[1,2,3],\"bg\":[4,5,6],\"modifiers\":0}]}' ;;\n    *shutdown*) exit 0 ;;\n  esac\ndone\n");
+        let script = fake_helper("#!/bin/sh\nsleep 0.08\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"]}'\nwhile IFS= read -r line; do\n  case \"$line\" in\n    *play*) sleep 0.08; printf '%s\\n' '{\"type\":\"frame\",\"generation\":3,\"width\":1,\"height\":1,\"cells\":[{\"symbol\":\"x\",\"fg\":[1,2,3],\"bg\":[4,5,6],\"modifiers\":0}]}' ;;\n    *shutdown*) exit 0 ;;\n  esac\ndone\n");
         let song = dir.path().join("song.mp3");
         std::fs::write(&song, b"audio").unwrap();
-        let mut client = Client::with_executable(script);
+        let mut client = Client::with_command(script);
         client
             .activate(song.clone(), vec![song.clone()], presentation(1))
             .unwrap();
@@ -1754,13 +1766,13 @@ done
     fn invalid_playlist_path_is_reported_before_acceptance() {
         use std::os::unix::ffi::OsStringExt;
         let dir = tempfile::tempdir().unwrap();
-        let script = fake_executable(&dir, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"]}'\nwhile IFS= read -r line; do\n  case \"$line\" in\n    *shutdown*) exit 0 ;;\n  esac\ndone\n");
+        let script = fake_helper("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"]}'\nwhile IFS= read -r line; do\n  case \"$line\" in\n    *shutdown*) exit 0 ;;\n  esac\ndone\n");
         let song = dir.path().join("song.mp3");
         std::fs::write(&song, b"audio").unwrap();
         let invalid = dir.path().join(std::ffi::OsString::from_vec(vec![
             b'x', 0xff, b'.', b'm', b'p', b'3',
         ]));
-        let mut client = Client::with_executable(script);
+        let mut client = Client::with_command(script);
         client
             .activate(song.clone(), vec![song, invalid], presentation(1))
             .unwrap();
@@ -1780,10 +1792,10 @@ done
     #[test]
     fn drop_kills_and_reaps_a_child_that_ignores_shutdown() {
         let dir = tempfile::tempdir().unwrap();
-        let script = fake_executable(&dir, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"]}'\nwhile :; do sleep 1; done\n");
+        let script = fake_helper("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"]}'\nwhile :; do sleep 1; done\n");
         let song = dir.path().join("song.mp3");
         std::fs::write(&song, b"audio").unwrap();
-        let mut client = Client::with_executable(script);
+        let mut client = Client::with_command(script);
         client
             .activate(song.clone(), vec![song], presentation(1))
             .unwrap();
@@ -1822,9 +1834,8 @@ done
             Some(Event::Fallback { generation: 1, .. })
         ));
 
-        let dir = tempfile::tempdir().unwrap();
-        let old = fake_executable(&dir, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":2,\"extensions\":[\"mp3\"]}'\nsleep 5\n");
-        let mut old_client = Client::with_executable(old);
+        let old = fake_helper("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":2,\"extensions\":[\"mp3\"]}'\nsleep 5\n");
+        let mut old_client = Client::with_command(old);
         old_client
             .activate(selected.clone(), vec![], presentation(2))
             .unwrap();
@@ -1839,9 +1850,8 @@ done
             Some(Event::Fallback { generation: 2, .. })
         ));
 
-        let dir = tempfile::tempdir().unwrap();
-        let silent = fake_executable(&dir, "#!/bin/sh\nsleep 5\n");
-        let mut silent_client = Client::with_executable(silent);
+        let silent = fake_helper("#!/bin/sh\nsleep 5\n");
+        let mut silent_client = Client::with_command(silent);
         silent_client
             .activate(selected, vec![], presentation(3))
             .unwrap();
@@ -1861,10 +1871,10 @@ done
     #[test]
     fn helper_exit_after_acceptance_is_an_error_without_fallback() {
         let dir = tempfile::tempdir().unwrap();
-        let script = fake_executable(&dir, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"]}'\nwhile IFS= read -r line; do\n  case \"$line\" in\n    *play*) printf '%s\\n' '{\"type\":\"status\",\"playing\":true,\"paused\":false,\"title\":\"Song\"}'; sleep 0.1; exit 0 ;;\n  esac\ndone\n");
+        let script = fake_helper("#!/bin/sh\nprintf '%s\\n' '{\"type\":\"hello\",\"protocol\":1,\"extensions\":[\"mp3\"]}'\nwhile IFS= read -r line; do\n  case \"$line\" in\n    *play*) printf '%s\\n' '{\"type\":\"status\",\"playing\":true,\"paused\":false,\"title\":\"Song\"}'; sleep 0.1; exit 0 ;;\n  esac\ndone\n");
         let song = dir.path().join("song.mp3");
         std::fs::write(&song, b"audio").unwrap();
-        let mut client = Client::with_executable(script);
+        let mut client = Client::with_command(script);
         client
             .activate(song.clone(), vec![song], presentation(1))
             .unwrap();
