@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: "render(&mut app, 100, 30)"
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
-║                                                                          ‹  hidden  sort  filter ║
+║                                                  ‹  hidden  sort  filter  bookmark  places  view ║
 ║▸ ~                                                                                        6 items║
 ║─ empty/ ── 0 files · 0 dirs · 0 B ───────────────────────────────────────────────────────────────║
 ║                                                                                                  ║
@@ -16,7 +16,7 @@ expression: "render(&mut app, 100, 30)"
 ║                                                                                                  ║
 ║                                                                                                  ║
 ║                     ╔═ QUIT ═══════════════════════════════════════════════╗                     ║
-║                     ║ COPY 1 item → ~/empty is still running.              ║                     ║
+║                     ║ COPY 1 item: ~/blob.bin → ~/empty is still running.  ║                     ║
 ║                     ║ It will be stopped.                                  ║                     ║
 ╚═════════════════════╚═════════════════════════════════════ y quit · n stay ╝═════════════════════╝
 ╔═ PREVIEW ════════════════════════════════════════════════════════════════════════════════════════╗
@@ -29,6 +29,6 @@ expression: "render(&mut app, 100, 30)"
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS — copying 40% ═══════════════════════════════════════════════════════════════════════╗
 ║                                                                                       run  clear ║
-║COPY 1 item → ~/empty · copying 40%                                                               ║
+║COPY 1 item: ~/blob.bin → ~/empty · copying 40%                                                   ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ? help  COPYING ████░░░░░░ 40%                                        1 marked · 256 B  ~/empty  off

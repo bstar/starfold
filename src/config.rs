@@ -97,6 +97,10 @@ impl Default for Ops {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preview {
+    /// Prefer a separately installed compatible STAR/AMP for audio playback.
+    pub audio_player: AudioPlayer,
+    /// Embedded transport pictures where supported, or always text.
+    pub audio_buttons: AudioButtons,
     /// The most a text preview reads, in bytes.
     pub max_bytes: u64,
     /// The most a text preview shows, in lines.
@@ -114,12 +118,53 @@ pub struct Preview {
 impl Default for Preview {
     fn default() -> Self {
         Self {
+            audio_player: AudioPlayer::default(),
+            audio_buttons: AudioButtons::default(),
             max_bytes: 262_144,
             max_lines: 400,
             max_image_dimension: 4096,
             dir_budget: 20_000,
             image_scale: Scale::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioPlayer {
+    #[default]
+    Auto,
+    Staramp,
+    External,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioButtons {
+    #[default]
+    Auto,
+    Text,
+}
+
+impl AudioButtons {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Text => "text",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Auto => Self::Text,
+            Self::Text => Self::Auto,
+        }
+    }
+}
+
+impl AudioPlayer {
+    pub fn embeds(self, custom_opener: &str) -> bool {
+        self == Self::Staramp || (self == Self::Auto && custom_opener.trim().is_empty())
     }
 }
 
@@ -301,6 +346,12 @@ conflicts = "ask"
 preserve_times = true
 
 [preview]
+# auto uses compatible STAR/AMP when installed, unless [open] command is set.
+# staramp explicitly prefers it; external always uses the existing opener.
+audio_player = "auto"
+# Embedded transport buttons: auto draws pictures where supported, text
+# always uses ASCII. With the player focused, `o` toggles this preference.
+audio_buttons = "auto"
 # The most a text preview reads, in bytes, and shows, in lines.
 max_bytes = 262144
 max_lines = 400
@@ -321,6 +372,43 @@ command = ""
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_button_preferences_round_trip() {
+        assert_eq!(Config::default().preview.audio_buttons, AudioButtons::Auto);
+        for mode in [AudioButtons::Auto, AudioButtons::Text] {
+            let c: Config =
+                toml::from_str(&format!("[preview]\naudio_buttons = {:?}", mode.name())).unwrap();
+            assert_eq!(c.preview.audio_buttons, mode);
+            assert_eq!(
+                toml::from_str::<Config>(&toml::to_string(&c).unwrap()).unwrap(),
+                c
+            );
+            assert_eq!(mode.next().next(), mode);
+        }
+        assert!(toml::from_str::<Config>("[preview]\naudio_buttons = 'unknown'").is_err());
+    }
+
+    #[test]
+    fn audio_player_modes_and_custom_opener_policy() {
+        for (name, mode) in [
+            ("auto", AudioPlayer::Auto),
+            ("staramp", AudioPlayer::Staramp),
+            ("external", AudioPlayer::External),
+        ] {
+            let c: Config = toml::from_str(&format!("[preview]\naudio_player = {name:?}")).unwrap();
+            assert_eq!(c.preview.audio_player, mode);
+            assert_eq!(
+                toml::from_str::<Config>(&toml::to_string(&c).unwrap()).unwrap(),
+                c
+            );
+        }
+        assert!(AudioPlayer::Auto.embeds(""));
+        assert!(!AudioPlayer::Auto.embeds("mpv"));
+        assert!(AudioPlayer::Staramp.embeds("mpv"));
+        assert!(!AudioPlayer::External.embeds(""));
+        assert!(toml::from_str::<Config>("[preview]\naudio_player = 'unknown'").is_err());
+    }
 
     #[test]
     fn an_empty_file_is_the_defaults() {

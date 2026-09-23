@@ -1,0 +1,31 @@
+---
+source: src/ui/places.rs
+expression: "drawn(&mut places, 100, 30)"
+---
+
+
+
+           ╔═ PLACES ═══════════════════════════════════════════════════════════════════╗
+           ║Search:                                                                     ║
+           ║Type to search names and paths                                              ║
+           ║BOOKMARKS                                                                   ║
+           ║> Projects                /home/user/projects                               ║
+           ║  Writing                 /home/user/documents                              ║
+           ║DEVICES                                                                     ║
+           ║  Camera                  /run/media/user/CAMERA                            ║
+           ║VOLUMES                                                                     ║
+           ║  Scratch                 /mnt/scratch                                      ║
+           ║NETWORK                                                                     ║
+           ║  Office                  /mnt/office                                       ║
+           ║LOCATIONS                                                                   ║
+           ║  Home                    /home/user                                        ║
+           ║  Root                    /                                                 ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║F2 edit  del remove  F5 scan                                                ║
+           ╚══════════════ enter open · F2 rename · del remove · F5 refresh · esc close ╝

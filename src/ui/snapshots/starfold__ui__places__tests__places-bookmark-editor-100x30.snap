@@ -1,0 +1,31 @@
+---
+source: src/ui/places.rs
+expression: "drawn(&mut places, 100, 30)"
+---
+
+
+
+           ╔═ PLACES ═══════════════════════════════════════════════════════════════════╗
+           ║BOOKMARK DIRECTORY                                                          ║
+           ║/home/user/projects                                                         ║
+           ║                                                                            ║
+           ║Projects                                                                    ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ║                                                                            ║
+           ╚═════════════════════════════════════════════════════ enter save · esc back ╝

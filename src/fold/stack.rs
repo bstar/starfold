@@ -84,6 +84,15 @@ pub struct Stack {
     next_id: u64,
 }
 
+/// How a parent navigation changed the stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentMove {
+    /// The existing parent frame was restored, including its cursor.
+    Existing,
+    /// The prior trail did not describe this filesystem parent.
+    New,
+}
+
 impl Stack {
     /// A stack with one frame, open on `dir`.
     pub fn new(dir: PathBuf) -> Self {
@@ -118,6 +127,30 @@ impl Stack {
         self.frames.truncate(self.active);
         self.active -= 1;
         true
+    }
+
+    /// Go to the filesystem parent even when this is the first frame or a
+    /// directory reached by a Places jump. A matching previous frame keeps
+    /// its cursor; an unrelated trail is replaced by a fresh parent frame.
+    pub fn go_parent(&mut self) -> Option<ParentMove> {
+        let departed = self.active().dir.clone();
+        let parent = departed.parent()?.to_path_buf();
+        if parent == departed || parent.as_os_str().is_empty() {
+            return None;
+        }
+        if self.active > 0 && self.frames[self.active - 1].dir == parent {
+            self.pop();
+            return Some(ParentMove::Existing);
+        }
+
+        let id = FrameId(self.next_id);
+        self.next_id += 1;
+        let mut frame = Frame::new(id, parent);
+        frame.cursor_name = departed.file_name().map(|name| name.to_os_string());
+        self.frames.clear();
+        self.frames.push(frame);
+        self.active = 0;
+        Some(ParentMove::New)
     }
 
     /// Jump straight to a level by its position in [`frames`](Self::frames)
@@ -251,6 +284,37 @@ mod tests {
         assert!(!s.pop());
         assert_eq!(s.depth(), 1);
         assert_eq!(s.len(), 1);
+    }
+
+    #[test]
+    fn parent_navigation_walks_above_the_initial_directory_to_root() {
+        let mut s = Stack::new("/home/bob/projects".into());
+        assert_eq!(s.go_parent(), Some(ParentMove::New));
+        assert_eq!(s.active().dir, PathBuf::from("/home/bob"));
+        assert_eq!(s.active().cursor_name, Some(OsString::from("projects")));
+        assert_eq!(s.go_parent(), Some(ParentMove::New));
+        assert_eq!(s.active().dir, PathBuf::from("/home"));
+        assert_eq!(s.go_parent(), Some(ParentMove::New));
+        assert_eq!(s.active().dir, PathBuf::from("/"));
+        assert_eq!(s.go_parent(), None);
+    }
+
+    #[test]
+    fn matching_parent_restores_its_cursor_and_unrelated_trail_is_replaced() {
+        let mut s = Stack::new("/home".into());
+        s.active_mut().cursor = 4;
+        s.push("/home/projects".into());
+        assert_eq!(s.go_parent(), Some(ParentMove::Existing));
+        assert_eq!(s.active().cursor, 4);
+        assert_eq!(s.len(), 1);
+
+        s.push("/mnt/share".into());
+        let old_id = s.active().id;
+        assert_eq!(s.go_parent(), Some(ParentMove::New));
+        assert_eq!(s.active().dir, PathBuf::from("/mnt"));
+        assert_eq!(s.len(), 1);
+        assert!(s.active().id.0 > old_id.0);
+        assert_eq!(s.active().cursor_name, Some(OsString::from("share")));
     }
 
     #[test]

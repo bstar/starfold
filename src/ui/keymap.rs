@@ -54,10 +54,11 @@
 //! why, and a test asserts nothing else in any module shadows a global
 //! binding by accident.
 //!
-//! The PREVIEW module has no group of its own and none is planned here: it
-//! is scrolled with the global navigation keys (`j`/`k`, `pgup`/`pgdn`,
-//! `gg`/`G`) exactly like every other list, and there is nothing preview-
-//! specific to bind yet.
+//! Ordinary PREVIEW content scrolls with the global navigation keys. While
+//! an embedded player is pinned there, `App::audio_key` adds transport keys
+//! only when Preview has focus, after overlays/filter dispatch and before
+//! this static table. Global focus, quit, themes, and `h` parent navigation
+//! still fall through. The generated documentation includes those controls.
 //!
 //! ## Invariants
 //!
@@ -137,6 +138,9 @@ pub enum Action {
     ClearQueue,
 
     // -- view --
+    ToggleView,
+    Places,
+    Bookmark,
     TogglePreview,
     ToggleHidden,
     NextSortKey,
@@ -297,7 +301,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         action: Action::Pop,
         keys: "h/left/bs",
-        label: "back one level",
+        label: "parent directory",
         group: "stack",
     },
     Binding {
@@ -420,6 +424,24 @@ pub const BINDINGS: &[Binding] = &[
         group: "queue",
     },
     // -- view ----------------------------------------------------------------
+    Binding {
+        action: Action::ToggleView,
+        keys: "v",
+        label: "fold / commander",
+        group: "view",
+    },
+    Binding {
+        action: Action::Places,
+        keys: "b",
+        label: "places",
+        group: "view",
+    },
+    Binding {
+        action: Action::Bookmark,
+        keys: "B",
+        label: "bookmark directory",
+        group: "view",
+    },
     Binding {
         action: Action::TogglePreview,
         keys: "i",
@@ -743,6 +765,14 @@ catches whatever nothing above wanted, which is what makes it work from
 everywhere. While the filter has focus, every `alt+\u{2026}` falls through
 it and so does `?`, so help and the appearance and panel keys stay reachable
 mid-search; `esc` and `enter` are always the way out.
+
+In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
+the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
+`m` queue files from the active pane into the opposite directory, using
+current-directory marks or the highlighted file. `v` switches views, `b`
+opens Places, and `B` bookmarks the current directory. In Places, type to
+search, use arrows and `enter` to open a location, `F2` to rename a bookmark,
+`delete` to remove one after confirmation, and `F5` to rescan mounts.
 ";
 
 /// The key table as `docs/keys-and-mouse.md`. Run with `STARFOLD_UPDATE_DOCS=1`
@@ -773,7 +803,25 @@ pub fn document() -> String {
         ));
     }
 
-    out.push_str("\n## The mouse\n\n| where | gesture | what it does |\n|---|---|---|\n");
+    out.push_str("\n## The mouse\n\n");
+    out.push_str(
+        "\
+While an embedded STAR/AMP player has Preview focus (`alt+2`), `space` or
+`enter` pauses/resumes, `[` / `]` selects the previous/next track, left/right
+seeks five seconds, and `+` / `-` changes volume. `x` or `esc` stops the player
+and restores ordinary previews; `i` closes Preview and stops playback. `o`
+toggles graphical/text transport buttons; `shift+o` opens the playing track
+externally. On newer STAR/AMP, `w` / `shift+w` cycles visualizers forward/back
+and `d` cycles seek-bar styles; these choices persist separately for STAR/FOLD.
+These controls are scoped to Preview;
+browser navigation, marking, global focus shortcuts, and quit keep their
+normal meanings. The player's transport, seek, and volume controls are also
+clickable. Left-click a visualizer to cycle it; right-click a visualizer or
+seek bar to cycle the seek style; wheel over a visualizer cycles it.
+
+",
+    );
+    out.push_str("| where | gesture | what it does |\n|---|---|---|\n");
     for m in MOUSE {
         out.push_str(&format!(
             "| {:<8} | {:<width$} | {} |\n",

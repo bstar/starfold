@@ -28,6 +28,7 @@ pub mod handle;
 pub mod listing;
 pub mod open;
 pub mod ops;
+pub mod places;
 pub mod preview;
 pub mod selection;
 pub mod sort;

@@ -23,15 +23,24 @@ matters.
 | Themes, via STAR/KIT: the `[fold]` roles | built, contrast-checked against all sixteen built-in themes |
 | Packaging: Nix flake, PKGBUILD, `.deb`, AppImage, portable tarball, CI | scaffolded; not exercised as part of this milestone's own work |
 
+## Commander and Places
+
+The second view has two independent directory panes for navigating mounted
+devices, network locations and ordinary directories. Places provides searchable
+bookmarks and mounted locations. The operations queue is shared between views;
+Commander copy and move use the opposite pane as destination. The last view and
+locations are saved in the session. Mounted USB and network filesystem smoke
+checks still require a machine with those mounts available.
+
 ## Not planned for milestone 1
 
-Tabs, forked stacks, the action palette, archives, and git status in the
+Tabs, the action palette, archives, and git status in the
 listing. Chunked copy progress for a single very large file — today's copy
 reports progress file by file, with nothing between "started" and "done" for
 one file's own bytes. Watching a directory through the operating system
 (`notify` or equivalent) rather than the once-a-second mtime poll `watch.rs`
-uses today. The data model leaves room for tabs and for more than one stack
-from day one, but none of it is wired up to anything yet.
+uses today. The data model leaves room for tabs; the two Commander stacks are
+now wired to a separate view.
 
 ## Not yet verified
 

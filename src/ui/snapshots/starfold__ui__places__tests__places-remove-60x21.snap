@@ -1,0 +1,24 @@
+---
+source: src/ui/places.rs
+expression: "drawn(&mut places, 60, 21)"
+---
+
+  ╔═ PLACES ═════════════════════════════════════════════╗
+  ║REMOVE BOOKMARK?                                      ║
+  ║Projects  /home/user/projects                         ║
+  ║y remove   n keep                                     ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ╚═══════════════════════════════════ y remove · n keep ╝

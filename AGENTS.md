@@ -39,10 +39,25 @@ keymap/help, chrome, text entry, wrapping, terminal graphics — lives in
 pinned to a tag, and the flake takes it from the revision `Cargo.lock` names
 through `cargoLock.allowBuiltinFetchGit`.
 
-STAR/KIT's dock layout engine is not used here: the one-column layout
-(`src/ui/layout.rs`) is hand-rolled the same way STAR/CORD's is, because
-STAR/FOLD only ever has one column of modules to place, never more than one
-arrangement to choose between.
+STAR/KIT's dock layout engine is not used here. `src/ui/layout.rs` lays out
+the browser, preview, and operations vertically; Commander divides the
+browser rectangle into two equal-width directory panes.
+
+## Commander and Places
+
+Stack 0 is Fold; stacks 1 and 2 are Commander's left and right panes, created
+on first use or session restore. The active stack's marks live in
+`State::selection`; inactive marks are parked per stack. Commander clears
+marks when that pane changes directory. Fold keeps its persistent marks.
+UI scroll keys are `(stack index, FrameId)` because frame IDs are local.
+Commander copy/move captures the opposite pane's path when enqueued.
+
+Places is a modal picker over worker-discovered mounted locations and
+`bookmarks.toml` beside configuration. All discovery and bookmark writes run
+on the IO worker; malformed bookmark files must never be overwritten.
+Mounting, ejecting, and direct network connections are outside this feature.
+Sessions remember view mode, Fold's directory, both Commander directories,
+and the active pane. A CLI directory overrides the active view's location.
 
 It is also the one copy of `ratatui`, `crossterm`, `ratatui-image` and `image`
 in the tree. Everything under `src/ui/` reaches them through `starkit::`, and
@@ -97,7 +112,7 @@ in tests.
 
 `starfold-io` (listings, directory summaries, previews, external opens, the
 mtime poll) and `starfold-ops` (the operations queue, one entry at a time)
-are the only two OS threads. Both are plain `std::thread` plus
+are the core's two OS threads. Both are plain `std::thread` plus
 `crossbeam-channel`; there is no async runtime, because nothing here waits on
 a socket. Neither thread ever writes to `State` directly: `worker::finish`
 (`src/fold/worker.rs`) is the one function that takes the write lock, folds a
@@ -109,6 +124,18 @@ calls `state::apply` directly instead of going through `finish` (or through
 `Handle::send` for a `Command`), you have created a second writer.
 
 ## One writer
+
+Embedded audio is separate from these core workers: `audio_embed` supervises
+an optional `staramp embed --stdio` child over versioned JSON lines with its
+own bounded communications and latest-frame slot. It never mutates fold
+state. The UI captures the active filtered/sorted listing as the playback
+queue; it receives styled cells and optionally bounded RGBA transport images,
+not terminal escape sequences. STAR/AMP owns the player UI, button artwork,
+layout, playback state, and mouse hit-testing, reusing its standalone renderer.
+STAR/FOLD only forwards input/presentation and paints the returned content;
+do not recreate player widgets or transport geometry here. Closing the
+player or exiting must shut down and reap this child. No STAR/AMP crate is
+linked into STAR/FOLD.
 
 `fold::state::apply` is the only thing that mutates `State`. It does no IO —
 every job it hands back is run by a worker thread, and a worker takes the
@@ -205,15 +232,23 @@ with no trash daemon running; anything that needs one is gated behind
 
 ## Not yet verified
 
-Nothing in this milestone has been run in a real terminal against a real
-filesystem yet — everything above is built and passes its own headless
-tests, which is a different claim. Once it has been checked against a live
-session, this is where a claim that turned out to be a guess rather than an
-observation gets recorded, the same way STAR/CORD keeps its own list of
-protocol details still waiting on one. Specifically, still unverified as of
-this milestone:
+2026-09-23: Embedded STAR/AMP passed Linux real-process tests with silent WAV
+playback, pause/resume, seek, volume, captured queue navigation, compact/full
+cell frames, stop and shutdown. An isolated PTY exercised 60×21 and 100×30,
+Fold/Commander browsing while pinned, resize/theme changes, and Preview close
+reaping the child. Embedding created no STAR/AMP config/history/cache files.
+Audible listening, physical USB/network audio, and macOS embedding remain
+unverified. The separately installed executables were not replaced.
 
-- The window itself: `ui/app.rs`'s event loop, drawing, resizing, focus.
+2026-09-22: Linux PTY smoke checks passed at 100×30 and 60×21 using an
+isolated STARFOLD_DIR: switching views/panes, navigation, bookmark creation,
+Places discovery of the mounted GVFS root, clean exit, and session restore.
+Snapshots and fake-core tests cover transfers, pane isolation, mouse focus,
+unavailable locations, bookmark persistence, and failure reporting. Physical
+USB/network transfers and macOS builds were not available on this machine.
+The following broader terminal/platform checks are still outstanding:
+
+- Resizing and focus events in an interactive desktop terminal.
 - A picture actually appearing in kitty, iTerm2, WezTerm or Ghostty, and as
   half-blocks where none of those apply.
 - The mtime poll (`watch.rs`) noticing a real external change while the

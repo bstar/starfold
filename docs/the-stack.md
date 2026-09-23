@@ -3,6 +3,35 @@
 STAR/FOLD is built around one idea: the directories you drill through do not
 replace each other, they stack up.
 
+## Commander and Places
+
+Press `v` to switch between Fold and Commander. Commander puts two directory
+listings side by side, with one active pane. `Tab` or `Shift+Tab` changes the
+active pane; clicking a pane focuses it. Each pane remembers its own directory,
+cursor and filter. The preview follows the active pane, and the operations
+queue is shared between views.
+
+In Commander, `space` marks entries in the active directory. `y` or `p` queues
+those entries for copying to the opposite pane's directory; `m` queues a move.
+With no marks, the highlighted entry is the source. The destination is
+captured when the operation is queued, so later navigation cannot change it.
+Run the queue with `X`. Marks in Fold keep their existing across-directory
+behavior; Commander marks belong to each pane and clear when that pane changes
+directory.
+
+Press `b` for Places and search by name or path. It groups your bookmarks,
+mounted devices, mounted network locations, Home and Root. `B` saves the
+current directory as a bookmark with an editable name; bookmarks can be
+renamed or removed in Places. A saved bookmark stays in the list when its
+device or network share is disconnected, and navigation reports the failure.
+Places lists mounted locations; it does not mount drives, eject them or log in
+to network shares.
+
+STAR/FOLD remembers the last view, both Commander directories and the Fold
+directory. An explicit directory on the command line opens in the active view.
+If a saved location is gone on the next launch, that location opens at the
+launch working directory and a warning appears.
+
 ## Levels fold behind you
 
 Entering a directory pushes a level onto the column. Every level you have
@@ -22,9 +51,11 @@ it are a breadcrumb trail with a count, not a memory you have to reconstruct —
 you can see, at a glance, that you got here through `~` and `projects/`.
 
 Moving into a directory (`l`, `enter`, a double-click) pushes a new level and
-folds the one you were on. Moving back out (`h`, `backspace`) pops the level
-you are on and returns you to the one before it, with the cursor exactly where
-it was.
+folds the one you were on. Moving up (`h`, `left`, `backspace`) returns to the
+filesystem parent in both views. When that parent is already the previous Fold
+level, its cursor is restored. From a launch directory or a Places jump, `h`
+keeps going through actual parents to `/`; the new parent highlights the
+directory you just left.
 
 ## Jumping without losing anything
 

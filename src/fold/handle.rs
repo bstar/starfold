@@ -44,6 +44,26 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 /// `ui/app.rs` (Phase 3a) is a `match` on meaning, not on input.
 #[derive(Debug, Clone)]
 pub enum Command {
+    LoadPlaces(PathBuf),
+    RefreshPlaces,
+    SaveBookmark {
+        name: String,
+        path: PathBuf,
+    },
+    RenameBookmark {
+        path: PathBuf,
+        name: String,
+    },
+    RemoveBookmark(PathBuf),
+    /// Surface a startup warning after the terminal has entered its window.
+    Notify(String),
+    ToggleView,
+    FocusPane(usize),
+    RestoreCommander {
+        dirs: [PathBuf; 2],
+        active: usize,
+        enabled: bool,
+    },
     /// Drill into the entry under the cursor.
     Enter,
     /// Back one level.
@@ -141,6 +161,7 @@ impl Note {
 /// module doc.
 #[derive(Debug, Clone)]
 pub enum Event {
+    Places,
     Listing(PathBuf),
     Stack,
     Selection,
@@ -323,7 +344,7 @@ impl Handle {
             state::apply(&mut state, Change::Command(command))
         };
         for job in effects.jobs {
-            self.senders.dispatch(job);
+            self.senders.dispatch_checked(job, &self.state, &self.sink);
         }
         for event in effects.events {
             self.sink.send(event);

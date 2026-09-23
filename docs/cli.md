@@ -12,9 +12,10 @@ script may be reading. `STARFOLD_LOG` overrides the filter entirely, with the
 syntax `tracing`'s `EnvFilter` uses — `STARFOLD_LOG=starfold::fold::ops=trace`,
 for instance.
 
-With no subcommand, `starfold` opens the window on `DIR`, or on the session's
-last directory (falling back to the current one on a first run) if none is
-given.
+With no subcommand, `starfold` restores the last view and its directory. `DIR`
+opens in the active Commander pane when Commander was last used, or in Fold
+otherwise. If a saved location is unavailable, that view starts in the launch
+working directory and shows a warning.
 
 ## `starfold list`
 

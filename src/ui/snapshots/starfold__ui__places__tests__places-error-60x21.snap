@@ -1,0 +1,24 @@
+---
+source: src/ui/places.rs
+expression: "drawn(&mut places, 60, 21)"
+---
+
+  ╔═ PLACES ═════════════════════════════════════════════╗
+  ║Search:                                               ║
+  ║Network mount list unavailable                        ║
+  ║BOOKMARKS                                             ║
+  ║> Projects         /home/user/projects                ║
+  ║  Writing          /home/user/documents               ║
+  ║DEVICES                                               ║
+  ║  Camera           /run/media/user/CAMERA             ║
+  ║VOLUMES                                               ║
+  ║  Scratch          /mnt/scratch                       ║
+  ║NETWORK                                               ║
+  ║  Office           /mnt/office                        ║
+  ║LOCATIONS                                             ║
+  ║  Home             /home/user                         ║
+  ║  Root             /                                  ║
+  ║                                                      ║
+  ║                                                      ║
+  ║F2 edit  del remove  F5 scan                          ║
+  ╚═══════ enter open · F2 edit · del remove · esc close ╝

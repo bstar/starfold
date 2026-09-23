@@ -1,8 +1,9 @@
 # Configuration
 
-Everything STAR/FOLD keeps lives under one directory, and everything it can be
-told lives in one file there. This page covers the file, the themes and the
-directory layout.
+Everything STAR/FOLD keeps lives under one directory. Settings live in
+`config.toml`, named Places bookmarks in `bookmarks.toml`, and the current view
+and directories in `session.toml`. This page covers those files, the themes and
+the directory layout.
 
 ## The config file
 
@@ -134,17 +135,90 @@ up, moved, or deleted by moving one folder:
 ```
 ~/.local/starfold/
 ├── config.toml        your settings (0644)
-├── session.toml       last directory, hidden and sort state (0600)
+├── bookmarks.toml     named Places directories (0600)
+├── session.toml       Fold and Commander locations, view, hidden and sort state (0600)
 ├── themes/            your own themes
 └── cache/             the log. Safe to delete
     └── starfold.log
 ```
 
-The directories are mode 0700, and not out of taste: `session.toml` names
-every directory you have been browsing, and the log can too at debug level.
+The directories are mode 0700: bookmarks and session state name locations you
+have browsed, and the log can too at debug level.
 
-- `$STARFOLD_DIR` relocates all of it; `$STARFOLD_CONFIG_DIR` moves just the
-  config.
-- `session.toml` is 0600 because the directories it names are mildly private
-  even though nothing in it is a secret.
+- `$STARFOLD_DIR` relocates all of it; `$STARFOLD_CONFIG_DIR` moves the config
+  and `bookmarks.toml`, which lives beside it.
+- `session.toml` and `bookmarks.toml` are 0600 because the directories they name
+  are mildly private even though nothing in them is a secret. Both are written
+  atomically. An older session with only `last_dir` still opens in Fold.
 - The log never carries more than a path at any level above `debug`.
+
+Bookmarks are managed with `B` and the Places picker (`b`). Their file is
+also readable TOML:
+
+```toml
+[[bookmark]]
+name = "Projects"
+path = "/home/me/projects"
+```
+
+Each bookmark needs a name and an absolute directory path. Unavailable paths
+stay saved. Invalid files produce a visible error and are not overwritten;
+after repairing the file, use `F5` in Places to retry loading it.
+
+## Audio in Preview
+
+```toml
+[preview]
+audio_player = "auto" # auto, staramp, or external
+audio_buttons = "auto" # auto (pictures when supported), or text
+```
+
+`auto` uses a separately installed STAR/AMP with embedding protocol v1 on
+`PATH`. A nonempty `[open] command` keeps taking precedence. `staramp` prefers
+the embedded player even with a custom opener; `external` always uses the
+existing opener. Missing or older STAR/AMP versions fall back to the opener.
+Decoder or audio-device failures appear in Preview, without launching another
+player automatically; `Shift+O` opens the track externally while Preview has
+focus (`o` still opens externally in the file panes).
+
+Enter or double-click starts playback; selecting a file is silent. Once the
+embedded player accepts the track, Preview takes focus so Space pauses and
+`x` or Esc stops immediately. If you navigate away before it starts, it leaves
+your focus alone. The queue
+is a snapshot of supported audio files in the active, filtered and sorted
+directory listing. Browsing either view does not change that queue. Opening
+another track replaces it. The player stays in Preview until stopped, closed
+with `i`, or STAR/FOLD exits. It follows STAR/FOLD's theme and uses compact
+controls in short terminals.
+
+With Preview focused, `o` toggles graphical/text transport buttons and saves
+the preference in STAR/FOLD's configuration. Pictures use the separately
+installed STAR/AMP's transport faces and require a graphics-capable terminal
+and a STAR/AMP version advertising `transport_images`. Older embedding helpers
+and text-only terminals keep the text controls. This setting is independent
+of `[ui] graphics` for file previews and does not change STAR/AMP's configuration.
+
+With Preview focused, `w` / `Shift+W` cycles STAR/AMP's visualizers and `d`
+cycles seek-bar styles. Clicking a visualizer cycles forward; right-clicking
+the visualizer or seek bar cycles seek styles, and the wheel over a visualizer
+cycles forward/back. These controls require a STAR/AMP version advertising
+`player_styles`; older helpers show an update hint for the keys and keep their
+existing mouse behavior. STAR/AMP saves the choices in its separate
+`embed/starfold.toml` profile under its configuration directory (overridable
+with `STARAMP_CONFIG_DIR`). This does not alter the standalone player style.
+STAR/FOLD shows profile load/save warnings as transient notes while playback
+continues.
+
+STAR/AMP owns and renders the embedded player using its existing player UI,
+including graphical button artwork and mouse hit-testing. STAR/FOLD is only
+the host: it supplies panel size/theme, forwards controls, and displays the
+returned cells and images. No STAR/AMP player widgets are duplicated here.
+
+This is an independent player: it does not join another STAR/AMP session or
+write its library, history, standalone settings, scrobbles, or Discord
+presence. Only an explicit visualizer or seek-style change writes the separate
+embedded style profile.
+Local files and files on mounted devices/network shares are supported; direct
+network URLs, playlists, and CUE expansion are not. Paths that cannot be
+represented as UTF-8 are explicitly rejected by embedding, not renamed or
+lossily converted; the external opener remains available.

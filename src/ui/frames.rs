@@ -133,6 +133,63 @@ fn row_index(app: &App, name: &str) -> usize {
         .unwrap_or_else(|| panic!("{name} is not listed: {:?}", app.view().rows))
 }
 
+#[test]
+fn commander_frames() {
+    let (mut app, fk) = build("terminal");
+    app.key(key('v'));
+    settle(&mut app, &fk);
+    cursor_to(&mut app, &fk, "pictures");
+    app.key(code(KeyCode::Enter));
+    settle(&mut app, &fk);
+    let left = render(&mut app, 100, 30);
+    assert!(left.lines().next().unwrap().contains("S T A R / F O L D"));
+    assert!(left.lines().next().unwrap().contains("›LEFT"));
+    insta::assert_snapshot!("commander-left-100x30", left);
+    let floor = render(&mut app, 60, 21);
+    assert!(floor.lines().next().unwrap().contains("S T A R / F O L D"));
+    assert!(floor.lines().next().unwrap().contains("›LEFT"));
+    assert_eq!(floor.lines().count(), 21);
+    insta::assert_snapshot!("commander-floor-60x21", floor);
+    app.key(code(KeyCode::Tab));
+    settle(&mut app, &fk);
+    cursor_to(&mut app, &fk, "empty");
+    app.key(code(KeyCode::Enter));
+    settle(&mut app, &fk);
+    let right = render(&mut app, 100, 30);
+    assert!(right.lines().next().unwrap().contains("S T A R / F O L D"));
+    assert!(right.lines().next().unwrap().contains("LEFT"));
+    insta::assert_snapshot!("commander-right-100x30", right);
+    let right_floor = render(&mut app, 60, 21);
+    assert!(right_floor
+        .lines()
+        .next()
+        .unwrap()
+        .contains("S T A R / F O L D"));
+    assert!(right_floor.lines().next().unwrap().contains("LEFT"));
+    assert_eq!(right_floor.lines().count(), 21);
+    app.key(alt('2'));
+    let preview_focused = render(&mut app, 100, 30);
+    assert!(preview_focused
+        .lines()
+        .next()
+        .unwrap()
+        .contains("S T A R / F O L D"));
+    insta::assert_snapshot!("commander-preview-focused-100x30", preview_focused);
+    let preview_floor = render(&mut app, 60, 21);
+    assert!(preview_floor
+        .lines()
+        .next()
+        .unwrap()
+        .contains("S T A R / F O L D"));
+    assert_eq!(preview_floor.lines().count(), 21);
+    app.key(alt('1'));
+    app.key(code(KeyCode::Tab));
+    settle(&mut app, &fk);
+    app.key(key('y'));
+    settle(&mut app, &fk);
+    insta::assert_snapshot!("commander-queued-100x30", render(&mut app, 100, 30));
+}
+
 /// Move the cursor onto the row named `name` in the active level: `home`
 /// first, so this lands on `name` wherever the cursor already was -- a
 /// second call to an earlier row still gets there, rather than pressing `j`

@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: "render(&mut app, 100, 30)"
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
-║                                                                          ‹  hidden  sort  filter ║
+║                                                  ‹  hidden  sort  filter  bookmark  places  view ║
 ║─ ~ ── 3 files · 3 dirs · 290 B ──────────────────────────────────────────────────────────────────║
 ║    empty/                                                         dir             -  Sep 10      ║
 ║    pictures/                                                      dir             -  Sep 10      ║
@@ -27,8 +27,8 @@ expression: "render(&mut app, 100, 30)"
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                       run  clear ║
-║COPY 1 item → ~                                            queued · enter run · x drop · esc clear║
-║MOVE 1 item → ~                                                                             queued║
+║COPY 1 item: ~/blob.bin → ~                                queued · enter run · x drop · esc clear║
+║MOVE 1 item: ~/notes.txt → ~                                                                queued║
 ║TRASH 1 item                                                                                queued║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ? help  enter run  x drop  esc clear                                                          ~  off

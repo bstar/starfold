@@ -184,6 +184,18 @@ fn visible_crumbs(crumbs: &[Crumb], fold_rows: u16) -> (usize, &[Crumb]) {
 }
 
 pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
+    render_named(area, buf, v, bars, HEADING, None, Bar::Stack);
+}
+
+pub fn render_named(
+    area: Rect,
+    buf: &mut Buffer,
+    v: &View<'_>,
+    bars: &mut Bars,
+    title: &str,
+    detail: Option<&str>,
+    bar: Bar,
+) {
     let t = v.theme;
     let word_list = words(ModuleId::Stack);
     // The core theme type -- a struct literal is not a coercion site, so the
@@ -195,11 +207,15 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
         &frame::Frame {
             theme: core,
             focused: v.focused,
-            title: HEADING,
-            detail: None,
+            title,
+            detail,
             heading: true,
             badge: Some(Badge {
-                text: ModuleId::Stack.title(),
+                text: if matches!(bar, Bar::Commander(_)) {
+                    "commander"
+                } else {
+                    ModuleId::Stack.title()
+                },
                 tone: Tone::Dim,
             }),
             footer: None,
@@ -216,7 +232,7 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
         }
     }
     if s.rule.height > 0 {
-        render_rule(s.rule, buf, t, v);
+        render_rule(s.rule, buf, t, v, matches!(bar, Bar::Commander(_)));
     }
     render_list(s.list, buf, t, v);
 
@@ -226,14 +242,7 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
     // rather than drawn directly, so a press or a drag on this same track
     // next frame has something to answer to.
     let track = scrollbar::track(area, s.list);
-    bars.draw(
-        Bar::Stack,
-        track,
-        buf,
-        t,
-        v.rows.len() as u32,
-        v.scroll as u32,
-    );
+    bars.draw(bar, track, buf, t, v.rows.len() as u32, v.scroll as u32);
 }
 
 fn render_squeezed(area: Rect, buf: &mut Buffer, t: &Theme, crumbs: &[Crumb]) {
@@ -268,9 +277,17 @@ fn render_crumb_rows(area: Rect, buf: &mut Buffer, t: &Theme, crumbs: &[Crumb], 
     }
 }
 
-fn render_rule(area: Rect, buf: &mut Buffer, t: &Theme, v: &View<'_>) {
+fn render_rule(area: Rect, buf: &mut Buffer, t: &Theme, v: &View<'_>, commander: bool) {
     let style = Style::default().fg(rgb(t.fold.crumb_active_fg));
-    let line = rule_line(area.width, &v.rule, v.truncated, v.filter);
+    let reserved = 3u16
+        .saturating_add(v.filter.map(|f| width_of(f).saturating_add(3)).unwrap_or(0))
+        .saturating_add(if v.truncated { 12 } else { 0 });
+    let rule = if commander {
+        super::elide_middle(&v.rule, area.width.saturating_sub(reserved))
+    } else {
+        v.rule.clone()
+    };
+    let line = rule_line(area.width, &rule, v.truncated, v.filter);
     buf.set_string(area.x, area.y, line, style);
 }
 
@@ -284,12 +301,12 @@ fn rule_line(width: u16, rule: &str, truncated: bool, filter: Option<&str>) -> S
     }
     left.push(' ');
     let right = filter.map(|f| format!(" /{f} ")).unwrap_or_default();
-    let left_w = width_of(&left).min(width);
-    let right_w = width_of(&right).min(width.saturating_sub(left_w));
+    let right_w = width_of(&right).min(width);
+    let left_w = width_of(&left).min(width.saturating_sub(right_w));
     let fill = width.saturating_sub(left_w + right_w);
     let mut out = fit(&left, left_w);
     out.push_str(&"\u{2500}".repeat(usize::from(fill)));
-    out.push_str(&right);
+    out.push_str(&fit(&right, right_w));
     out
 }
 
@@ -322,6 +339,7 @@ const TIME_W: u16 = 12;
 const GAP: u16 = 2;
 
 struct Cols {
+    show_size: bool,
     show_ext: bool,
     show_time: bool,
     mark_w: u16,
@@ -331,6 +349,7 @@ struct Cols {
 fn columns(width: u16) -> Cols {
     let show_ext = width >= 70;
     let show_time = width >= 50;
+    let show_size = width >= 36;
     // The mark column is always there, blank until something is marked. A
     // column that appeared with the first mark moved every name two cells to
     // the right, which read as the whole list jumping.
@@ -339,11 +358,14 @@ fn columns(width: u16) -> Cols {
     if show_ext {
         fixed += EXT_W + GAP;
     }
-    fixed += SIZE_W + GAP;
+    if show_size {
+        fixed += SIZE_W + GAP;
+    }
     if show_time {
         fixed += TIME_W + GAP;
     }
     Cols {
+        show_size,
         show_ext,
         show_time,
         mark_w,
@@ -490,14 +512,16 @@ fn render_row(
         x += EXT_W;
     }
 
-    x += GAP;
-    buf.set_string(
-        x,
-        y,
-        fit_right(&row.size, SIZE_W),
-        style_for(t.fold.size_fg),
-    );
-    x += SIZE_W;
+    if cols.show_size {
+        x += GAP;
+        buf.set_string(
+            x,
+            y,
+            fit_right(&row.size, SIZE_W),
+            style_for(t.fold.size_fg),
+        );
+        x += SIZE_W;
+    }
 
     if cols.show_time {
         x += GAP;
@@ -740,6 +764,27 @@ mod tests {
         assert!(line.contains("(truncated)"));
         assert!(line.contains("/car"));
         assert_eq!(width_of(&line), 50);
+    }
+
+    #[test]
+    fn commander_keeps_the_end_of_a_long_directory_visible() {
+        let t = theme("terminal");
+        let mut v = view(&t, &[], &[]);
+        v.rule = "/mnt/server/company/archive/photos".into();
+        let area = Rect::new(0, 0, 28, 1);
+        let mut buf = Buffer::empty(area);
+        render_rule(area, &mut buf, &t, &v, true);
+        let line = dump(&buf, area);
+        assert!(line.contains("photos"), "{line}");
+        assert!(line.contains('…'), "{line}");
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn long_paths_and_filters_stay_inside_the_pane(width in 0u16..100, path in ".*", filter in ".*") {
+            let line = rule_line(width, &path, true, Some(&filter));
+            proptest::prop_assert!(width_of(&line) <= width);
+        }
     }
 
     /// The listing's scroll position shows as a run of `█` on the panel's

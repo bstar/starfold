@@ -1,0 +1,25 @@
+---
+source: src/ui/frames.rs
+expression: floor
+---
+╔═ S T A R / F O L D — ›LEFT ╗╔═ RIGHT ════════ commander ═╗
+║     bookmark  places  view ║║     bookmark  places  view ║
+║─ ~/pictures ───────────────║║─ ~ ────────────────────────║
+║    harbour.png             ║║    empty/                  ║
+║                            ║║    pictures/               ║
+║                            ║║    projects/               ║
+║                            ║║    blob.bin                ║
+║                            ║║    dangling                ║
+║                            ║║    notes.txt               ║
+║                            ║║                            ║
+║                            ║║                            ║
+╚════════════════════════════╝╚════════════════════════════╝
+╔═ PREVIEW — harbour.png ══════════════════════════════════╗
+║                                                    close ║
+║                                        png · 64 × 48 · 1x║
+╚══════════════════════════════════════════════════════════╝
+╔═ OPERATIONS ═════════════════════════════════════════════╗
+║                                               run  clear ║
+║                      nothing queued                      ║
+╚══════════════════════════════════════════════════════════╝
+? help  / filter  space mark  enter open  y  ~/pictures  off

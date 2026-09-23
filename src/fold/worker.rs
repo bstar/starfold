@@ -18,6 +18,7 @@ use super::handle::{Event, EventSink, Note};
 use super::listing::{self, Listing};
 use super::ops::progress::Progress;
 use super::ops::{self, ConflictPolicy, OpId, OpKind, Outcome, Plan};
+use super::places::{self, Bookmark, Location};
 use super::preview::{self, Preview};
 use super::state::{self, Change, State};
 use super::summary::{self, Budget, DirSummary};
@@ -47,6 +48,33 @@ pub struct Senders {
 }
 
 impl Senders {
+    /// Places edits must report queue saturation rather than appearing saved.
+    pub fn dispatch_checked(&self, job: Job, state: &Arc<RwLock<State>>, events: &EventSink) {
+        if !matches!(
+            job,
+            Job::SaveBookmarks { .. } | Job::LoadPlaces(_) | Job::RefreshPlaces
+        ) {
+            self.dispatch(job);
+            return;
+        }
+        if let Err(error) = self.io.try_send(job) {
+            let message = "Places worker is busy or unavailable; retry the action".to_string();
+            let done = match error.into_inner() {
+                Job::SaveBookmarks { revision, .. } => Done::BookmarksSaved {
+                    revision,
+                    result: Err(message),
+                },
+                Job::LoadPlaces(path) => Done::PlacesLoaded {
+                    path,
+                    bookmarks: Err(message.clone()),
+                    locations: Err(message),
+                },
+                Job::RefreshPlaces => Done::PlacesRefreshed(Err(message)),
+                _ => unreachable!(),
+            };
+            finish(done, state, events, self);
+        }
+    }
     /// Send `job` to whichever worker owns its kind of work.
     pub fn dispatch(&self, job: Job) {
         let sender = match &job {
@@ -69,6 +97,13 @@ impl Senders {
 /// rather than overwriting the newer one.
 #[derive(Debug, Clone)]
 pub enum Job {
+    LoadPlaces(PathBuf),
+    RefreshPlaces,
+    SaveBookmarks {
+        path: PathBuf,
+        bookmarks: Vec<Bookmark>,
+        revision: u64,
+    },
     List(PathBuf),
     Summarize(PathBuf),
     Preview {
@@ -105,6 +140,16 @@ pub enum Job {
 /// notification would be a second writer.
 #[derive(Debug, Clone)]
 pub enum Done {
+    PlacesLoaded {
+        path: PathBuf,
+        bookmarks: Result<Vec<Bookmark>, String>,
+        locations: Result<Vec<Location>, String>,
+    },
+    PlacesRefreshed(Result<Vec<Location>, String>),
+    BookmarksSaved {
+        revision: u64,
+        result: Result<(), String>,
+    },
     Listed(Listing),
     Summarized {
         dir: PathBuf,
@@ -177,7 +222,7 @@ pub fn finish(done: Done, state: &Arc<RwLock<State>>, events: &EventSink, sender
         state::apply(&mut s, Change::Done(done))
     };
     for job in effects.jobs {
-        senders.dispatch(job);
+        senders.dispatch_checked(job, state, events);
     }
     for event in effects.events {
         events.send(event);
@@ -211,6 +256,20 @@ pub fn perform_io(
     cancel: &AtomicBool,
 ) -> IoOutcome {
     match job {
+        Job::LoadPlaces(path) => IoOutcome::Done(Done::PlacesLoaded {
+            bookmarks: places::load_bookmarks(&path),
+            locations: places::discover_locations(),
+            path,
+        }),
+        Job::RefreshPlaces => IoOutcome::Done(Done::PlacesRefreshed(places::discover_locations())),
+        Job::SaveBookmarks {
+            path,
+            bookmarks,
+            revision,
+        } => IoOutcome::Done(Done::BookmarksSaved {
+            revision,
+            result: places::save_bookmarks(&path, &bookmarks),
+        }),
         Job::List(dir) => {
             let listing = listing::read(&dir, &cfg.list);
             IoOutcome::Done(Done::Listed(listing))
@@ -287,9 +346,14 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
         }
         // Not ops work: `spawn_ops`'s loop forwards everything else before
         // this is called.
-        Job::List(_) | Job::Summarize(_) | Job::Preview { .. } | Job::Open(_) | Job::Shutdown => {
-            None
-        }
+        Job::LoadPlaces(_)
+        | Job::RefreshPlaces
+        | Job::SaveBookmarks { .. }
+        | Job::List(_)
+        | Job::Summarize(_)
+        | Job::Preview { .. }
+        | Job::Open(_)
+        | Job::Shutdown => None,
     }
 }
 
@@ -402,6 +466,41 @@ mod tests {
     #[test]
     fn the_poll_interval_is_one_second() {
         assert_eq!(POLL, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_saturated_worker_reports_bookmark_save_failure() {
+        let (io, _io_rx) = crossbeam_channel::bounded(0);
+        let (ops, _ops_rx) = crossbeam_channel::bounded(1);
+        let senders = Senders { io, ops };
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let events = EventSink::new(event_tx, Arc::new(AtomicU64::new(0)));
+        let state = Arc::new(RwLock::new(State::new(
+            &FoldConfig::default(),
+            "/".into(),
+            "/".into(),
+            true,
+        )));
+        senders.dispatch_checked(
+            Job::SaveBookmarks {
+                path: "/unused/bookmarks.toml".into(),
+                bookmarks: vec![],
+                revision: 0,
+            },
+            &state,
+            &events,
+        );
+        assert!(state
+            .read()
+            .unwrap()
+            .places
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("retry"));
+        assert!(event_rx
+            .try_iter()
+            .any(|event| matches!(event, Event::Note(_))));
     }
 
     #[test]

@@ -51,6 +51,7 @@ tracing = "0.1"
 
 # Config and the session file on disk.
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.9"
 
 # The channels between the window and the two worker threads. The UI loop is
@@ -80,6 +81,9 @@ nucleo-matcher = "0.3"
 # evidence is the name, so the guess is made from the extension and falls back
 # to `application/octet-stream`.
 mime_guess = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 # Anything that parses foreign input gets a property test, and so does every

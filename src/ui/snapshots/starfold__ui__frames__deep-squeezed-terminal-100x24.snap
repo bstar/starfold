@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: "render(&mut app, 100, 24)"
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
-║                                                                          ‹  hidden  sort  filter ║
+║                                                  ‹  hidden  sort  filter  bookmark  places  view ║
 ║▸ ~                                                                                        6 items║
 ║▸ projects/                                                                                 1 item║
 ║─ starwire/ ── 2 files · 2 dirs · 336 B ──────────────────────────────────────────────────────────║

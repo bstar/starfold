@@ -6,6 +6,9 @@
 //! and is declared when it does.
 
 pub mod app;
+mod audio_graphics;
+#[cfg(test)]
+mod commander_tests;
 #[cfg(test)]
 pub mod fake;
 #[cfg(test)]
@@ -14,6 +17,7 @@ pub mod keymap;
 pub mod layout;
 pub mod overlays;
 pub mod panels;
+pub mod places;
 pub mod status;
 pub mod theme;
 
@@ -25,6 +29,7 @@ pub mod theme;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Bar {
     Stack,
+    Commander(usize),
     Preview,
     Operations,
     Conflict,

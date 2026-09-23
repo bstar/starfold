@@ -15,6 +15,14 @@ everywhere. While the filter has focus, every `alt+…` falls through
 it and so does `?`, so help and the appearance and panel keys stay reachable
 mid-search; `esc` and `enter` are always the way out.
 
+In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
+the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
+`m` queue files from the active pane into the opposite directory, using
+current-directory marks or the highlighted file. `v` switches views, `b`
+opens Places, and `B` bookmarks the current directory. In Places, type to
+search, use arrows and `enter` to open a location, `F2` to rename a bookmark,
+`delete` to remove one after confirmation, and `F5` to rescan mounts.
+
 ## navigation
 
 _everywhere_
@@ -44,7 +52,7 @@ _in the stack_
 | key | what it does |
 |---|---|
 | `l/right`      | into the directory |
-| `h/left/bs`    | back one level |
+| `h/left/bs`    | parent directory |
 | `alt+up`       | jump to the parent |
 | `alt+down`     | jump back down |
 | `gh`           | the home directory |
@@ -92,6 +100,9 @@ _everywhere_
 
 | key | what it does |
 |---|---|
+| `v`            | fold / commander |
+| `b`            | places |
+| `B`            | bookmark directory |
 | `i`            | show, fold preview |
 | `.`            | hidden files |
 | `s`            | next sort key |
@@ -119,6 +130,19 @@ _everywhere_
 | `q/ctrl+c`     | quit |
 
 ## The mouse
+
+While an embedded STAR/AMP player has Preview focus (`alt+2`), `space` or
+`enter` pauses/resumes, `[` / `]` selects the previous/next track, left/right
+seeks five seconds, and `+` / `-` changes volume. `x` or `esc` stops the player
+and restores ordinary previews; `i` closes Preview and stops playback. `o`
+toggles graphical/text transport buttons; `shift+o` opens the playing track
+externally. On newer STAR/AMP, `w` / `shift+w` cycles visualizers forward/back
+and `d` cycles seek-bar styles; these choices persist separately for STAR/FOLD.
+These controls are scoped to Preview;
+browser navigation, marking, global focus shortcuts, and quit keep their
+normal meanings. The player's transport, seek, and volume controls are also
+clickable. Left-click a visualizer to cycle it; right-click a visualizer or
+seek bar to cycle the seek style; wheel over a visualizer cycles it.
 
 | where | gesture | what it does |
 |---|---|---|

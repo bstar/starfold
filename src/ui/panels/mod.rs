@@ -88,6 +88,9 @@ impl ModuleId {
 /// A word on a module's header row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Word {
+    View,
+    Places,
+    Bookmark,
     /// `‹`: back one level, on the STACK module -- where a browser keeps it.
     Back,
     Hidden,
@@ -101,6 +104,9 @@ pub enum Word {
 impl header::Word for Word {
     fn word(self) -> Cow<'static, str> {
         match self {
+            Word::View => "view".into(),
+            Word::Places => "places".into(),
+            Word::Bookmark => "bookmark".into(),
             Word::Back => "\u{2039}".into(),
             Word::Hidden => "hidden".into(),
             Word::Sort => "sort".into(),
@@ -116,7 +122,15 @@ impl header::Word for Word {
 /// narrows.
 pub fn words(module: ModuleId) -> Vec<Word> {
     match module {
-        ModuleId::Stack => vec![Word::Back, Word::Hidden, Word::Sort, Word::Filter],
+        ModuleId::Stack => vec![
+            Word::Back,
+            Word::Hidden,
+            Word::Sort,
+            Word::Filter,
+            Word::Bookmark,
+            Word::Places,
+            Word::View,
+        ],
         ModuleId::Preview => vec![Word::Close],
         ModuleId::Operations => vec![Word::Run, Word::Clear],
     }
@@ -243,7 +257,16 @@ mod tests {
             for w in words(m) {
                 let allowed = match m {
                     ModuleId::Stack => {
-                        matches!(w, Word::Back | Word::Hidden | Word::Sort | Word::Filter)
+                        matches!(
+                            w,
+                            Word::Back
+                                | Word::Hidden
+                                | Word::Sort
+                                | Word::Filter
+                                | Word::View
+                                | Word::Places
+                                | Word::Bookmark
+                        )
                     }
                     ModuleId::Preview => matches!(w, Word::Close),
                     ModuleId::Operations => matches!(w, Word::Run | Word::Clear),

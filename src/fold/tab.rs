@@ -1,11 +1,8 @@
 //! Tabs, and the forked stacks inside one.
 //!
-//! Milestone 1 is one tab with one stack, but the shape is here from day one
-//! so that a later milestone's tabs and forked stacks are new behaviour over
-//! an unchanged type rather than a rewrite of [`State`](super::state::State).
-//! `Tabs { tabs: Vec<Tab { stacks: Vec<Stack> }> }`, exactly as the plan
-//! draws it: a tab is a group of stacks, and only one of either is active at
-//! a time.
+//! One tab owns Fold's stack at index 0 and, once opened, Commander's left
+//! and right stacks at indices 1 and 2. Only one stack receives commands at
+//! a time; Commander renders both of its stacks. Multiple tabs remain reserved.
 
 use super::stack::Stack;
 
@@ -22,7 +19,7 @@ pub struct StackId(pub u64);
 pub struct Tab {
     pub id: TabId,
     pub stacks: Vec<Stack>,
-    active_stack: usize,
+    pub active_stack: usize,
 }
 
 impl Tab {

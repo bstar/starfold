@@ -64,16 +64,22 @@ rest of it.
   the queue, and a delete goes to the trash where the platform has one.
 - **A preview panel.** Text, an image drawn with real pixels where the
   terminal supports it, a directory summary, or a hexdump for anything else.
-- **One column, sixteen themes.** The same chrome and the same theme engine
-  as the rest of the STAR family, so a theme set in one looks the same in
-  another. The mouse works everywhere the keyboard does.
+  Open an audio track to play it here using a separately installed,
+  embedding-compatible STAR/AMP; without it, the existing opener still works.
+- **Commander view and Places.** Press `v` for two independently browsable
+  panes. `b` opens searchable bookmarks, mounted devices, network locations,
+  Home and Root; `B` bookmarks the current directory.
+- **Sixteen themes.** The same chrome and theme engine as the rest of the STAR
+  family, so a theme set in one looks the same in another. The mouse works
+  everywhere the keyboard does.
 - **Linux and macOS.** x86_64 and aarch64 on Linux, Apple Silicon on macOS.
 
 ## What it does not do yet
 
 Tabs, forked stacks, archives and an action palette are on the plan but not in
-this milestone. The stack's own data model already leaves room for tabs and
-for more than one stack; they are just not wired up to anything yet.
+this milestone. Commander uses two independent directory panes alongside the
+Fold stack; mounting, ejecting and network login remain jobs for the operating
+system.
 
 ## Read more
 

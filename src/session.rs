@@ -16,8 +16,18 @@ use crate::fold::sort::SortOrder;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Session {
+    /// The Fold stack's directory. Kept under its original key so sessions
+    /// written before Commander existed still restore normally.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_dir: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commander: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commander_left: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commander_right: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commander_active: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_hidden: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,6 +71,10 @@ mod tests {
 
         let session = Session {
             last_dir: Some(PathBuf::from("/home/bob/projects")),
+            commander: Some(true),
+            commander_left: Some(PathBuf::from("/media/bob/usb")),
+            commander_right: Some(PathBuf::from("/mnt/share")),
+            commander_active: Some(1),
             show_hidden: Some(true),
             sort: Some(SortOrder::default()),
         };
@@ -75,6 +89,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let session = load(&dir.path().join("nothing.toml"));
         assert_eq!(session, Session::default());
+    }
+
+    #[test]
+    fn an_old_session_defaults_to_fold_without_commander_locations() {
+        let old = "last_dir = '/home/bob/projects'\nshow_hidden = true\n";
+        let session: Session = toml::from_str(old).unwrap();
+        assert_eq!(session.last_dir, Some(PathBuf::from("/home/bob/projects")));
+        assert_eq!(session.commander, None);
+        assert_eq!(session.commander_left, None);
+        assert_eq!(session.commander_right, None);
+        assert_eq!(session.commander_active, None);
     }
 
     #[test]

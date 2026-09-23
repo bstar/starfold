@@ -7,8 +7,8 @@ grouped by what you are trying to do.
 
 - [Installing](installing.md): Nix, AppImage, `.deb`, tarball, Arch, macOS, and
   from source.
-- [The stack](the-stack.md): how the fold stack, the marks and the operations
-  queue fit together.
+- [The stack](the-stack.md): Fold and Commander views, Places, marks and the
+  operations queue.
 - [Keys and mouse](keys-and-mouse.md): every binding and gesture, per module.
 - [Configuration](configuration.md): every setting, the themes, and where the
   files live.

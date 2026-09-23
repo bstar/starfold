@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: "render(&mut app, 100, 30)"
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
-║         ╔═ KEYS ═══════════════════════════════════════════════════════════════════════╗  filter ║
+║         ╔═ KEYS ═══════════════════════════════════════════════════════════════════════╗es  view ║
 ║─ ~ ── 3 ║  navigation                         stack                                    ║─────────║
 ║    empty║  tab           next module          click                move the cursor     ║ 10      ║
 ║    pictu║  shift+tab     previous module      double-click         open it             ║ 10      ║
@@ -22,7 +22,7 @@ expression: "render(&mut app, 100, 30)"
 ╔═ PREVIEW║  esc           cancel                                                        ║═════════╗
 ║         ║  stack                                                                       ║   close ║
 ║         ║  l/right       into the directory                                            ║         ║
-║         ║  h/left/bs     back one level                                                ║         ║
+║         ║  h/left/bs     parent directory                                              ║         ║
 ║         ║  alt+up        jump to the parent                                            ║         ║
 ║         ║  alt+down      jump back down                                                ║         ║
 ║         ║  gh            the home directory                                            ║         ║

@@ -48,6 +48,23 @@ use starkit::ratatui::layout::Rect;
 
 use super::panels::{ModuleId, COLUMN};
 
+/// Shared geometry for drawing and hit-testing Commander's two file panes.
+pub fn pane_rect(area: Rect, pane: usize) -> Rect {
+    let left = area.width / 2;
+    if pane == 0 {
+        Rect {
+            width: left,
+            ..area
+        }
+    } else {
+        Rect {
+            x: area.x + left,
+            width: area.width - left,
+            ..area
+        }
+    }
+}
+
 /// Below this the layout is not drawn at all.
 ///
 /// Sixty columns is the narrowest a row of metadata beside a file name is
@@ -108,6 +125,9 @@ pub struct LayoutState {
     /// independently, so this is its own flag rather than an `Option` shared
     /// with anything else.
     pub preview_open: bool,
+    /// An embedded player reserves ten body rows when possible, five at
+    /// the terminal floor, temporarily borrowing rows from the file list.
+    pub audio_active: bool,
     /// `[ui] preview_rows`: how far PREVIEW grows when it is open but not
     /// focused.
     pub preview_rows: u16,
@@ -128,6 +148,7 @@ impl LayoutState {
         Self {
             focus: ModuleId::Stack,
             preview_open: true,
+            audio_active: false,
             preview_rows,
             ops_rows,
             fold_rows,
@@ -165,7 +186,8 @@ impl LayoutState {
         // Everyone at their floor is the baseline; `room` is how much taller
         // than that the body is. The `MIN_ROWS` check above guarantees this
         // does not underflow.
-        let room = body.height - STACK_MIN_ROWS - 2 * COLLAPSED_ROWS;
+        let stack_min = if self.audio_active { 8 } else { STACK_MIN_ROWS };
+        let room = body.height - stack_min - 2 * COLLAPSED_ROWS;
 
         // OPERATIONS only grows while focused, and then it is served first:
         // focusing it is asking to see the queue, and a queue that could not
@@ -177,13 +199,16 @@ impl LayoutState {
         } else {
             0
         };
-        let ops_extra = ops_desired.min(room);
+        let audio_reserved = if self.audio_active { room.min(9) } else { 0 };
+        let ops_extra = ops_desired.min(room - audio_reserved);
 
         // PREVIEW takes what it asked for, but never more than half the room
         // while the stack has focus: at thirty rows the room is nine, and a
         // preview of ten pinned the listing to its seven-row floor, which
         // made a roomy terminal feel like the smallest one allowed.
-        let preview_desired = if !self.preview_open {
+        let preview_desired = if self.audio_active {
+            9 // 13 outer rows: border + header + ten-row player body.
+        } else if !self.preview_open {
             0
         } else if self.focus == ModuleId::Preview {
             // Up to half the body while focused, not capped by
@@ -198,7 +223,7 @@ impl LayoutState {
         let stack_extra = room - preview_extra - ops_extra;
 
         let height = |m: ModuleId| match m {
-            ModuleId::Stack => STACK_MIN_ROWS + stack_extra,
+            ModuleId::Stack => stack_min + stack_extra,
             ModuleId::Preview => COLLAPSED_ROWS + preview_extra,
             ModuleId::Operations => COLLAPSED_ROWS + ops_extra,
         };
@@ -560,6 +585,25 @@ mod tests {
             None,
             "the status is not a module"
         );
+    }
+
+    #[test]
+    fn audio_reserves_compact_or_full_body_without_hiding_browser() {
+        let mut s = state();
+        s.audio_active = true;
+        for focus in COLUMN {
+            s.focus_set(focus);
+            for (height, body_height) in [(21, 5), (26, 10), (40, 10)] {
+                let r = s.regions(Rect::new(0, 0, 60, height), (0, 0), 100).unwrap();
+                assert_eq!(
+                    header::body(r.rect_of(ModuleId::Preview)).height,
+                    body_height
+                );
+                assert!(r.rect_of(ModuleId::Stack).height >= 8);
+                assert!(r.rect_of(ModuleId::Operations).height >= COLLAPSED_ROWS);
+                assert_eq!(r.status.bottom(), height);
+            }
+        }
     }
 
     /// What the state's invariants are, stated once: focus is always one of

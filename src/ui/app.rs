@@ -61,14 +61,15 @@ use starkit::ratatui_image::Image;
 use starkit::term::{self, Tui};
 
 use super::keymap::{self, Action};
-use super::layout::{self, LayoutState, Regions};
+use super::layout::{self, pane_rect, LayoutState, Regions};
 use super::overlays::confirm::Confirm;
 use super::overlays::{conflict, Answer, Overlay, Overlays, Pending};
 use super::panels::{self, ModuleId};
 use super::status;
 use super::theme::{self, Theme};
 use super::{Bar, Bars};
-use crate::config::{Config, Scale};
+use crate::audio_embed::{self, Client as AudioClient, Presentation};
+use crate::config::{AudioButtons, Config, Scale};
 use crate::fold::entry::{Entry, EntryKind};
 use crate::fold::handle::{Command, Event, Handle, NoteLevel};
 use crate::fold::ops::{Op, OpId, OpKind, OpStatus};
@@ -77,6 +78,9 @@ use crate::fold::selection::Selection;
 use crate::fold::sort::SortOrder;
 use crate::fold::stack::FrameId;
 use crate::session;
+
+#[cfg(test)]
+mod audio_tests;
 
 /// One frame. Thirty per second is the same ceiling STAR/CORD settled on.
 pub const FRAME: Duration = Duration::from_millis(33);
@@ -129,7 +133,7 @@ pub struct ViewData {
     pub show_hidden: bool,
     pub sort: SortOrder,
     /// The active frame's id, for [`App::scroll`]'s per-frame scroll map.
-    pub frame_id: FrameId,
+    pub frame_id: (usize, FrameId),
 }
 
 impl ViewData {
@@ -158,7 +162,7 @@ impl ViewData {
             trash_available: false,
             show_hidden: false,
             sort: SortOrder::default(),
-            frame_id: FrameId(0),
+            frame_id: (0, FrameId(0)),
         }
     }
 }
@@ -177,7 +181,69 @@ struct Scaled {
     image: Arc<RgbaImage>,
 }
 
+struct PaneView {
+    dir: PathBuf,
+    key: (usize, FrameId),
+    rows: Vec<panels::stack::Row>,
+    cursor: usize,
+    filter: String,
+    loading: bool,
+    error: Option<String>,
+    truncated: bool,
+}
+
+fn place_items(state: &crate::fold::State) -> Vec<super::places::PlaceItem> {
+    use super::places::{PlaceGroup, PlaceItem};
+    use crate::fold::places::LocationKind;
+    let mut items: Vec<_> = state
+        .places
+        .bookmarks
+        .iter()
+        .map(|b| PlaceItem {
+            group: PlaceGroup::Bookmarks,
+            name: b.name.clone(),
+            path: b.path.clone(),
+        })
+        .collect();
+    items.extend(state.places.locations.iter().map(|l| PlaceItem {
+        group: match l.kind {
+            LocationKind::Device => PlaceGroup::Devices,
+            LocationKind::Volume => PlaceGroup::Volumes,
+            LocationKind::Network => PlaceGroup::Network,
+        },
+        name: l.name.clone(),
+        path: l.path.clone(),
+    }));
+    items.extend([
+        PlaceItem {
+            group: PlaceGroup::Standard,
+            name: "Home".into(),
+            path: state.home.clone(),
+        },
+        PlaceItem {
+            group: PlaceGroup::Standard,
+            name: "Root".into(),
+            path: PathBuf::from("/"),
+        },
+    ]);
+    items
+}
+
 pub struct App {
+    audio: AudioClient,
+    audio_path: Option<PathBuf>,
+    audio_error: Option<String>,
+    audio_frame: Option<audio_embed::Frame>,
+    audio_presentation: Option<Presentation>,
+    audio_generation: u64,
+    audio_activation: u64,
+    audio_focus_origin: Option<(PathBuf, usize, bool)>,
+    audio_graphics: super::audio_graphics::AudioGraphics,
+    audio_cell_size: Option<(u16, u16)>,
+    commander: bool,
+    active_pane: usize,
+    panes: Vec<PaneView>,
+    places: Option<super::places::Places>,
     core: Handle,
     cfg: Config,
     cfg_path: PathBuf,
@@ -199,7 +265,7 @@ pub struct App {
     seen_version: u64,
     /// Per-frame list scroll, keyed by `FrameId` so a level's scroll survives
     /// backing out and returning to it.
-    scroll: HashMap<FrameId, usize>,
+    scroll: HashMap<(usize, FrameId), usize>,
     preview_scroll: usize,
     ops_cursor: usize,
     ops_scroll: usize,
@@ -240,6 +306,400 @@ pub struct App {
 }
 
 impl App {
+    /// Capture the current filtered/sorted listing, never a filesystem rescan.
+    fn activate_entry(&mut self) {
+        let state = self.core.state();
+        let Some(entry) = state.cursor_entry() else {
+            return;
+        };
+        if !self.cfg.preview.audio_player.embeds(&self.cfg.open.command)
+            || !(entry.kind == EntryKind::File || entry.link_kind == Some(EntryKind::File))
+            || self.audio.supports(&entry.path) == Some(false)
+        {
+            drop(state);
+            self.core.send(Command::Enter);
+            return;
+        }
+        let path = entry.path.clone();
+        let candidates = audio_candidates(&state);
+        drop(state);
+        self.audio_generation = self.audio_generation.wrapping_add(1);
+        self.audio_activation = self.audio_generation;
+        self.audio_focus_origin = Some((path.clone(), self.active_pane, self.commander));
+        self.audio_path = Some(path.clone());
+        self.audio_error = None;
+        self.audio_frame = None;
+        self.audio_presentation = None;
+        self.audio_graphics.clear(&mut self.graphics);
+        self.layout.audio_active = true;
+        self.layout.preview_open = true;
+        self.forget_picture();
+        let presentation = self.audio_presentation_for(Rect::new(0, 0, 58, 5));
+        if let Err(error) = self.audio.activate(path, candidates, presentation) {
+            self.audio_error = Some(error);
+        }
+        self.repaint = true;
+    }
+
+    fn stop_audio(&mut self) {
+        if let Err(error) = self.audio.stop() {
+            self.note = Some((error, NoteLevel::Error, Instant::now()));
+        }
+        self.audio_generation = self.audio_generation.wrapping_add(1);
+        self.audio_activation = self.audio_generation;
+        self.audio_focus_origin = None;
+        self.audio_graphics.clear(&mut self.graphics);
+        self.audio_path = None;
+        self.audio_frame = None;
+        self.audio_error = None;
+        self.audio_presentation = None;
+        self.layout.audio_active = false;
+        self.last_preview_for = None;
+        self.repaint = true;
+    }
+
+    fn audio_presentation_for(&self, body: Rect) -> Presentation {
+        let rgb = |c: starkit::theme::color::Rgb| [c.r, c.g, c.b];
+        Presentation {
+            generation: self.audio_generation,
+            width: body.width,
+            height: body.height,
+            focused: self.layout.focus() == ModuleId::Preview,
+            graphics: self.audio_graphics_config(),
+            theme: audio_embed::Palette {
+                bg: rgb(self.theme.panel_bg),
+                fg: rgb(self.theme.panel_fg),
+                muted: rgb(self.theme.dim),
+                accent: rgb(self.theme.accent),
+                selected: rgb(self.theme.row_selected_bg),
+                border: rgb(self.theme.border),
+                error: rgb(self.theme.error),
+            },
+        }
+    }
+
+    fn audio_graphics_config(&self) -> Option<audio_embed::GraphicsConfig> {
+        if self.cfg.preview.audio_buttons != AudioButtons::Auto
+            || !self.audio.transport_images_available()
+            || !self.graphics.pictures_available()
+        {
+            return None;
+        }
+        let (cell_width, cell_height) = self.audio_cell_size?;
+        if !(1..=64).contains(&cell_width) || !(1..=128).contains(&cell_height) {
+            return None;
+        }
+        Some(audio_embed::GraphicsConfig {
+            cell_width,
+            cell_height,
+        })
+    }
+
+    fn toggle_audio_buttons(&mut self) {
+        let next = self.cfg.preview.audio_buttons.next();
+        self.cfg.preview.audio_buttons = next;
+        self.audio_graphics.clear(&mut self.graphics);
+        self.audio_frame = None;
+        self.audio_presentation = None;
+        let message = match next {
+            AudioButtons::Text => "STAR/AMP buttons: text",
+            AudioButtons::Auto if !self.audio.transport_images_available() => {
+                "STAR/AMP buttons: auto; update STAR/AMP for graphical controls"
+            }
+            AudioButtons::Auto if self.audio_graphics_config().is_none() => {
+                "STAR/AMP buttons: auto; this terminal uses text fallback"
+            }
+            AudioButtons::Auto => "STAR/AMP buttons: pictures",
+        };
+        if let Err(error) = starkit::config::edit::set(
+            &self.cfg_path,
+            "preview",
+            "audio_buttons",
+            &starkit::config::edit::Value::Str(next.name().to_owned()),
+        ) {
+            self.note = Some((
+                format!("{message}; could not save preference: {error}"),
+                NoteLevel::Warning,
+                Instant::now(),
+            ));
+        } else {
+            self.note = Some((message.into(), NoteLevel::Info, Instant::now()));
+        }
+        self.repaint = true;
+    }
+
+    fn poll_audio(&mut self) {
+        for event in self.audio.take_events() {
+            match event {
+                audio_embed::Event::Accepted { generation }
+                    if generation == self.audio_activation =>
+                {
+                    if let Some((path, pane, commander)) = self.audio_focus_origin.take() {
+                        let still_at_track = self
+                            .core
+                            .state()
+                            .cursor_entry()
+                            .is_some_and(|entry| entry.path == path);
+                        if self.layout.focus() == ModuleId::Stack
+                            && self.active_pane == pane
+                            && self.commander == commander
+                            && still_at_track
+                        {
+                            self.layout.focus_set(ModuleId::Preview);
+                            self.repaint = true;
+                        }
+                    }
+                }
+                audio_embed::Event::Fallback {
+                    generation,
+                    path,
+                    reason,
+                } if generation == self.audio_activation => {
+                    self.stop_audio();
+                    self.core.send(Command::OpenExternal(path));
+                    self.note = Some((reason, NoteLevel::Info, Instant::now()));
+                }
+                audio_embed::Event::Error {
+                    generation,
+                    message,
+                } if generation == self.audio_activation => {
+                    self.audio_error = Some(message);
+                    self.audio_frame = None;
+                }
+                audio_embed::Event::Notice {
+                    generation,
+                    message,
+                } if generation == self.audio_activation => {
+                    self.note = Some((message, NoteLevel::Warning, Instant::now()));
+                    self.repaint = true;
+                }
+                audio_embed::Event::Stopped { generation }
+                    if generation == self.audio_activation =>
+                {
+                    self.stop_audio()
+                }
+                audio_embed::Event::Status { generation, status }
+                    if generation == self.audio_activation =>
+                {
+                    if let Some(path) = status.path {
+                        self.audio_path = Some(path);
+                    }
+                    if status.playing {
+                        self.audio_error = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(frame) = self.audio.take_frame() {
+            if self.audio_path.is_some() && frame.generation == self.audio_generation {
+                self.audio_frame = Some(frame);
+            }
+        }
+    }
+
+    fn audio_key(&mut self, key: KeyEvent) -> bool {
+        use starkit::crossterm::event::KeyModifiers;
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            return false;
+        }
+        if matches!(key.code, KeyCode::Char('w' | 'W' | 'd'))
+            && !self.audio.player_styles_available()
+        {
+            self.note = Some((
+                "Update STAR/AMP for visualizer and seek styles".into(),
+                NoteLevel::Info,
+                Instant::now(),
+            ));
+            self.repaint = true;
+            return true;
+        }
+        let (action, value) = match key.code {
+            KeyCode::Char('o') => {
+                self.toggle_audio_buttons();
+                return true;
+            }
+            KeyCode::Char('O') => {
+                self.act(Action::OpenExternal);
+                return true;
+            }
+            KeyCode::Char('w') => ("next_visualizer", None),
+            KeyCode::Char('W') => ("prev_visualizer", None),
+            KeyCode::Char('d') => ("next_seek_style", None),
+            KeyCode::Char(' ') | KeyCode::Enter => ("toggle_pause", None),
+            KeyCode::Char('[') => ("prev", None),
+            KeyCode::Char(']') => ("next", None),
+            KeyCode::Left => ("seek_by", Some(-5.0)),
+            KeyCode::Right => ("seek_by", Some(5.0)),
+            KeyCode::Char('+') | KeyCode::Char('=') => ("volume_by", Some(0.05)),
+            KeyCode::Char('-') => ("volume_by", Some(-0.05)),
+            KeyCode::Char('x') | KeyCode::Esc => {
+                self.stop_audio();
+                return true;
+            }
+            _ => return false,
+        };
+        if let Err(error) = self.audio.control(action, value) {
+            self.audio_error = Some(error);
+        }
+        true
+    }
+
+    fn draw_audio(&mut self, area: Rect, buf: &mut Buffer) {
+        use starkit::chrome::frame;
+        let words = panels::words(ModuleId::Preview);
+        frame::frame(
+            area,
+            buf,
+            &frame::Frame {
+                theme: &self.theme,
+                focused: self.layout.focus() == ModuleId::Preview,
+                title: "Preview",
+                detail: Some("S T A R / A M P · embed"),
+                heading: true,
+                badge: None,
+                footer: None,
+                words: &words,
+            },
+        );
+        let body = audio_body(area);
+        let mut presentation = self.audio_presentation_for(body);
+        if self.audio_presentation.as_ref() != Some(&presentation) {
+            self.audio_generation = self.audio_generation.wrapping_add(1);
+            presentation.generation = self.audio_generation;
+            self.audio_frame = None;
+            self.audio_graphics.clear(&mut self.graphics);
+            if let Err(error) = self.audio.configure(presentation.clone()) {
+                self.audio_error = Some(error);
+            }
+            self.audio_presentation = Some(presentation);
+        }
+        if let Some(error) = &self.audio_error {
+            self.audio_graphics.clear(&mut self.graphics);
+            let text =
+                format!("STAR/AMP: {error}\n\nO external open · o buttons · x stop · i close");
+            starkit::ratatui::widgets::Paragraph::new(text)
+                .style(Style::default().fg(panels::rgb(self.theme.error)))
+                .wrap(starkit::ratatui::widgets::Wrap { trim: true })
+                .render(body, buf);
+            return;
+        }
+        let Some(frame) = &self.audio_frame else {
+            panels::empty(body, buf, &self.theme, "starting STAR/AMP…");
+            return;
+        };
+        if frame.width != body.width || frame.height != body.height {
+            return;
+        }
+        for (index, cell) in frame.cells.iter().enumerate() {
+            if body.width == 0 {
+                break;
+            }
+            let x = index % usize::from(body.width);
+            let y = index / usize::from(body.width);
+            if y >= usize::from(body.height) {
+                break;
+            }
+            let rgb = |c: [u8; 3]| starkit::ratatui::style::Color::Rgb(c[0], c[1], c[2]);
+            buf[(body.x + x as u16, body.y + y as u16)]
+                .set_symbol(&cell.symbol)
+                .set_style(
+                    Style::default()
+                        .fg(rgb(cell.fg))
+                        .bg(rgb(cell.bg))
+                        .add_modifier(Modifier::from_bits_truncate(cell.modifiers)),
+                );
+        }
+        if self.audio_graphics_config().is_some()
+            && !self.overlays.is_open()
+            && self.places.is_none()
+        {
+            self.audio_graphics
+                .draw(&frame.images, body, &mut self.graphics, buf);
+        } else {
+            self.audio_graphics.clear(&mut self.graphics);
+        }
+    }
+
+    fn open_places(&mut self, bookmark: bool) {
+        let mut places = super::places::Places::new(place_items(&self.core.state()));
+        if bookmark {
+            let path = self.view.active_dir.clone();
+            let name = self
+                .core
+                .state()
+                .places
+                .bookmarks
+                .iter()
+                .find(|bookmark| bookmark.path == path)
+                .map(|bookmark| bookmark.name.clone())
+                .unwrap_or_else(|| display_name(&path));
+            places.begin_bookmark(path, name);
+        }
+        self.places = Some(places);
+        self.core.send(Command::RefreshPlaces);
+        self.repaint = true;
+    }
+
+    fn place_action(&mut self, action: super::places::PlaceAction) {
+        use super::places::PlaceAction;
+        match action {
+            PlaceAction::Consumed => {}
+            PlaceAction::Quit => {
+                self.places = None;
+                self.act(Action::Quit);
+            }
+            PlaceAction::Close => self.places = None,
+            PlaceAction::Open(path) => {
+                self.core.send(Command::Push(path));
+                self.layout.focus_set(ModuleId::Stack);
+                self.places = None;
+            }
+            PlaceAction::SaveBookmark { path, name } => {
+                self.core.send(Command::SaveBookmark { path, name })
+            }
+            PlaceAction::RenameBookmark { path, name } => {
+                self.core.send(Command::RenameBookmark { path, name })
+            }
+            PlaceAction::RemoveBookmark(path) => self.core.send(Command::RemoveBookmark(path)),
+            PlaceAction::Refresh => self.core.send(Command::RefreshPlaces),
+        }
+        self.repaint = true;
+    }
+
+    fn focus_pane(&mut self, pane: usize) {
+        self.filter = None;
+        self.core.send(Command::FocusPane(pane));
+        self.layout.focus_set(ModuleId::Stack);
+        self.last_preview_for = None;
+        self.refresh();
+    }
+
+    fn pane_view(&self, pane: usize) -> panels::stack::View<'_> {
+        let p = &self.panes[pane];
+        panels::stack::View {
+            theme: &self.theme,
+            focused: self.layout.focus() == ModuleId::Stack && pane == self.active_pane,
+            crumbs: &[],
+            rule: home_relative(&p.dir, &self.view.home),
+            rows: &p.rows,
+            cursor: p.cursor,
+            scroll: self.scroll.get(&p.key).copied().unwrap_or(0),
+            fold_rows: 0,
+            loading: p.loading,
+            filter: if p.filter.is_empty() {
+                None
+            } else {
+                Some(&p.filter)
+            },
+            error: p.error.as_deref(),
+            truncated: p.truncated,
+        }
+    }
+
     /// Build the window. Never touches the terminal -- see [`Self::run`],
     /// which is the only thing that does.
     pub fn new(
@@ -247,13 +707,28 @@ impl App {
         cfg: Config,
         cfg_path: PathBuf,
         session_path: Option<PathBuf>,
-        graphics: Graphics,
+        mut graphics: Graphics,
     ) -> Self {
         let (theme, _reason) = theme::registry().resolve_named(&cfg.ui.theme);
         let theme_name = cfg.ui.theme.clone();
         let layout = LayoutState::new(cfg.ui.preview_rows, cfg.ui.ops_rows, cfg.ui.fold_rows);
+        let audio_cell_size = transport_cell_size(&mut graphics);
 
         let mut app = Self {
+            audio: AudioClient::new(),
+            audio_path: None,
+            audio_error: None,
+            audio_frame: None,
+            audio_presentation: None,
+            audio_generation: 0,
+            audio_activation: 0,
+            audio_focus_origin: None,
+            audio_graphics: super::audio_graphics::AudioGraphics::default(),
+            audio_cell_size,
+            commander: false,
+            active_pane: 0,
+            panes: Vec::new(),
+            places: None,
             core,
             cfg,
             cfg_path,
@@ -285,6 +760,9 @@ impl App {
             picture_ids: Vec::new(),
             now_override: None,
         };
+        app.core.send(Command::LoadPlaces(
+            app.cfg_path.with_file_name("bookmarks.toml"),
+        ));
         app.refresh();
         app
     }
@@ -307,13 +785,23 @@ impl App {
 
         let mut term = term::init()?;
         let result = app.event_loop(&mut term);
+        app.stop_audio();
         term::restore()?;
 
         if let Some(path) = app.session_path.clone() {
             let session = session::Session {
-                last_dir: Some(app.view.active_dir.clone()),
+                last_dir: Some(
+                    app.core.state().tabs.active().stacks[0]
+                        .active()
+                        .dir
+                        .clone(),
+                ),
                 show_hidden: Some(app.view.show_hidden),
                 sort: Some(app.view.sort),
+                commander: Some(app.commander),
+                commander_left: app.panes.first().map(|p| p.dir.clone()),
+                commander_right: app.panes.get(1).map(|p| p.dir.clone()),
+                commander_active: Some(app.active_pane),
             };
             if let Err(e) = session.save(&path) {
                 tracing::warn!("could not save the session: {e}");
@@ -342,6 +830,8 @@ impl App {
                     // cell size any built protocol was sized for.
                     TermEvent::Resize(..) => {
                         self.graphics.remeasure();
+                        self.audio_cell_size = transport_cell_size(&mut self.graphics);
+                        self.audio_graphics.clear(&mut self.graphics);
                         self.repaint = true;
                     }
                     TermEvent::Paste(text) => {
@@ -376,10 +866,14 @@ impl App {
         }
         self.refresh();
 
+        self.poll_audio();
+
         // The preview follows the cursor: a change of entry (or the panel
         // opening on one it had not asked for yet) is what re-sends
         // `Command::Preview`, not every frame.
-        if self.layout.is_open(ModuleId::Preview) && self.view.cursor_path != self.last_preview_for
+        if self.audio_path.is_none()
+            && self.layout.is_open(ModuleId::Preview)
+            && self.view.cursor_path != self.last_preview_for
         {
             self.last_preview_for = self.view.cursor_path.clone();
             if let Some(path) = self.last_preview_for.clone() {
@@ -433,6 +927,40 @@ impl App {
             .collect();
 
         let now = self.now_override.unwrap_or_else(std::time::SystemTime::now);
+        self.commander = state.commander;
+        self.active_pane = state.commander_pane;
+        self.panes = state
+            .tabs
+            .active()
+            .stacks
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(index, stack)| {
+                let frame = stack.active();
+                let listing = state.listing_of(&frame.dir);
+                PaneView {
+                    dir: frame.dir.clone(),
+                    key: (index, frame.id),
+                    rows: state
+                        .rows(frame)
+                        .into_iter()
+                        .map(|entry| {
+                            build_row(entry, state.selection_for_stack(index), &self.tz, now)
+                        })
+                        .collect(),
+                    cursor: frame.cursor,
+                    filter: frame.filter.clone(),
+                    loading: frame.loading,
+                    error: listing.and_then(|l| l.error.clone()),
+                    truncated: listing.is_some_and(|l| l.truncated),
+                }
+            })
+            .collect();
+        if let Some(places) = &mut self.places {
+            places.set_items(place_items(&state));
+            places.set_status(state.places.loading, state.places.error.clone());
+        }
         let rows: Vec<panels::stack::Row> = state
             .rows(active)
             .into_iter()
@@ -456,7 +984,9 @@ impl App {
         // empty directory, one still loading -- whatever was built last is
         // for something else, and showing it would say the wrong thing.
         let (preview_name, preview) = match (&state.preview, state.cursor_entry()) {
-            (Some((path, p)), Some(_)) => (Some(display_name(path)), Some(Arc::clone(p))),
+            (Some((path, p)), Some(entry)) if path == &entry.path => {
+                (Some(display_name(path)), Some(Arc::clone(p)))
+            }
             _ => (None, None),
         };
 
@@ -501,7 +1031,7 @@ impl App {
             trash_available: state.trash_available,
             show_hidden: state.show_hidden,
             sort: state.sort,
-            frame_id: active.id,
+            frame_id: (state.tabs.active().active_stack, active.id),
         };
         drop(state);
         if picture_changed {
@@ -526,10 +1056,22 @@ impl App {
         };
 
         let stack_rect = regions.rect_of(ModuleId::Stack);
-        let list_rows =
-            panels::stack::visible_rows(stack_rect, self.view.crumbs.len(), self.layout.fold_rows);
-        let entry = self.scroll.entry(self.view.frame_id).or_insert(0);
-        *entry = starkit::list::clamp_scroll(self.view.cursor, *entry, list_rows);
+        if !self.commander {
+            let list_rows = panels::stack::visible_rows(
+                stack_rect,
+                self.view.crumbs.len(),
+                self.layout.fold_rows,
+            );
+            let entry = self.scroll.entry(self.view.frame_id).or_insert(0);
+            *entry = starkit::list::clamp_scroll(self.view.cursor, *entry, list_rows);
+        }
+        if self.commander {
+            for (i, pane) in self.panes.iter().enumerate() {
+                let rows = panels::stack::visible_rows(pane_rect(stack_rect, i), 0, 0);
+                let scroll = self.scroll.entry(pane.key).or_insert(0);
+                *scroll = starkit::list::clamp_scroll(pane.cursor, *scroll, rows);
+            }
+        }
 
         if let Some(preview) = &self.view.preview {
             let preview_rect = regions.rect_of(ModuleId::Preview);
@@ -549,6 +1091,21 @@ impl App {
     // -- keys -------------------------------------------------------------
 
     pub fn key(&mut self, k: KeyEvent) {
+        self.refresh();
+        if self.places.is_some()
+            && k.code == KeyCode::Char('c')
+            && k.modifiers
+                .contains(starkit::crossterm::event::KeyModifiers::CONTROL)
+        {
+            self.places = None;
+            self.act(Action::Quit);
+            return;
+        }
+        if let Some(places) = &mut self.places {
+            let action = places.handle(k);
+            self.place_action(action);
+            return;
+        }
         if self.overlays.is_open() {
             let answer = self.overlays.handle(k);
             self.after_overlay_answer(answer);
@@ -584,6 +1141,12 @@ impl App {
             if let Some(action) = keymap::g_prefix(k) {
                 self.act(action);
             }
+            return;
+        }
+        if self.audio_path.is_some()
+            && self.layout.focus() == ModuleId::Preview
+            && self.audio_key(k)
+        {
             return;
         }
         if k.modifiers.is_empty() && k.code == KeyCode::Char('g') {
@@ -630,6 +1193,15 @@ impl App {
     /// One action -- the single place a key or a click becomes a change.
     fn act(&mut self, a: Action) {
         match a {
+            Action::ToggleView => {
+                self.filter = None;
+                self.core.send(Command::ToggleView);
+                self.layout.focus_set(ModuleId::Stack);
+                self.last_preview_for = None;
+                self.refresh();
+            }
+            Action::Places => self.open_places(false),
+            Action::Bookmark => self.open_places(true),
             Action::CursorUp => self.move_focused(-1),
             Action::CursorDown => self.move_focused(1),
             Action::CursorUpBig => self.move_focused(-10),
@@ -651,7 +1223,7 @@ impl App {
             // a future change to the table should not silently start
             // skipping the confirm `RunOp`/`RunQueue` already asks for.
             Action::Activate => match self.layout.focus() {
-                ModuleId::Stack => self.core.send(Command::Enter),
+                ModuleId::Stack => self.activate_entry(),
                 ModuleId::Operations => self.core.send(Command::Run),
                 ModuleId::Preview => {}
             },
@@ -662,13 +1234,16 @@ impl App {
                 }
             }
 
+            Action::FocusNext | Action::FocusPrev if self.commander => {
+                self.focus_pane(1 - self.active_pane);
+            }
             Action::FocusNext => self.layout.focus_next(),
             Action::FocusPrev => self.layout.focus_prev(),
             Action::FocusStack => self.layout.focus_set(ModuleId::Stack),
             Action::FocusPreview => self.layout.focus_set(ModuleId::Preview),
             Action::FocusOperations => self.layout.focus_set(ModuleId::Operations),
 
-            Action::Enter => self.core.send(Command::Enter),
+            Action::Enter => self.activate_entry(),
             Action::Pop => self.core.send(Command::Back),
             Action::JumpUp => {
                 let target = self.view.crumbs.len().saturating_sub(1);
@@ -678,7 +1253,14 @@ impl App {
             Action::GoHome => self.core.send(Command::Push(self.view.home.clone())),
             Action::GoRoot => self.core.send(Command::Push(PathBuf::from("/"))),
             Action::OpenExternal => {
-                if let Some(path) = self.view.cursor_path.clone() {
+                let path = if self.layout.focus() == ModuleId::Preview {
+                    self.audio_path
+                        .clone()
+                        .or_else(|| self.view.cursor_path.clone())
+                } else {
+                    self.view.cursor_path.clone()
+                };
+                if let Some(path) = path {
                     self.core.send(Command::OpenExternal(path));
                 }
             }
@@ -719,7 +1301,12 @@ impl App {
                 }
             }
 
-            Action::TogglePreview => self.layout.toggle_preview(),
+            Action::TogglePreview => {
+                if self.layout.is_open(ModuleId::Preview) {
+                    self.stop_audio();
+                }
+                self.layout.toggle_preview();
+            }
             Action::ToggleHidden => self.core.send(Command::SetHidden(!self.view.show_hidden)),
             Action::NextSortKey => {
                 let mut sort = self.view.sort;
@@ -805,6 +1392,11 @@ impl App {
             return 10;
         };
         let rows = match self.layout.focus() {
+            ModuleId::Stack if self.commander => panels::stack::visible_rows(
+                pane_rect(regions.rect_of(ModuleId::Stack), self.active_pane),
+                0,
+                0,
+            ),
             ModuleId::Stack => panels::stack::visible_rows(
                 regions.rect_of(ModuleId::Stack),
                 self.view.crumbs.len(),
@@ -974,6 +1566,24 @@ impl App {
         let Some(regions) = self.layout.last.clone() else {
             return;
         };
+        if let Some(places) = &mut self.places {
+            let action = match m.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    places.click(m.column, m.row, regions.area)
+                }
+                MouseEventKind::ScrollDown => {
+                    places.scroll(true);
+                    super::places::PlaceAction::Consumed
+                }
+                MouseEventKind::ScrollUp => {
+                    places.scroll(false);
+                    super::places::PlaceAction::Consumed
+                }
+                _ => super::places::PlaceAction::Consumed,
+            };
+            self.place_action(action);
+            return;
+        }
 
         // Every scrollbar's own drag, ahead of both the overlay dispatch and
         // the module one below -- a press or a drag that lands on a bar is
@@ -1012,6 +1622,80 @@ impl App {
             return;
         }
 
+        if self.audio_path.is_some() && regions.hit(m.column, m.row) == Some(ModuleId::Preview) {
+            let rect = regions.rect_of(ModuleId::Preview);
+            let body = audio_body(rect);
+            if m.column >= body.x
+                && m.column < body.right()
+                && m.row >= body.y
+                && m.row < body.bottom()
+            {
+                let button = match m.kind {
+                    MouseEventKind::Down(MouseButton::Left) => Some("left"),
+                    MouseEventKind::Down(MouseButton::Right)
+                        if self.audio.player_styles_available() =>
+                    {
+                        Some("right")
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => Some("drag"),
+                    MouseEventKind::ScrollUp => Some("scroll_up"),
+                    MouseEventKind::ScrollDown => Some("scroll_down"),
+                    _ => None,
+                };
+                if let Some(button) = button {
+                    self.layout.focus_set(ModuleId::Preview);
+                    if let Err(error) =
+                        self.audio
+                            .pointer(m.column - body.x, m.row - body.y, button)
+                    {
+                        self.audio_error = Some(error);
+                    }
+                }
+                return;
+            }
+        }
+
+        if self.commander && regions.hit(m.column, m.row) == Some(ModuleId::Stack) {
+            let area = regions.rect_of(ModuleId::Stack);
+            let pane = usize::from(m.column >= area.x + area.width / 2);
+            let rect = pane_rect(area, pane);
+            match m.kind {
+                MouseEventKind::Down(button) => {
+                    self.focus_pane(pane);
+                    if button == MouseButton::Left {
+                        if let Some(word) =
+                            header::hit(rect, &panels::words(ModuleId::Stack), m.column, m.row)
+                        {
+                            self.word_click(word);
+                            return;
+                        }
+                    }
+                    if let Some(panels::stack::Hit::Row(row)) =
+                        panels::stack::hit(rect, &self.pane_view(pane), m.column, m.row)
+                    {
+                        self.core.send(Command::CursorTo(row));
+                        if button == MouseButton::Right {
+                            self.core.send(Command::ToggleMark);
+                        } else if button == MouseButton::Left && self.clicks.click(m.column, m.row)
+                        {
+                            self.activate_entry();
+                        }
+                    }
+                }
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                    self.focus_pane(pane);
+                    self.core
+                        .send(Command::CursorBy(if m.kind == MouseEventKind::ScrollDown {
+                            3
+                        } else {
+                            -3
+                        }));
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => self.click(&regions, m.column, m.row),
             MouseEventKind::Down(MouseButton::Right) => self.right_click(&regions, m.column, m.row),
@@ -1040,6 +1724,19 @@ impl App {
     fn scroll_bar_to(&mut self, bar: Bar, above: u32) {
         let above = above as usize;
         match bar {
+            Bar::Commander(pane) => {
+                self.focus_pane(pane);
+                let p = &self.panes[pane];
+                let height = self.bars.track_of(bar).map(|r| r.height).unwrap_or(0);
+                let cursor = starkit::list::cursor_into_view(
+                    p.cursor,
+                    above,
+                    usize::from(height),
+                    p.rows.len(),
+                );
+                self.scroll.insert(p.key, above);
+                self.core.send(Command::CursorTo(cursor));
+            }
             Bar::Preview => {
                 // `clamp_scrolls` only ever caps this to its max, so a value
                 // the drag already kept in range survives it untouched.
@@ -1121,7 +1818,7 @@ impl App {
                     Some(panels::stack::Hit::Row(i)) => {
                         self.core.send(Command::CursorTo(i));
                         if double {
-                            self.core.send(Command::Enter);
+                            self.activate_entry();
                         }
                     }
                     None => {}
@@ -1173,6 +1870,9 @@ impl App {
 
     fn word_click(&mut self, word: panels::Word) {
         match word {
+            panels::Word::View => self.act(Action::ToggleView),
+            panels::Word::Places => self.act(Action::Places),
+            panels::Word::Bookmark => self.act(Action::Bookmark),
             panels::Word::Back => self.core.send(Command::Back),
             panels::Word::Hidden => self.core.send(Command::SetHidden(!self.view.show_hidden)),
             panels::Word::Sort => {
@@ -1183,7 +1883,7 @@ impl App {
             panels::Word::Filter => self.act(Action::Filter),
             panels::Word::Run => self.try_run(),
             panels::Word::Clear => self.act(Action::ClearQueue),
-            panels::Word::Close => self.layout.toggle_preview(),
+            panels::Word::Close => self.act(Action::TogglePreview),
         }
     }
 
@@ -1229,6 +1929,17 @@ impl App {
                 ("d", "delete"),
             ],
             ModuleId::Operations => &[("enter", "run"), ("x", "drop"), ("esc", "clear")],
+            ModuleId::Preview if self.audio_path.is_some() => &[
+                ("space", "pause"),
+                ("[/]", "track"),
+                ("←/→", "seek"),
+                ("+/-", "volume"),
+                ("x", "stop"),
+                ("o", "buttons"),
+                ("w/W", "visualizer"),
+                ("d", "seek style"),
+                ("O", "external"),
+            ],
             ModuleId::Preview => &[("j/k", "scroll"), ("i", "fold"), ("z", "scale")],
         };
         status::View {
@@ -1270,12 +1981,37 @@ impl App {
 
         let focus = self.layout.focus();
 
-        {
+        if self.commander {
+            for pane in 0..self.panes.len() {
+                let rect = pane_rect(regions.rect_of(ModuleId::Stack), pane);
+                let view = self.pane_view(pane);
+                panels::stack::render_named(
+                    rect,
+                    buf,
+                    &view,
+                    &mut bars,
+                    match (pane, pane == self.active_pane) {
+                        (0, _) => panels::HEADING,
+                        (_, true) => "› RIGHT",
+                        (_, false) => "RIGHT",
+                    },
+                    (pane == 0).then_some(if pane == self.active_pane {
+                        "›LEFT"
+                    } else {
+                        "LEFT"
+                    }),
+                    Bar::Commander(pane),
+                );
+            }
+        } else {
             let sv = self.stack_view();
             panels::stack::render(regions.rect_of(ModuleId::Stack), buf, &sv, &mut bars);
         }
 
-        let placement = {
+        let placement = if self.audio_path.is_some() {
+            self.draw_audio(regions.rect_of(ModuleId::Preview), buf);
+            None
+        } else {
             let mut pv = panels::preview::View {
                 theme: &self.theme,
                 focused: focus == ModuleId::Preview,
@@ -1345,6 +2081,12 @@ impl App {
         }
 
         self.bars = bars;
+        if let Some(places) = &mut self.places {
+            self.bars.begin_frame();
+            if let Some((x, y)) = places.render(regions.area, buf, &self.theme) {
+                reverse_cell(buf, regions.area, x, y);
+            }
+        }
     }
 
     /// Where the live filter text ends on the active level's rule row --
@@ -1352,6 +2094,11 @@ impl App {
     /// itself rather than through a widget that would hand a caret column
     /// back. Close enough for a blinking mark at the right edge of the row.
     fn filter_caret(&self, regions: &Regions) -> Option<(u16, u16)> {
+        if self.commander {
+            let area = pane_rect(regions.rect_of(ModuleId::Stack), self.active_pane);
+            let split = panels::stack::split(header::body(area), 0, 0);
+            return Some((split.rule.right().saturating_sub(2), split.rule.y));
+        }
         let body = header::body(regions.rect_of(ModuleId::Stack));
         let split = panels::stack::split(body, self.view.crumbs.len(), self.layout.fold_rows);
         if split.rule.height == 0 || split.rule.width < 2 {
@@ -1459,6 +2206,42 @@ fn display_name(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+/// Button pictures are independent of the cover-art mode. Measure only at
+/// startup/resize because switching modes invalidates the graphics cache.
+fn transport_cell_size(graphics: &mut Graphics) -> Option<(u16, u16)> {
+    let mode = graphics.mode();
+    if matches!(
+        mode,
+        starkit::graphics::Mode::Off | starkit::graphics::Mode::Blocks
+    ) {
+        graphics.set_mode(starkit::graphics::Mode::Auto);
+        let size = graphics.cell_size();
+        graphics.set_mode(mode);
+        size
+    } else {
+        graphics.cell_size()
+    }
+}
+
+/// Keep the protocol's bounded canvas centered in unusually wide terminals.
+fn audio_body(area: Rect) -> Rect {
+    let mut body = header::body(area);
+    let width = body.width.min(240);
+    body.x += (body.width - width) / 2;
+    body.width = width;
+    body.height = body.height.min(20);
+    body
+}
+
+fn audio_candidates(state: &crate::fold::State) -> Vec<PathBuf> {
+    state
+        .rows(state.active_frame())
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::File || e.link_kind == Some(EntryKind::File))
+        .map(|e| e.path.clone())
+        .collect()
+}
+
 fn build_row(
     entry: &Entry,
     selection: &Selection,
@@ -1563,7 +2346,20 @@ fn op_title(op: &Op, home: &std::path::Path) -> String {
         Some(dest) => {
             let verb = op.title();
             let verb = verb.split(" \u{2192} ").next().unwrap_or(&verb).to_string();
-            format!("{verb} \u{2192} {}", home_relative(dest, home))
+            let source = op
+                .sources
+                .first()
+                .map(|path| home_relative(path, home))
+                .unwrap_or_default();
+            let more = if op.sources.len() > 1 {
+                format!(" +{}", op.sources.len() - 1)
+            } else {
+                String::new()
+            };
+            format!(
+                "{verb}: {source}{more} \u{2192} {}",
+                home_relative(dest, home)
+            )
         }
         None => op.title(),
     }
@@ -1673,6 +2469,79 @@ mod tests {
         fk.pump();
         app.tick();
         assert_eq!(app.view.cursor, before + 1);
+    }
+
+    #[test]
+    fn commander_scroll_and_mouse_focus_are_independent() {
+        let (mut app, fk, _dir) = app();
+        for i in 0..60 {
+            std::fs::write(fk.home().join(format!("file-{i:02}")), b"content").unwrap();
+        }
+        app.core.send(Command::Reload);
+        fk.pump();
+        app.key(key('v'));
+        app.tick();
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        app.key(code(KeyCode::End));
+        app.tick();
+        let left_key = app.panes[0].key;
+        let left_scroll = app.scroll[&left_key];
+        assert!(left_scroll > 0);
+        app.key(code(KeyCode::Tab));
+        app.tick();
+        assert_eq!(app.active_pane, 1);
+        assert_eq!(app.panes[1].cursor, 0);
+        assert_eq!(app.scroll[&app.panes[1].key], 0);
+        assert_eq!(app.scroll[&left_key], left_scroll);
+        app.draw(area, &mut buf);
+        let left = pane_rect(
+            app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack),
+            0,
+        );
+        let list = panels::stack::split(header::body(left), 0, 0).list;
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            list.x + 4,
+            list.y,
+        ));
+        app.tick();
+        assert_eq!(app.active_pane, 0);
+        assert_eq!(fk.state().selection.len(), 1);
+        assert!(fk.state().selection_for_stack(2).is_empty());
+    }
+
+    #[test]
+    fn bookmark_shortcut_preserves_existing_name_and_places_opens_active_pane() {
+        let (mut app, fk, dir) = app();
+        fk.pump();
+        let path = fk.home().to_path_buf();
+        app.core.send(Command::SaveBookmark {
+            path: path.clone(),
+            name: "My home".into(),
+        });
+        fk.pump();
+        app.tick();
+        app.key(key('B'));
+        app.key(code(KeyCode::Enter));
+        fk.pump();
+        app.tick();
+        assert_eq!(
+            crate::fold::places::load_bookmarks(&dir.path().join("bookmarks.toml")).unwrap()[0]
+                .name,
+            "My home"
+        );
+        app.key(code(KeyCode::Esc));
+        app.key(key('v'));
+        app.key(code(KeyCode::Tab));
+        app.place_action(super::super::places::PlaceAction::Open(
+            fk.home().join("pictures"),
+        ));
+        fk.pump();
+        app.tick();
+        assert_eq!(app.panes[0].dir, path);
+        assert_eq!(app.panes[1].dir, fk.home().join("pictures"));
     }
 
     #[test]
@@ -2005,6 +2874,9 @@ mod tests {
                     Just('T'),
                     Just('o'),
                     Just('r'),
+                    Just('v'),
+                    Just('b'),
+                    Just('B'),
                     Just('?'),
                     Just('q'),
                 ]
@@ -2032,6 +2904,13 @@ mod tests {
                         break;
                     }
                     app.key(k);
+                    // Parent navigation can leave the fixture now. Never
+                    // let later random copy/move/delete keys reach real files;
+                    // pure core tests cover climbing beyond the start directory.
+                    if app.core.state().tabs.active().stacks.iter()
+                        .any(|stack| !stack.active().dir.starts_with(fk.home())) {
+                        break;
+                    }
                     fk.pump();
                     app.tick();
                     let mut buf = Buffer::empty(area);

@@ -25,10 +25,11 @@ use super::filter;
 use super::handle::{Command, Event, Note};
 use super::listing::Listing;
 use super::ops::{ConflictPolicy, DeleteHow, OpId, OpKind, OpStatus, Queue};
+use super::places::{self, Bookmark};
 use super::preview::Preview;
 use super::selection::Selection;
 use super::sort::{self, SortOrder};
-use super::stack::{Frame, Stack};
+use super::stack::{Frame, ParentMove, Stack};
 use super::summary::DirSummary;
 use super::tab::Tabs;
 use super::worker::{Done, Job};
@@ -36,6 +37,10 @@ use super::{FoldConfig, TrashMode};
 
 /// The whole of what the program knows, right now.
 pub struct State {
+    pub places: places::PlacesState,
+    pub commander: bool,
+    pub commander_pane: usize,
+    parked_selections: [Selection; 3],
     pub tabs: Tabs,
     /// Every directory read so far, keyed by path. A frame's own listing is
     /// looked up here rather than carried on the frame, so two frames open on
@@ -82,9 +87,20 @@ pub struct State {
 }
 
 impl State {
+    pub fn selection_for_stack(&self, index: usize) -> &Selection {
+        if index == self.tabs.active().active_stack {
+            &self.selection
+        } else {
+            &self.parked_selections[index]
+        }
+    }
     /// One tab, one stack, one frame open on `start`.
     pub fn new(cfg: &FoldConfig, start: PathBuf, home: PathBuf, trash_available: bool) -> Self {
         Self {
+            places: places::PlacesState::default(),
+            commander: false,
+            commander_pane: 0,
+            parked_selections: Default::default(),
             tabs: Tabs::single(Stack::new(start)),
             listings: HashMap::new(),
             selection: Selection::default(),
@@ -210,7 +226,15 @@ pub struct Effects {
 /// question asked twice, and it is cheaper to ask it once here than to have
 /// every arm below decide for itself.
 pub fn apply(state: &mut State, change: Change) -> Effects {
+    let old_stack = state.tabs.active().active_stack;
+    let old_dir = state.active_frame().dir.clone();
     let effects = apply_inner(state, change);
+    if state.commander
+        && old_stack == state.tabs.active().active_stack
+        && old_dir != state.active_frame().dir
+    {
+        state.selection.forget();
+    }
     if !effects.events.is_empty() {
         state.version += 1;
     }
@@ -226,6 +250,94 @@ fn apply_inner(state: &mut State, change: Change) -> Effects {
 
 fn apply_command(state: &mut State, command: Command) -> Effects {
     match command {
+        Command::LoadPlaces(path) => {
+            state.places.requested_path = Some(path.clone());
+            state.places.loading = true;
+            state.places.file_path = None;
+            state.places.bookmarks_error = None;
+            state.places.locations_error = None;
+            state.places.sync_error();
+            Effects {
+                jobs: vec![Job::LoadPlaces(path)],
+                events: vec![Event::Places],
+            }
+        }
+        Command::RefreshPlaces => {
+            if state.places.loading {
+                return Effects::default();
+            }
+            state.places.loading = true;
+            let job = if state.places.file_path.is_none() {
+                state
+                    .places
+                    .requested_path
+                    .clone()
+                    .map(Job::LoadPlaces)
+                    .unwrap_or(Job::RefreshPlaces)
+            } else {
+                Job::RefreshPlaces
+            };
+            Effects {
+                jobs: vec![job],
+                events: vec![Event::Places],
+            }
+        }
+        Command::SaveBookmark { name, path } => cmd_save_bookmark(state, name, path),
+        Command::RenameBookmark { path, name } => cmd_rename_bookmark(state, path, name),
+        Command::RemoveBookmark(path) => cmd_remove_bookmark(state, path),
+        Command::Notify(message) => Effects {
+            events: vec![Event::Note(Note::warning("startup", message))],
+            ..Effects::default()
+        },
+        Command::ToggleView => {
+            if state.tabs.active().stacks.len() == 1 {
+                let dir = state.active_frame().dir.clone();
+                let loading = !state.listings.contains_key(&dir);
+                state
+                    .tabs
+                    .active_mut()
+                    .stacks
+                    .extend([Stack::new(dir.clone()), Stack::new(dir)]);
+                rebuild_all_frames(state);
+                for stack in state.tabs.active_mut().stacks.iter_mut().skip(1) {
+                    stack.active_mut().loading = loading;
+                }
+            }
+            state.commander = !state.commander;
+            switch_stack(
+                state,
+                if state.commander {
+                    state.commander_pane + 1
+                } else {
+                    0
+                },
+            )
+        }
+        Command::FocusPane(pane) => {
+            if !state.commander || pane > 1 {
+                return Effects::default();
+            }
+            state.commander_pane = pane;
+            switch_stack(state, pane + 1)
+        }
+        Command::RestoreCommander {
+            dirs,
+            active,
+            enabled,
+        } => {
+            state.tabs.active_mut().stacks.truncate(1);
+            state
+                .tabs
+                .active_mut()
+                .stacks
+                .extend(dirs.iter().cloned().map(Stack::new));
+            state.commander_pane = active.min(1);
+            state.commander = enabled;
+            let mut effects =
+                switch_stack(state, if enabled { state.commander_pane + 1 } else { 0 });
+            effects.jobs.extend(dirs.into_iter().map(Job::List));
+            effects
+        }
         Command::Enter => cmd_enter(state),
         Command::Back => cmd_back(state),
         Command::JumpTo(index) => cmd_jump_to(state, index),
@@ -260,8 +372,95 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
     }
 }
 
+fn switch_stack(state: &mut State, index: usize) -> Effects {
+    let old = state.tabs.active().active_stack;
+    std::mem::swap(&mut state.selection, &mut state.parked_selections[old]);
+    state.tabs.active_mut().active_stack = index;
+    std::mem::swap(&mut state.selection, &mut state.parked_selections[index]);
+    state.preview_generation += 1;
+    state.preview = None;
+    let jobs = ensure_listed(state);
+    Effects {
+        jobs,
+        events: vec![Event::Stack],
+    }
+}
+
 fn apply_done(state: &mut State, done: Done) -> Effects {
     match done {
+        Done::PlacesLoaded {
+            path,
+            bookmarks,
+            locations,
+        } => {
+            state.places.loading = false;
+            match bookmarks {
+                Ok(bookmarks) => {
+                    state.places.bookmarks = bookmarks;
+                    state.places.file_path = Some(path);
+                    state.places.bookmarks_error = None;
+                }
+                Err(error) => state.places.bookmarks_error = Some(error),
+            }
+            match locations {
+                Ok(locations) => {
+                    state.places.locations = locations;
+                    state.places.locations_error = None;
+                }
+                Err(error) => state.places.locations_error = Some(error),
+            }
+            state.places.sync_error();
+            let mut events = vec![Event::Places];
+            if let Some(error) = &state.places.error {
+                events.push(Event::Note(Note::error("places", error.clone())));
+            }
+            Effects {
+                jobs: vec![],
+                events,
+            }
+        }
+        Done::PlacesRefreshed(result) => {
+            state.places.loading = false;
+            let mut events = vec![Event::Places];
+            match result {
+                Ok(locations) => {
+                    state.places.locations = locations;
+                    state.places.locations_error = None;
+                }
+                Err(error) => {
+                    state.places.locations_error = Some(error.clone());
+                    events.push(Event::Note(Note::error("places", error)));
+                }
+            }
+            state.places.sync_error();
+            Effects {
+                jobs: vec![],
+                events,
+            }
+        }
+        Done::BookmarksSaved { revision, result } => {
+            if revision != state.places.revision {
+                return Effects::default();
+            }
+            match result {
+                Ok(()) => {
+                    state.places.bookmarks_error = None;
+                    state.places.sync_error();
+                    Effects {
+                        jobs: vec![],
+                        events: vec![Event::Places],
+                    }
+                }
+                Err(error) => {
+                    state.places.bookmarks_error = Some(error.clone());
+                    state.places.sync_error();
+                    Effects {
+                        jobs: vec![],
+                        events: vec![Event::Places, Event::Note(Note::error("bookmarks", error))],
+                    }
+                }
+            }
+        }
         Done::Listed(listing) => done_listed(state, listing),
         Done::Summarized { dir, summary } => done_summarized(state, dir, summary),
         Done::Previewed {
@@ -273,6 +472,87 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
         Done::Finished { op, outcome } => done_finished(state, op, outcome),
         Done::Changed(dirs) => done_changed(state, dirs),
     }
+}
+
+fn bookmark_name(name: String) -> Option<String> {
+    let trimmed = name.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn bookmark_error(text: impl Into<String>) -> Effects {
+    Effects {
+        jobs: vec![],
+        events: vec![Event::Note(Note::error("bookmarks", text))],
+    }
+}
+
+fn persist_bookmarks(state: &mut State) -> Effects {
+    let Some(path) = state.places.file_path.clone() else {
+        return bookmark_error("bookmarks have not loaded; cannot save");
+    };
+    state.places.revision += 1;
+    Effects {
+        jobs: vec![Job::SaveBookmarks {
+            path,
+            bookmarks: state.places.bookmarks.clone(),
+            revision: state.places.revision,
+        }],
+        events: vec![Event::Places],
+    }
+}
+
+fn cmd_save_bookmark(state: &mut State, name: String, path: PathBuf) -> Effects {
+    let Some(name) = bookmark_name(name) else {
+        return bookmark_error("bookmark name cannot be empty");
+    };
+    if !path.is_absolute() {
+        return bookmark_error("bookmark path must be absolute");
+    }
+    if state.places.file_path.is_none() {
+        return bookmark_error("bookmarks have not loaded; cannot save");
+    }
+    if let Some(mark) = state
+        .places
+        .bookmarks
+        .iter_mut()
+        .find(|mark| mark.path == path)
+    {
+        mark.name = name;
+    } else {
+        state.places.bookmarks.push(Bookmark { name, path });
+    }
+    persist_bookmarks(state)
+}
+
+fn cmd_rename_bookmark(state: &mut State, path: PathBuf, name: String) -> Effects {
+    let Some(name) = bookmark_name(name) else {
+        return bookmark_error("bookmark name cannot be empty");
+    };
+    if state.places.file_path.is_none() {
+        return bookmark_error("bookmarks have not loaded; cannot save");
+    }
+    let Some(mark) = state
+        .places
+        .bookmarks
+        .iter_mut()
+        .find(|mark| mark.path == path)
+    else {
+        return bookmark_error("bookmark no longer exists");
+    };
+    mark.name = name;
+    persist_bookmarks(state)
+}
+
+fn cmd_remove_bookmark(state: &mut State, path: PathBuf) -> Effects {
+    if state.places.file_path.is_none() {
+        return bookmark_error("bookmarks have not loaded; cannot save");
+    }
+    let previous = state.places.bookmarks.len();
+    state.places.bookmarks.retain(|mark| mark.path != path);
+    if state.places.bookmarks.len() == previous {
+        return bookmark_error("bookmark no longer exists");
+    }
+    persist_bookmarks(state)
 }
 
 // ---------------------------------------------------------------------
@@ -519,8 +799,13 @@ fn push_dir(state: &mut State, dir: PathBuf) -> Effects {
 }
 
 fn cmd_back(state: &mut State) -> Effects {
-    if !state.tabs.active_mut().active_stack_mut().pop() {
+    let Some(movement) = state.tabs.active_mut().active_stack_mut().go_parent() else {
         return Effects::default();
+    };
+    if movement == ParentMove::New {
+        // Another pane may already have listed this parent. A fresh frame
+        // needs those cached rows, with the departed child highlighted.
+        rebuild_active(state, Landing::Refind);
     }
     let jobs = ensure_listed(state);
     evict_unreferenced_listings(state);
@@ -690,11 +975,21 @@ fn cmd_clear_marks(state: &mut State) -> Effects {
 /// list -- an empty selection is a note, not a no-op `Op` sitting in the
 /// panel.
 fn cmd_queue_copy_or_move(state: &mut State, kind: OpKind) -> Effects {
-    let sources: Vec<PathBuf> = state.selection.paths().map(Path::to_path_buf).collect();
+    let mut sources: Vec<PathBuf> = state.selection.paths().map(Path::to_path_buf).collect();
+    if state.commander && sources.is_empty() {
+        sources.extend(state.cursor_entry().map(|entry| entry.path.clone()));
+    }
     if sources.is_empty() {
         return nothing_marked_note();
     }
-    let dest = state.active_frame().dir.clone();
+    let dest = if state.commander {
+        state.tabs.active().stacks[2 - state.commander_pane]
+            .active()
+            .dir
+            .clone()
+    } else {
+        state.active_frame().dir.clone()
+    };
     let id = state
         .queue
         .enqueue(kind, sources, Some(dest), state.conflicts);
@@ -917,7 +1212,7 @@ fn done_listed(state: &mut State, listing: Listing) -> Effects {
             // merely unreadable -- a permission wall still draws a frame for
             // the directory the user is looking at, but a directory that no
             // longer exists cannot be looked at at all.
-            if err.to_lowercase().contains("no such") {
+            if !state.commander && err.to_lowercase().contains("no such") {
                 let popped = state.tabs.active_mut().active_stack_mut().pop();
                 if popped {
                     events.push(Event::Stack);
@@ -937,6 +1232,12 @@ fn done_summarized(state: &mut State, dir: PathBuf, summary: DirSummary) -> Effe
     if state.selection.is_marked(&dir) {
         state.selection.sized(&dir, summary.bytes);
         events.push(Event::Selection);
+    }
+    for selection in &mut state.parked_selections {
+        if selection.is_marked(&dir) {
+            selection.sized(&dir, summary.bytes);
+            events.push(Event::Selection);
+        }
     }
     if let Some((path, preview)) = &state.preview {
         if *path == dir {
@@ -1060,6 +1361,9 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
 
     if !moved_or_deleted.is_empty() {
         state.selection.forget_paths(&moved_or_deleted);
+        for selection in &mut state.parked_selections {
+            selection.forget_paths(&moved_or_deleted);
+        }
         events.push(Event::Selection);
     }
 
@@ -1243,6 +1547,50 @@ mod tests {
         apply(&mut s, Change::Command(Command::Back));
         assert_eq!(s.tabs.active().active_stack().len(), 1);
         assert_eq!(s.active_frame().dir, PathBuf::from("/home"));
+    }
+
+    #[test]
+    fn back_walks_parent_paths_past_the_launch_directory_in_fold() {
+        let mut s = state_at("/a/b");
+        for expected in ["/a", "/"] {
+            assert!(matches!(
+                apply(&mut s, Change::Command(Command::Back))
+                    .events
+                    .as_slice(),
+                [Event::Stack]
+            ));
+            assert_eq!(s.active_frame().dir, PathBuf::from(expected));
+        }
+        assert!(apply(&mut s, Change::Command(Command::Back))
+            .events
+            .is_empty());
+        assert_eq!(s.active_frame().dir, PathBuf::from("/"));
+    }
+
+    #[test]
+    fn back_after_unrelated_jump_uses_the_real_parent_in_commander() {
+        let mut s = state_at("/home");
+        apply(
+            &mut s,
+            Change::Command(Command::RestoreCommander {
+                dirs: [PathBuf::from("/home/a"), PathBuf::from("/network/share")],
+                active: 0,
+                enabled: true,
+            }),
+        );
+        apply(
+            &mut s,
+            Change::Command(Command::Push("/media/usb/work".into())),
+        );
+        apply(&mut s, Change::Command(Command::Back));
+        assert_eq!(s.active_frame().dir, PathBuf::from("/media/usb"));
+        assert_eq!(s.tabs.active().stacks[1].len(), 1);
+        assert_eq!(
+            s.tabs.active().stacks[2].active().dir,
+            PathBuf::from("/network/share")
+        );
+        apply(&mut s, Change::Command(Command::Back));
+        assert_eq!(s.active_frame().dir, PathBuf::from("/media"));
     }
 
     #[test]
