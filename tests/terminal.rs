@@ -12,11 +12,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-struct Running(Child);
+struct Running {
+    child: Child,
+    master: Option<File>,
+}
 impl Drop for Running {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        // BSD terminal teardown can wait for unread output even after SIGKILL.
+        // Closing the controller first also makes failure cleanup bounded.
+        drop(self.master.take());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -58,13 +64,13 @@ fn pty() -> (File, File) {
     (master, slave)
 }
 
-fn frame(master: &mut File, child: &mut Running) -> Vec<u8> {
+fn frame(child: &mut Running) -> Vec<u8> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut output = Vec::new();
     let mut last_output = Instant::now();
     loop {
         let mut bytes = [0; 16384];
-        match master.read(&mut bytes) {
+        match child.master.as_mut().unwrap().read(&mut bytes) {
             Ok(n) => {
                 output.extend_from_slice(&bytes[..n]);
                 last_output = Instant::now();
@@ -86,7 +92,7 @@ fn frame(master: &mut File, child: &mut Running) -> Vec<u8> {
             "Repaint queried the cursor position"
         );
         assert!(
-            child.0.try_wait().unwrap().is_none(),
+            child.child.try_wait().unwrap().is_none(),
             "Exited before drawing: {}",
             String::from_utf8_lossy(&output)
         );
@@ -106,7 +112,7 @@ fn startup_redraw_and_resize_need_no_cursor_position_reply() {
     let files = tmp.path().join("files");
     std::fs::create_dir(&config).unwrap();
     std::fs::create_dir(&files).unwrap();
-    let (mut master, slave) = pty();
+    let (master, slave) = pty();
     let mut command = Command::new(env!("CARGO_BIN_EXE_starfold"));
     command
         .arg(&files)
@@ -139,10 +145,13 @@ fn startup_redraw_and_resize_need_no_cursor_position_reply() {
             Ok(())
         });
     }
-    let mut child = Running(command.spawn().unwrap());
-    frame(&mut master, &mut child);
-    master.write_all(b"\x0c").unwrap(); // Ctrl+L: force a repaint at the same size.
-    frame(&mut master, &mut child);
+    let mut child = Running {
+        child: command.spawn().unwrap(),
+        master: Some(master),
+    };
+    frame(&mut child);
+    child.master.as_mut().unwrap().write_all(b"\x0c").unwrap();
+    frame(&mut child);
     let size = libc::winsize {
         ws_row: 21,
         ws_col: 60,
@@ -151,14 +160,24 @@ fn startup_redraw_and_resize_need_no_cursor_position_reply() {
     };
     // SAFETY: the descriptor is live and size points to a valid winsize.
     assert_eq!(
-        unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+        unsafe {
+            libc::ioctl(
+                child.master.as_ref().unwrap().as_raw_fd(),
+                libc::TIOCSWINSZ,
+                &size,
+            )
+        },
         0
     );
-    frame(&mut master, &mut child);
-    master.write_all(b"q").unwrap();
+    frame(&mut child);
+    child.master.as_mut().unwrap().write_all(b"q").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
+        // macOS drains terminal output during shutdown. Keep consuming the
+        // final screen/restore sequences while waiting for the process to exit.
+        let mut bytes = [0; 16384];
+        let _ = child.master.as_mut().unwrap().read(&mut bytes);
+        if let Some(status) = child.child.try_wait().unwrap() {
             assert!(status.success(), "{status}");
             break;
         }
