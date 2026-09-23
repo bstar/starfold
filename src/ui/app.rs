@@ -38,6 +38,8 @@
 //! `starkit::term::init`'s own doc and `docs/graphics.md`. So it happens in
 //! [`App::run`], before [`starkit::term::init`], never inside [`App::new`].
 
+mod file_actions;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -267,6 +269,7 @@ pub struct App {
     /// backing out and returning to it.
     scroll: HashMap<(usize, FrameId), usize>,
     preview_scroll: usize,
+    pdf_requested: Option<(u64, u32)>,
     ops_cursor: usize,
     ops_scroll: usize,
     /// Every scrollbar the column drew last frame, and the one a press is
@@ -284,6 +287,7 @@ pub struct App {
     /// The path the preview was last asked to build for, so the cursor
     /// moving is what re-asks for one rather than every frame doing it.
     last_preview_for: Option<PathBuf>,
+    last_preview_stamp: Option<(u64, Option<std::time::SystemTime>)>,
     /// The one picture this application has scaled, and what it was scaled
     /// from -- see [`Scaled`].
     scaled: Option<Scaled>,
@@ -748,6 +752,7 @@ impl App {
             seen_version: u64::MAX,
             scroll: HashMap::new(),
             preview_scroll: 0,
+            pdf_requested: None,
             ops_cursor: 0,
             ops_scroll: 0,
             bars: Bars::new(),
@@ -756,6 +761,7 @@ impl App {
             quit: false,
             tz: jiff::tz::TimeZone::system(),
             last_preview_for: None,
+            last_preview_stamp: None,
             scaled: None,
             picture_ids: Vec::new(),
             now_override: None,
@@ -816,7 +822,11 @@ impl App {
             self.tick();
 
             if std::mem::take(&mut self.repaint) {
-                term.clear()?;
+                // Terminal::clear queries the cursor and can time out before
+                // the first frame. Fullscreen resize clears the viewport and
+                // invalidates the back buffer without a terminal round trip,
+                // even when the dimensions have not changed.
+                term.resize(term.size()?.into())?;
             }
             term.draw(|f| {
                 self.draw(f.area(), f.buffer_mut());
@@ -871,10 +881,18 @@ impl App {
         // The preview follows the cursor: a change of entry (or the panel
         // opening on one it had not asked for yet) is what re-sends
         // `Command::Preview`, not every frame.
+        let stamp = self
+            .core
+            .state()
+            .cursor_entry()
+            .map(|e| (e.len, e.modified));
         if self.audio_path.is_none()
             && self.layout.is_open(ModuleId::Preview)
-            && self.view.cursor_path != self.last_preview_for
+            && (self.view.cursor_path != self.last_preview_for || stamp != self.last_preview_stamp)
         {
+            self.last_preview_stamp = stamp;
+            self.preview_scroll = 0;
+            self.pdf_requested = None;
             self.last_preview_for = self.view.cursor_path.clone();
             if let Some(path) = self.last_preview_for.clone() {
                 self.core.send(Command::Preview(path));
@@ -993,6 +1011,36 @@ impl App {
         // The picture on screen is about to be a different picture, or none.
         // Noted here, while both `Arc`s are alive and can be compared, and
         // acted on below once the read guard is gone. See `forget_picture`.
+        if let (Some(Preview::Document(old)), Some(Preview::Document(new))) =
+            (self.view.preview.as_deref(), preview.as_deref())
+        {
+            use crate::fold::preview::model::Content;
+            if let (Content::Pages(a), Content::Pages(b)) = (&old.content, &new.content) {
+                if let (Some(a0), Some(b0)) = (a.first(), b.first()) {
+                    let width = self
+                        .layout
+                        .last
+                        .as_ref()
+                        .map(|r| panels::preview::content_rect(r.rect_of(ModuleId::Preview)).width)
+                        .unwrap_or(80);
+                    let rows = |p: &crate::fold::preview::model::Page| {
+                        panels::preview::page_rows(p, width)
+                    };
+                    if b0.number > a0.number {
+                        self.preview_scroll = self.preview_scroll.saturating_sub(
+                            a.iter().filter(|p| p.number < b0.number).map(rows).sum(),
+                        );
+                    } else if b0.number < a0.number {
+                        self.preview_scroll = self.preview_scroll.saturating_add(
+                            b.iter()
+                                .filter(|p| p.number < a0.number)
+                                .map(rows)
+                                .sum::<usize>(),
+                        );
+                    }
+                }
+            }
+        }
         let picture_changed =
             picture_address(self.view.preview.as_deref()) != picture_address(preview.as_deref());
 
@@ -1075,7 +1123,7 @@ impl App {
 
         if let Some(preview) = &self.view.preview {
             let preview_rect = regions.rect_of(ModuleId::Preview);
-            let body = header::body(preview_rect);
+            let body = panels::preview::content_rect(preview_rect);
             let total = panels::preview::lines(preview, body.width).len();
             let max = total.saturating_sub(usize::from(body.height));
             self.preview_scroll = self.preview_scroll.min(max);
@@ -1112,6 +1160,14 @@ impl App {
             return;
         }
 
+        if k.code == KeyCode::Menu
+            || (k.code == KeyCode::F(10)
+                && k.modifiers
+                    .contains(starkit::crossterm::event::KeyModifiers::SHIFT))
+        {
+            self.open_file_menu(2, 2);
+            return;
+        }
         if let Some(input) = self.filter.as_mut() {
             if keymap::filter_eats(k) {
                 let before = input.text().to_string();
@@ -1162,6 +1218,25 @@ impl App {
 
     fn after_overlay_answer(&mut self, answer: Answer) {
         match answer {
+            Answer::Context(target, action) => self.context_action(target, action),
+            Answer::Operation(r) => {
+                if r.kind == OpKind::Extract && r.sources.len() > 1 {
+                    for source in r.sources {
+                        let folder = crate::fold::archive::destination(&source);
+                        self.core.send(Command::QueueOperation {
+                            kind: r.kind,
+                            sources: vec![source],
+                            dest: Some(r.destination.join(folder.file_name().unwrap_or_default())),
+                        });
+                    }
+                } else {
+                    self.core.send(Command::QueueOperation {
+                        kind: r.kind,
+                        sources: r.sources,
+                        dest: Some(r.destination),
+                    });
+                }
+            }
             Answer::Consumed | Answer::Closed => {}
             Answer::Confirmed(pending) => self.on_confirmed(pending),
             Answer::Renamed { from, to } => {
@@ -1303,6 +1378,8 @@ impl App {
 
             Action::TogglePreview => {
                 if self.layout.is_open(ModuleId::Preview) {
+                    self.core.send(Command::ClosePreview);
+                    self.last_preview_for = None;
                     self.stop_audio();
                 }
                 self.layout.toggle_preview();
@@ -1355,6 +1432,7 @@ impl App {
             ModuleId::Preview => {
                 self.preview_scroll =
                     (self.preview_scroll as i64 + i64::from(delta)).max(0) as usize;
+                self.request_pdf_pages(delta);
             }
             ModuleId::Operations => {
                 let len = self.view.ops.len();
@@ -1675,7 +1753,7 @@ impl App {
                     {
                         self.core.send(Command::CursorTo(row));
                         if button == MouseButton::Right {
-                            self.core.send(Command::ToggleMark);
+                            self.open_file_menu(m.column, m.row);
                         } else if button == MouseButton::Left && self.clicks.click(m.column, m.row)
                         {
                             self.activate_entry();
@@ -1740,7 +1818,9 @@ impl App {
             Bar::Preview => {
                 // `clamp_scrolls` only ever caps this to its max, so a value
                 // the drag already kept in range survives it untouched.
+                let delta = if above < self.preview_scroll { -1 } else { 1 };
                 self.preview_scroll = above;
+                self.request_pdf_pages(delta);
             }
             Bar::Operations => {
                 self.ops_scroll = above;
@@ -1845,7 +1925,7 @@ impl App {
         let v = self.stack_view();
         if let Some(panels::stack::Hit::Row(i)) = panels::stack::hit(rect, &v, x, y) {
             self.core.send(Command::CursorTo(i));
-            self.core.send(Command::ToggleMark);
+            self.open_file_menu(x, y);
         }
     }
 
@@ -1861,6 +1941,7 @@ impl App {
             ModuleId::Preview => {
                 self.preview_scroll =
                     (self.preview_scroll as i64 + i64::from(delta)).max(0) as usize;
+                self.request_pdf_pages(delta);
             }
             ModuleId::Operations => {
                 self.ops_scroll = (self.ops_scroll as i64 + i64::from(delta)).max(0) as usize;
@@ -2371,6 +2452,8 @@ fn running_verb_lower(kind: OpKind) -> &'static str {
         OpKind::Move => "moving",
         OpKind::Delete(_) => "deleting",
         OpKind::Rename => "renaming",
+        OpKind::Compress(_) => "compressing",
+        OpKind::Extract => "extracting",
     }
 }
 
@@ -2380,6 +2463,8 @@ fn running_verb_upper(kind: OpKind) -> &'static str {
         OpKind::Move => "MOVING",
         OpKind::Delete(_) => "DELETING",
         OpKind::Rename => "RENAMING",
+        OpKind::Compress(_) => "COMPRESSING",
+        OpKind::Extract => "EXTRACTING",
     }
 }
 
@@ -2508,6 +2593,12 @@ mod tests {
         ));
         app.tick();
         assert_eq!(app.active_pane, 0);
+        assert_eq!(fk.state().selection.len(), 0);
+        assert!(matches!(app.overlays.current(), Some(Overlay::Context(_))));
+        // Mark/unmark is now an explicit menu action.
+        app.key(code(KeyCode::Down));
+        app.key(code(KeyCode::Down));
+        app.key(code(KeyCode::Enter));
         assert_eq!(fk.state().selection.len(), 1);
         assert!(fk.state().selection_for_stack(2).is_empty());
     }

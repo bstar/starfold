@@ -88,14 +88,26 @@ pub enum Command {
     SetHidden(bool),
     /// Mark or unmark the entry under the cursor, and move down.
     ToggleMark,
+    ToggleMarkPath(PathBuf),
     MarkAll,
     InvertMarks,
     ClearMarks,
+    QueueOperation {
+        kind: super::ops::OpKind,
+        sources: Vec<PathBuf>,
+        dest: Option<PathBuf>,
+    },
+    PreviewPage {
+        path: PathBuf,
+        generation: u64,
+        page: u32,
+    },
     QueueCopyHere,
     QueueMoveHere,
     /// Queue a delete of the marked entries, or the one under the cursor when
     /// nothing is marked.
     QueueDelete,
+    QueueDeleteSources(Vec<PathBuf>),
     QueueRename {
         from: PathBuf,
         to: PathBuf,
@@ -109,6 +121,7 @@ pub enum Command {
     SetPolicy(OpId, ConflictPolicy),
     Cancel(OpId),
     Preview(PathBuf),
+    ClosePreview,
     OpenExternal(PathBuf),
     Shutdown,
 }
@@ -370,6 +383,7 @@ impl Handle {
 
 impl Drop for Handle {
     fn drop(&mut self) {
+        self.send(Command::Shutdown);
         // `try_send`, not a blocking send: if a worker's queue is full it is
         // busy, and closing the channel below stops it once it drains.
         let _ = self.senders.io.try_send(Job::Shutdown);

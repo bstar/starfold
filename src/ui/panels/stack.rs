@@ -501,7 +501,20 @@ fn render_row(
     buf.set_string(
         x,
         y,
-        fit(&row.name, cols.name_w),
+        fit(
+            &format!(
+                "{} {}",
+                match row.kind {
+                    Kind::Dir => "▸",
+                    Kind::Symlink { .. } => "↗",
+                    Kind::Exec => "◆",
+                    _ => crate::fold::file_type::classify(std::path::Path::new(&row.name), &[])
+                        .icon(),
+                },
+                row.name
+            ),
+            cols.name_w,
+        ),
         style_for(kind_fg(t, row.kind)),
     );
     x += cols.name_w;

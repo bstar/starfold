@@ -351,12 +351,71 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::SetSort(order) => cmd_set_sort(state, order),
         Command::SetHidden(hidden) => cmd_set_hidden(state, hidden),
         Command::ToggleMark => cmd_toggle_mark(state),
+        Command::ToggleMarkPath(path) => {
+            let entry = path
+                .parent()
+                .and_then(|dir| state.listing_of(dir))
+                .and_then(|l| l.entries.iter().find(|e| e.path == path))
+                .cloned();
+            let Some(entry) = entry else {
+                return Effects::default();
+            };
+            state.selection.toggle(&entry);
+            let jobs = if entry.kind == EntryKind::Dir && state.selection.is_marked(&path) {
+                vec![Job::Summarize(path)]
+            } else {
+                vec![]
+            };
+            Effects {
+                jobs,
+                events: vec![Event::Selection],
+            }
+        }
         Command::MarkAll => cmd_mark_all(state),
         Command::InvertMarks => cmd_invert_marks(state),
         Command::ClearMarks => cmd_clear_marks(state),
+        Command::QueueOperation {
+            kind,
+            sources,
+            dest,
+        } => {
+            if sources.is_empty() {
+                return Effects::default();
+            }
+            let id = state.queue.enqueue(kind, sources, dest, state.conflicts);
+            Effects {
+                jobs: vec![],
+                events: vec![Event::Queue(id)],
+            }
+        }
+        Command::PreviewPage {
+            path,
+            generation,
+            page,
+        } => {
+            if generation != state.preview_generation
+                || !state.preview.as_ref().is_some_and(|(p, _)| *p == path)
+            {
+                return Effects::default();
+            }
+            if let Some((_, preview)) = &mut state.preview {
+                if let Preview::Document(d) = Arc::make_mut(preview) {
+                    d.notice = Some(format!("Loading pages {page}…"));
+                }
+            }
+            Effects {
+                jobs: vec![Job::PreviewPage {
+                    path,
+                    generation,
+                    page,
+                }],
+                events: vec![Event::Preview],
+            }
+        }
         Command::QueueCopyHere => cmd_queue_copy_or_move(state, OpKind::Copy),
         Command::QueueMoveHere => cmd_queue_copy_or_move(state, OpKind::Move),
         Command::QueueDelete => cmd_queue_delete(state),
+        Command::QueueDeleteSources(sources) => queue_delete_sources(state, sources),
         Command::QueueRename { from, to } => cmd_queue_rename(state, from, to),
         Command::RemoveOp(id) => cmd_remove_op(state, id),
         Command::ClearQueue => cmd_clear_queue(state),
@@ -364,11 +423,24 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::SetPolicy(id, policy) => cmd_set_policy(state, id, policy),
         Command::Cancel(id) => cmd_cancel(state, id),
         Command::Preview(path) => cmd_preview(state, path),
+        Command::ClosePreview => {
+            state.preview_generation += 1;
+            Effects {
+                jobs: vec![Job::ClosePreview],
+                events: vec![],
+            }
+        }
         Command::OpenExternal(path) => Effects {
             jobs: vec![Job::Open(path)],
             events: Vec::new(),
         },
-        Command::Shutdown => Effects::default(),
+        Command::Shutdown => {
+            state.preview_generation += 1;
+            for op in state.queue.iter() {
+                op.progress.cancel();
+            }
+            Effects::default()
+        }
     }
 }
 
@@ -1014,6 +1086,12 @@ fn cmd_queue_delete(state: &mut State) -> Effects {
     if sources.is_empty() {
         return nothing_marked_note();
     }
+    queue_delete_sources(state, sources)
+}
+fn queue_delete_sources(state: &mut State, sources: Vec<PathBuf>) -> Effects {
+    if sources.is_empty() {
+        return Effects::default();
+    }
     let how = if state.trash == TrashMode::Always
         || (state.trash == TrashMode::Auto && state.trash_available)
     {
@@ -1167,12 +1245,15 @@ fn cmd_cancel(state: &mut State, id: OpId) -> Effects {
 
 fn cmd_preview(state: &mut State, path: PathBuf) -> Effects {
     state.preview_generation += 1;
+    let mut loading = super::preview::model::Document::new("Loading preview…");
+    loading.notice = Some("Loading…".into());
+    state.preview = Some((path.clone(), Arc::new(Preview::Document(loading))));
     Effects {
         jobs: vec![Job::Preview {
             path,
             generation: state.preview_generation,
         }],
-        events: Vec::new(),
+        events: vec![Event::Preview],
     }
 }
 
@@ -1239,23 +1320,61 @@ fn done_summarized(state: &mut State, dir: PathBuf, summary: DirSummary) -> Effe
             events.push(Event::Selection);
         }
     }
-    if let Some((path, preview)) = &state.preview {
-        if *path == dir {
-            if let Preview::Dir(_) = preview.as_ref() {
-                state.preview = Some((dir, Arc::new(Preview::Dir(summary))));
-                events.push(Event::Preview);
-            }
-        }
-    }
     Effects {
         jobs: Vec::new(),
         events,
     }
 }
 
-fn done_previewed(state: &mut State, path: PathBuf, generation: u64, preview: Preview) -> Effects {
+fn done_previewed(
+    state: &mut State,
+    path: PathBuf,
+    generation: u64,
+    mut preview: Preview,
+) -> Effects {
     if generation != state.preview_generation {
         return Effects::default();
+    }
+    if let Preview::Document(new) = &mut preview {
+        if let Some((old_path, old)) = &state.preview {
+            if *old_path == path {
+                if let Preview::Document(old) = old.as_ref() {
+                    use super::preview::model::Content;
+                    if matches!(old.content, Content::Pages(_))
+                        && matches!(new.content, Content::Metadata)
+                    {
+                        new.content = old.content.clone();
+                        new.total_pages = old.total_pages;
+                    }
+                    if let (Content::Pages(previous), Content::Pages(incoming)) =
+                        (&old.content, &mut new.content)
+                    {
+                        if previous
+                            .last()
+                            .zip(incoming.first())
+                            .is_some_and(|(a, b)| a.number + 1 == b.number)
+                        {
+                            let mut pages = previous.clone();
+                            pages.append(incoming);
+                            if pages.len() > 24 {
+                                pages.drain(..pages.len() - 24);
+                            }
+                            *incoming = pages;
+                        } else if incoming
+                            .last()
+                            .zip(previous.first())
+                            .is_some_and(|(a, b)| a.number + 1 == b.number)
+                        {
+                            incoming.extend(previous.iter().cloned());
+                            incoming.truncate(24);
+                            new.next_page = incoming.last().and_then(|p| {
+                                (Some(p.number) < new.total_pages).then_some(p.number + 1)
+                            });
+                        }
+                    }
+                }
+            }
+        }
     }
     state.preview = Some((path, Arc::new(preview)));
     Effects {
@@ -1351,6 +1470,11 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
 
         if let Some(dest) = &op.dest {
             touch_dirs.insert(dest.clone());
+            if matches!(op.kind, OpKind::Compress(_) | OpKind::Extract) {
+                if let Some(parent) = dest.parent() {
+                    touch_dirs.insert(parent.to_path_buf());
+                }
+            }
         }
         for src in &op.sources {
             if let Some(parent) = src.parent() {
@@ -1897,6 +2021,37 @@ mod tests {
     }
 
     #[test]
+    fn a_marked_directory_size_does_not_replace_its_tree() {
+        let mut s = state_at("/home");
+        let path = PathBuf::from("/home/folder");
+        apply(&mut s, Change::Command(Command::Preview(path.clone())));
+        apply(
+            &mut s,
+            Change::Done(Done::Previewed {
+                path: path.clone(),
+                generation: 1,
+                preview: Preview::Dir(super::super::preview::directory::Tree {
+                    entries: vec![],
+                    summary: DirSummary::default(),
+                    notice: Some("Tree notice".into()),
+                }),
+            }),
+        );
+        apply(
+            &mut s,
+            Change::Done(Done::Summarized {
+                dir: path,
+                summary: DirSummary {
+                    files: 100,
+                    ..DirSummary::default()
+                },
+            }),
+        );
+        assert!(matches!(s.preview.as_ref().unwrap().1.as_ref(),
+            Preview::Dir(tree) if tree.summary.files == 0 && tree.notice.as_deref() == Some("Tree notice")));
+    }
+
+    #[test]
     fn a_stale_previewed_generation_is_ignored() {
         let mut s = state_at("/home");
         apply(
@@ -1916,7 +2071,10 @@ mod tests {
                 preview: Preview::Empty,
             }),
         );
-        assert!(s.preview.is_none());
+        assert_eq!(s.preview.as_ref().unwrap().0, Path::new("/home/b.txt"));
+        assert!(
+            matches!(s.preview.as_ref().unwrap().1.as_ref(), Preview::Document(d) if d.kind == "Loading preview…")
+        );
         assert!(effects.events.is_empty());
     }
 

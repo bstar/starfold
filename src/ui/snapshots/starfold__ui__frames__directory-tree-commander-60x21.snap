@@ -1,0 +1,25 @@
+---
+source: src/ui/frames.rs
+expression: "render(&mut app, 60, 21)"
+---
+╔═ S T A R / F O L D — ›LEFT ╗╔═ RIGHT ════════ commander ═╗
+║     bookmark  places  view ║║     bookmark  places  view ║
+║─ ~ ────────────────────────║║─ ~ ────────────────────────║
+║    ▸ empty/                ║║    ▸ empty/                ║
+║    ▸ pictures/             ║║    ▸ pictures/             ║
+║    ▸ projects/             ║║    ▸ projects/             ║
+║    ◇ blob.bin              ║║    ◇ blob.bin              ║
+║    ↗ dangling              ║║    ↗ dangling              ║
+║    ↗ notes.txt             ║║    ↗ notes.txt             ║
+║                            ║║                            ║
+║                            ║║                            ║
+╚════════════════════════════╝╚════════════════════════════╝
+╔═ PREVIEW — ▸ projects ═══════════════════════════════════╗
+║                                                    close ║
+║└── ▸ starwire/                                           █
+╚══════════════════════════════════════════════════════════╝
+╔═ OPERATIONS ═════════════════════════════════════════════╗
+║                                               run  clear ║
+║                      nothing queued                      ║
+╚══════════════════════════════════════════════════════════╝
+? help  j/k scroll  i fold  z scale                   ~  off

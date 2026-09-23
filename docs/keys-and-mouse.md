@@ -148,7 +148,7 @@ seek bar to cycle the seek style; wheel over a visualizer cycles it.
 |---|---|---|
 | stack    | click                 | move the cursor |
 | stack    | double-click          | open it |
-| stack    | right-click           | mark it |
+| stack    | right-click           | file actions menu |
 | stack    | click a crumb         | jump there |
 | stack    | wheel                 | scroll three rows |
 | modules  | click a fold          | open it |

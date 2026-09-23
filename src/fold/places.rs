@@ -290,6 +290,7 @@ fn classify_mounts(mounts: Vec<Mount>) -> Vec<Location> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use proptest::prelude::*;
 
     #[test]

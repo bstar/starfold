@@ -71,3 +71,11 @@ unknown-git = "deny"
 # to a tag; it is not published to crates.io because its API is whatever its
 # consumers need and a version on a registry would suggest otherwise.
 allow-git = ["https://github.com/bstar/starkit"]
+
+# Permissive licenses introduced by the pure-Rust BZip2/PPMd backends.
+[[licenses.exceptions]]
+name = "libbz2-rs-sys"
+allow = ["bzip2-1.0.6"]
+[[licenses.exceptions]]
+name = "ppmd-rust"
+allow = ["MIT-0"]

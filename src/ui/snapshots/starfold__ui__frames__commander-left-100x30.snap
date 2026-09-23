@@ -5,12 +5,12 @@ expression: left
 ╔═ S T A R / F O L D — ›LEFT ════════ commander ═╗╔═ RIGHT ════════════════════════════ commander ═╗
 ║   hidden  sort  filter  bookmark  places  view ║║   hidden  sort  filter  bookmark  places  view ║
 ║─ ~/pictures ───────────────────────────────────║║─ ~ ────────────────────────────────────────────║
-║    harbour.png                            482 B║║    empty/                                     -║
-║                                                ║║    pictures/                                  -║
-║                                                ║║    projects/                                  -║
-║                                                ║║    blob.bin                               256 B║
-║                                                ║║    dangling                                 7 B║
-║                                                ║║    notes.txt                               27 B║
+║    ▧ harbour.png                          482 B║║    ▸ empty/                                   -║
+║                                                ║║    ▸ pictures/                                -║
+║                                                ║║    ▸ projects/                                -║
+║                                                ║║    ◇ blob.bin                             256 B║
+║                                                ║║    ↗ dangling                               7 B║
+║                                                ║║    ↗ notes.txt                             27 B║
 ║                                                ║║                                                ║
 ║                                                ║║                                                ║
 ║                                                ║║                                                ║
@@ -19,7 +19,7 @@ expression: left
 ║                                                ║║                                                ║
 ║                                                ║║                                                ║
 ╚════════════════════════════════════════════════╝╚════════════════════════════════════════════════╝
-╔═ PREVIEW — harbour.png ══════════════════════════════════════════════════════════════════════════╗
+╔═ PREVIEW — ▧ harbour.png ════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
 ║                                           ▀▀▀▀▀▀▀▀▀▀▀                                            ║
 ║                                           ▀▀▀▀▀▀▀▀▀▀▀                                            ║

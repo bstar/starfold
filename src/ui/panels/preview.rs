@@ -1,7 +1,7 @@
 //! The preview module: what the entry under the cursor is, before it is
 //! opened.
 //!
-//! Most of this is text -- a head, a hexdump, a directory summary -- and
+//! Most of this is text -- a head, file metadata, a directory summary -- and
 //! [`lines`] is the one function that turns a [`Preview`] into rows of it,
 //! shared between what [`render`] draws and what the app clamps `scroll`
 //! against, so the two can never disagree about how tall a preview is.
@@ -46,8 +46,8 @@ use starkit::ratatui::style::Style;
 
 use super::{empty, fit, rgb, width_of, words, ModuleId};
 use crate::config::Scale;
+use crate::fold::preview::directory::{Entry as TreeEntry, Kind as TreeKind, Tree};
 use crate::fold::preview::Preview;
-use crate::fold::summary::DirSummary;
 use crate::ui::theme::Theme;
 use crate::ui::{Bar, Bars};
 
@@ -276,6 +276,16 @@ pub fn render(
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
     let core: &starkit::theme::Theme = v.theme;
+    let detail = v.name.map(|n| {
+        format!(
+            "{} {n}",
+            match v.preview {
+                Some(Preview::Dir(_)) => "▸",
+                Some(Preview::Symlink { .. }) => "↗",
+                _ => crate::fold::file_type::classify(std::path::Path::new(n), &[]).icon(),
+            }
+        )
+    });
     let body = frame::frame(
         area,
         buf,
@@ -283,7 +293,7 @@ pub fn render(
             theme: core,
             focused: v.focused,
             title: ModuleId::Preview.title(),
-            detail: v.name,
+            detail: detail.as_deref(),
             heading: false,
             badge: None,
             footer: None,
@@ -306,22 +316,68 @@ pub fn render(
             empty(body, buf, v.theme, "empty file");
             None
         }
+        Preview::Document(d) => {
+            let meta = d
+                .total_pages
+                .map(|n| format!("{} · {n} pages", d.kind))
+                .unwrap_or_else(|| d.kind.clone());
+            draw_meta(body, buf, v.theme, &meta);
+            let content = below_meta(body);
+            for (i, line) in lines(preview, content.width)
+                .iter()
+                .skip(v.scroll)
+                .take(content.height as usize)
+                .enumerate()
+            {
+                buf.set_string(
+                    content.x,
+                    content.y + i as u16,
+                    line,
+                    Style::default().fg(rgb(v.theme.row_fg)),
+                );
+            }
+            render_scrollbar(
+                area,
+                content,
+                buf,
+                v.theme,
+                v.scroll,
+                lines(preview, content.width).len(),
+                bars,
+            );
+            None
+        }
         Preview::Text { bytes, .. } => {
             render_text(
                 area, body, buf, v.theme, preview, *bytes, v.name, v.scroll, bars,
             );
             None
         }
-        Preview::Binary {
-            mime, truncated, ..
-        } => {
-            render_binary(
-                area, body, buf, v.theme, preview, mime, *truncated, v.scroll, bars,
+        Preview::Dir(tree) => {
+            let s = &tree.summary;
+            let meta = format!(
+                "Tree · {} files · {} dirs shown{}",
+                s.files,
+                s.dirs,
+                if s.truncated { " · partial" } else { "" }
             );
-            None
-        }
-        Preview::Dir(summary) => {
-            render_dir(body, buf, v.theme, summary, v.name);
+            draw_meta(body, buf, v.theme, fit(&meta, body.width).trim_end());
+            let content = below_meta(body);
+            let rows = lines(preview, content.width);
+            for (i, line) in rows
+                .iter()
+                .skip(v.scroll)
+                .take(content.height as usize)
+                .enumerate()
+            {
+                buf.set_string(
+                    content.x,
+                    content.y + i as u16,
+                    line,
+                    Style::default().fg(rgb(v.theme.row_fg)),
+                );
+            }
+            render_scrollbar(area, content, buf, v.theme, v.scroll, rows.len(), bars);
             None
         }
         Preview::Symlink { broken, .. } => {
@@ -350,7 +406,7 @@ pub fn render(
     }
 }
 
-/// Text lines for `Text`, `Binary`, `Dir`, `Symlink` and `Error`, fitted to
+/// Text lines for `Text`, `Document`, `Dir`, `Symlink` and `Error`, fitted to
 /// `width` -- what `render` draws from and what the app clamps `scroll`
 /// against, so a preview never scrolls further than it is actually tall.
 pub fn lines(preview: &Preview, width: u16) -> Vec<String> {
@@ -362,12 +418,15 @@ pub fn lines(preview: &Preview, width: u16) -> Vec<String> {
         // drops exactly the one optional trailing terminator (and handles
         // `\r\n` besides); a genuine blank line, in the middle or doubled at
         // the end, still comes through.
+        Preview::Document(d) => document_lines(d, width)
+            .iter()
+            .map(|l| fit(l, width))
+            .collect(),
         Preview::Text { head, .. } => head
             .lines()
             .map(|l| fit(&l.replace('\t', "    "), width))
             .collect(),
-        Preview::Binary { rows, .. } => rows.iter().map(|r| fit(r, width)).collect(),
-        Preview::Dir(summary) => dir_lines(summary).iter().map(|l| fit(l, width)).collect(),
+        Preview::Dir(tree) => dir_lines(tree).iter().map(|l| fit(l, width)).collect(),
         Preview::Symlink { target, broken } => {
             let mut s = format!("\u{2192} {}", target.display());
             if *broken {
@@ -380,21 +439,113 @@ pub fn lines(preview: &Preview, width: u16) -> Vec<String> {
     }
 }
 
-fn dir_lines(s: &DirSummary) -> Vec<String> {
-    let plural = |n: usize, one: &str, many: &str| {
-        if n == 1 {
-            format!("1 {one}")
+pub fn content_rect(area: Rect) -> Rect {
+    below_meta(frame::body(area, &words(ModuleId::Preview)))
+}
+pub fn page_rows(page: &crate::fold::preview::model::Page, width: u16) -> usize {
+    1 + usize::from(page.truncated)
+        + if page.text.trim().is_empty() {
+            1
         } else {
-            format!("{n} {many}")
+            page.text
+                .lines()
+                .map(|l| {
+                    starkit::wrap::wrap(&l.replace('\t', "    "), width)
+                        .len()
+                        .max(1)
+                })
+                .sum()
         }
-    };
-    let mut out = vec![
-        plural(s.files, "file", "files"),
-        plural(s.dirs, "directory", "directories"),
-        crate::fold::format::size(s.bytes),
-    ];
-    if s.truncated {
-        out.push("(at least)".to_string());
+}
+
+fn document_lines(d: &crate::fold::preview::model::Document, width: u16) -> Vec<String> {
+    use crate::fold::preview::model::Content;
+    let mut lines: Vec<String> = d
+        .fields
+        .iter()
+        .flat_map(|f| f.value.lines().map(|v| format!("{}: {v}", f.label)))
+        .collect();
+    if matches!(d.content, Content::Pages(_)) {
+        lines.clear();
+    }
+    match &d.content {
+        Content::Metadata => {}
+        Content::Pages(pages) => {
+            for p in pages {
+                lines.push(format!("── Page {} ──", p.number));
+                if p.text.trim().is_empty() {
+                    lines.push("No extractable text on this page".into());
+                } else {
+                    for line in p.text.lines() {
+                        let line = line.replace('\t', "    ");
+                        let wrapped = starkit::wrap::wrap(&line, width);
+                        if wrapped.is_empty() {
+                            lines.push(String::new());
+                        } else {
+                            lines.extend(wrapped.iter().map(|r| r.drawn(&line).to_string()));
+                        }
+                    }
+                }
+                if p.truncated {
+                    lines.push("(page text truncated)".into());
+                }
+            }
+            if d.next_page.is_some() {
+                lines.push("↓ Scroll for more pages".into());
+            }
+        }
+        Content::Archive(entries) => {
+            for e in entries {
+                let icon = if e.directory {
+                    "▸"
+                } else {
+                    crate::fold::file_type::classify(std::path::Path::new(&e.name), &[]).icon()
+                };
+                lines.push(format!(
+                    "{icon} {}  {}",
+                    e.name,
+                    e.bytes
+                        .map(crate::fold::format::size)
+                        .unwrap_or_else(|| "?".into())
+                ));
+            }
+        }
+    }
+    if let Some(n) = &d.notice {
+        lines.push(n.clone());
+    }
+    lines
+}
+
+fn dir_lines(tree: &Tree) -> Vec<String> {
+    fn append(entries: &[TreeEntry], prefix: &str, out: &mut Vec<String>) {
+        for (i, entry) in entries.iter().enumerate() {
+            let last = i + 1 == entries.len();
+            let (icon, suffix) = match entry.kind {
+                TreeKind::Directory => ("▸", "/"),
+                TreeKind::Symlink => ("↗", ""),
+                TreeKind::File(kind) => (kind.icon(), ""),
+            };
+            let branch = if last { "└── " } else { "├── " };
+            let notice = entry
+                .notice
+                .as_ref()
+                .map(|n| format!(" … {n}"))
+                .unwrap_or_default();
+            out.push(format!(
+                "{prefix}{branch}{icon} {}{suffix}{notice}",
+                entry.name
+            ));
+            let prefix = format!("{prefix}{}", if last { "    " } else { "│   " });
+            append(&entry.children, &prefix, out);
+        }
+    }
+    let mut out = Vec::new();
+    append(&tree.entries, "", &mut out);
+    if let Some(notice) = &tree.notice {
+        out.push(format!("… {notice}"));
+    } else if tree.entries.is_empty() {
+        out.push("Empty directory".into());
     }
     out
 }
@@ -451,41 +602,7 @@ fn render_text(
     render_scrollbar(outer, body, buf, t, scroll, rows.len(), bars);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn render_binary(
-    outer: Rect,
-    area: Rect,
-    buf: &mut Buffer,
-    t: &Theme,
-    preview: &Preview,
-    mime: &str,
-    truncated: bool,
-    scroll: usize,
-    bars: &mut Bars,
-) {
-    if area.height > 0 {
-        let meta = if truncated {
-            format!("{mime} \u{b7} truncated")
-        } else {
-            mime.to_string()
-        };
-        draw_meta(area, buf, t, &meta);
-    }
-    let rows = lines(preview, area.width);
-    let style = Style::default().fg(rgb(t.row_fg));
-    let body = below_meta(area);
-    for (row, text) in rows
-        .iter()
-        .skip(scroll)
-        .take(usize::from(body.height))
-        .enumerate()
-    {
-        buf.set_string(body.x, body.y + row as u16, fit(text, body.width), style);
-    }
-    render_scrollbar(outer, body, buf, t, scroll, rows.len(), bars);
-}
-
-/// The scroll position of a text or binary preview, on the panel's own right
+/// The scroll position of a text or document preview, on the panel's own right
 /// border -- drawn over the rows the content actually occupies, below the
 /// meta line, the same mark every other scrolling list in the column draws.
 /// Recorded through `bars` rather than drawn directly, so a press or a drag
@@ -503,27 +620,17 @@ fn render_scrollbar(
     bars.draw(Bar::Preview, track, buf, t, len as u32, scroll as u32);
 }
 
-fn render_dir(area: Rect, buf: &mut Buffer, t: &Theme, summary: &DirSummary, name: Option<&str>) {
-    let mut all: Vec<String> = Vec::new();
-    if let Some(n) = name {
-        all.push(n.to_string());
-        all.push(String::new());
-    }
-    all.extend(dir_lines(summary));
-    let style = Style::default().fg(rgb(t.row_fg));
-    for (row, text) in all.iter().enumerate().take(usize::from(area.height)) {
-        buf.set_string(area.x, area.y + row as u16, fit(text, area.width), style);
-    }
-}
-
 /// What is left under the meta line. The line has a row of its own rather
 /// than the right end of the first content row: a hexdump row is seventy
 /// columns wide and the mime type drawn over its tail was unreadable both
 /// ways.
 fn below_meta(area: Rect) -> Rect {
+    // At the minimum terminal size only one body row may remain. Give it
+    // to content; the preview title already identifies the selected entry.
+    let reserved = u16::from(area.height > 1);
     Rect {
-        y: area.y + 1.min(area.height),
-        height: area.height.saturating_sub(1),
+        y: area.y + reserved,
+        height: area.height.saturating_sub(reserved),
         ..area
     }
 }
@@ -639,6 +746,7 @@ fn folded_summary(v: &View<'_>) -> Option<String> {
     let name = v.name.unwrap_or("-");
     Some(match preview {
         Preview::Empty => "empty file".to_string(),
+        Preview::Document(d) => format!("{name} · {}", d.kind),
         Preview::Text { bytes, lines, .. } => format!(
             "{name} \u{b7} {} \u{b7} {} \u{b7} {lines} lines",
             ext_of(name).unwrap_or("-"),
@@ -650,21 +758,16 @@ fn folded_summary(v: &View<'_>) -> Option<String> {
             format,
             ..
         } => format!("{name} \u{b7} {format} \u{b7} {width} \u{d7} {height}"),
-        Preview::Dir(summary) => format!(
-            "{name} \u{b7} {} files \u{b7} {} dirs \u{b7} {}",
-            summary.files,
-            summary.dirs,
-            crate::fold::format::size(summary.bytes)
-        ),
-        Preview::Binary {
-            mime, truncated, ..
-        } => {
-            if *truncated {
-                format!("{name} \u{b7} {mime} \u{b7} truncated")
+        Preview::Dir(tree) => format!(
+            "{name} · {} files · {} dirs shown{}",
+            tree.summary.files,
+            tree.summary.dirs,
+            if tree.summary.truncated {
+                " · partial"
             } else {
-                format!("{name} \u{b7} {mime}")
+                ""
             }
-        }
+        ),
         Preview::Symlink { target, broken } => {
             let arrow = format!("\u{2192} {}", target.display());
             if *broken {
@@ -743,18 +846,52 @@ mod tests {
     #[test]
     fn a_directory_folds_to_its_name_and_counts() {
         let t = theme("terminal");
-        let s = DirSummary {
+        let s = crate::fold::summary::DirSummary {
             files: 14,
             dirs: 3,
             bytes: 428_000,
             truncated: false,
         };
-        let p = Preview::Dir(s);
+        let p = Preview::Dir(Tree {
+            entries: vec![],
+            summary: s,
+            notice: None,
+        });
         let v = view(&t, Some(&p), Some("src/"));
         assert_eq!(
             folded_summary(&v).unwrap(),
-            "src/ \u{b7} 14 files \u{b7} 3 dirs \u{b7} 428.0 KB"
+            "src/ · 14 files · 3 dirs shown"
         );
+    }
+
+    #[test]
+    fn directory_branches_and_scrolling_use_the_same_rows() {
+        let f = crate::fold::testing::Fixture::tree();
+        let tree = crate::fold::preview::directory::build(
+            &f.path("projects/starwire"),
+            &Default::default(),
+            &|| false,
+        );
+        let preview = Preview::Dir(tree);
+        let rows = lines(&preview, 80);
+        assert_eq!(rows[0].trim_end(), "├── ▸ src/");
+        assert_eq!(rows[1].trim_end(), "│   └── λ main.rs");
+        assert_eq!(rows.last().unwrap().trim_end(), "└── ≡ README.md");
+        let t = theme("terminal");
+        let mut v = view(&t, Some(&preview), Some("starwire/"));
+        let area = Rect::new(0, 0, 60, 8);
+        let mut buf = Buffer::empty(area);
+        let content = content_rect(area);
+        v.scroll = rows.len().saturating_sub(content.height as usize);
+        render(area, &mut buf, &mut v, &mut Bars::new());
+        let first: String = (content.x..content.right())
+            .map(|x| buf[(x, content.y)].symbol())
+            .collect();
+        assert!(first.starts_with(rows[v.scroll].trim_end()), "{first}");
+        let last: String = (content.x..content.right())
+            .map(|x| buf[(x, content.bottom() - 1)].symbol())
+            .collect();
+        assert!(last.starts_with(rows.last().unwrap().trim_end()), "{last}");
     }
 
     #[test]
@@ -803,18 +940,6 @@ mod tests {
             .map(|x| buf[(body.x + x, body.y + 1)].symbol().to_string())
             .collect();
         assert!(row1.starts_with("three"), "{row1:?}");
-    }
-
-    #[test]
-    fn lines_renders_a_hexdump_row_per_row() {
-        let p = Preview::Binary {
-            rows: vec!["00000000  48 65 6c 6c 6f  |Hello|".to_string()],
-            truncated: false,
-            mime: "application/octet-stream".into(),
-        };
-        let out = lines(&p, 80);
-        assert_eq!(out.len(), 1);
-        assert!(out[0].starts_with("00000000"));
     }
 
     /// A text file's row count is the file's own line count, not one more

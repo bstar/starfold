@@ -82,8 +82,26 @@ nucleo-matcher = "0.3"
 # to `application/octet-stream`.
 mime_guess = "2"
 
-[target.'cfg(target_os = "macos")'.dependencies]
+# Format backends stay private to preview/archive adapters. No runtime tools.
+lofty = "0.22"
+lopdf = { version = "0.42", default-features = false }
+pdf-extract = "0.12"
+mp4parse = "0.17"
+matroska-demuxer = "0.8"
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+lzma-rust2 = "0.21"
+bzip2 = "0.6"
+ruzstd = "0.9"
+# Pinned: adapter compensates for 0.20.2 empty-entry anti-bit encoding.
+sevenz-rust2 = "=0.20.2"
+# RARLAB engine is compiled into the executable, not an external command.
+# The GPL Rust port is intentionally not used; see LICENSES/UnRAR.txt.
+unrar_sys = "0.5.8"
+tempfile = "3"
 libc = "0.2"
+
 
 [dev-dependencies]
 # Anything that parses foreign input gets a property test, and so does every
@@ -111,27 +129,3 @@ strip = true
 # nothing can be tried without a release compile.
 [profile.dev.package."*"]
 opt-level = 2
-
-[package.metadata.deb]
-maintainer = "bstar <bob@dinicolas.com>"
-copyright = "2026, bstar"
-license-file = ["LICENSE", "0"]
-extended-description = """\
-A terminal file manager in the STAR family: the directories you drill through
-stack up as a column that folds behind you, the files you mark stay marked
-while you go somewhere else, and copies, moves and deletes queue up to be run
-together. Pictures are drawn where the terminal can draw them."""
-section = "utils"
-priority = "optional"
-assets = [
-    ["target/release/starfold", "usr/bin/", "755"],
-    ["README.md", "usr/share/doc/starfold/README.md", "644"],
-    ["packaging/starfold.desktop", "usr/share/applications/starfold.desktop", "644"],
-    ["packaging/starfold.png", "usr/share/icons/hicolor/256x256/apps/starfold.png", "644"],
-    ["packaging/starfold.svg", "usr/share/icons/hicolor/scalable/apps/starfold.svg", "644"],
-]
-# $auto resolves the real sonames from the built binary, which here is the C
-# runtime and libgcc and nothing else -- so the package has to be built on a
-# Debian-like host. Building it on NixOS produces a package with no dependency
-# information at all.
-depends = "$auto"

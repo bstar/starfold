@@ -1,0 +1,25 @@
+---
+source: src/ui/frames.rs
+expression: "render(&mut app, w, h)"
+---
+╔═ S T A R / F O L D ══════════════════════════════ stack ═╗
+║          ‹  hidden  sort  filter  bookmark  places  view ║
+║─╔═ FILE ACTIONS ═════════╗90 B ──────────────────────────║
+║ ║Open                    ║                -  Sep 10      ║
+║ ║Preview                 ║                -  Sep 10      ║
+║ ║Mark / unmark           ║                -  Sep 10      ║
+║ ║Copy…                   ║            256 B  Sep 10      ║
+║ ║Move…                   ║              7 B  Sep 10      ║
+║ ║Rename…                 ║             27 B  Sep 10      ║
+║ ║Delete (queue)          ║                               ║
+║ ║Compress…               ║                               ║
+╚═╚════════════════════════╝═══════════════════════════════╝
+╔═ PREVIEW — ◇ blob.bin ═══════════════════════════════════╗
+║                                                    close ║
+║Type: application/octet-stream                            █
+╚══════════════════════════════════════════════════════════╝
+╔═ OPERATIONS ═════════════════════════════════════════════╗
+║                                               run  clear ║
+║                      nothing queued                      ║
+╚══════════════════════════════════════════════════════════╝
+? help  / filter  space mark  enter open  y copy  m   ~  off

@@ -41,6 +41,8 @@ pub enum PlanError {
     Missing(PathBuf),
     #[error("a copy or move needs somewhere to go")]
     NoDestination,
+    #[error("{0}")]
+    Archive(String),
     #[error("{path}: {source}")]
     Io {
         path: PathBuf,
@@ -55,6 +57,12 @@ pub fn plan(kind: OpKind, sources: &[PathBuf], dest: Option<&Path>) -> Result<Pl
         OpKind::Copy | OpKind::Move => plan_copy_move(kind, sources, dest),
         OpKind::Delete(_) => Ok(plan_delete(sources)),
         OpKind::Rename => plan_rename(sources, dest),
+        OpKind::Compress(_) | OpKind::Extract => crate::fold::archive::operation::plan(
+            kind,
+            sources,
+            dest.ok_or(PlanError::NoDestination)?,
+        )
+        .map_err(|e| PlanError::Archive(e.to_string())),
     }
 }
 

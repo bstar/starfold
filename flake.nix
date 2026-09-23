@@ -96,20 +96,16 @@
         pkgs = nixpkgs.legacyPackages.${system};
 
         # One version, read rather than repeated. scripts/check-version.sh
-        # asserts the copies that cannot be derived (Cargo.lock, PKGBUILD).
+        # asserts the copies that cannot be derived (Cargo.lock).
         cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
 
-        # There are no buildInputs and no nativeBuildInputs, which is worth
-        # saying out loud because a file manager invites the guess that it
-        # needs libmagic or a trash daemon's headers: file types are decided
-        # from the name and the first bytes in Rust, and the trash is reached
-        # by the freedesktop specification on Linux and through the Foundation
-        # framework's Rust bindings on macOS. Nothing in the tree runs bindgen.
-        # If that changes -- a dependency switching to a `-sys` crate, most
-        # likely -- this is where pkg-config and the library go, and CI needs
-        # the matching apt line.
+        # RAR uses bundled UnRAR C++ compiled by unrar_sys. BZip2's
+        # libbz2-rs-sys is pure Rust despite its name. No system archive
+        # libraries, bindgen, or runtime conversion commands are needed.
         mkStarfold = { pkgsFor ? pkgs }:
           pkgsFor.rustPlatform.buildRustPackage {
+            # unrar_sys compiles the bundled RARLAB C++ engine.
+            nativeBuildInputs = [ pkgsFor.stdenv.cc ];
             pname = "starfold";
             version = cargoToml.package.version;
             src = ./.;
@@ -134,7 +130,9 @@
             cargoLock.allowBuiltinFetchGit = true;
 
             # freedesktop assets, which mean nothing on macOS.
-            postInstall = pkgsFor.lib.optionalString pkgsFor.stdenv.hostPlatform.isLinux ''
+            postInstall = ''
+              install -Dm644 LICENSES/UnRAR.txt $out/share/licenses/starfold/UnRAR.txt
+            '' + pkgsFor.lib.optionalString pkgsFor.stdenv.hostPlatform.isLinux ''
               install -Dm644 packaging/starfold.desktop \
                 $out/share/applications/starfold.desktop
               install -Dm644 packaging/starfold.png \
@@ -179,6 +177,7 @@
 
         devShells.default = pkgs.mkShell {
           packages = (with pkgs; [
+            stdenv.cc
             rustc
             cargo
             rustfmt
@@ -197,9 +196,7 @@
             # `deny.toml` has one allowed git source, and the check that the
             # list still has exactly what it should is this command.
             cargo-deny
-          ])
-          # Only ever used to build a .deb, which only happens on Linux.
-          ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.cargo-deb;
+          ]);
 
           shellHook = ''
             echo "STAR/FOLD devshell · rustc $(rustc --version | cut -d' ' -f2)"

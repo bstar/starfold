@@ -7,20 +7,28 @@
 //! terminal crate, the same distinction that lets `jiff` and `serde` live
 //! here too.
 
+pub mod connection;
+pub mod directory;
+mod image;
+mod text;
+use image::{build_image, looks_like_image};
+use text::{is_binary, text_preview};
+pub mod model;
+pub mod providers;
+
 use std::fs::File;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use super::summary::{self, Budget, DirSummary};
-
 /// What the preview panel has to show for a path.
 #[derive(Debug, Clone)]
 pub enum Preview {
     /// Nothing selected, or nothing built yet.
     Empty,
-    Dir(DirSummary),
+    Document(model::Document),
+    Dir(directory::Tree),
     Text {
         head: String,
         truncated: bool,
@@ -40,15 +48,6 @@ pub enum Preview {
         /// something re-derived from the extension every frame.
         format: &'static str,
     },
-    /// A hexdump, sixteen bytes to a row, for anything that is not text and
-    /// not a picture.
-    Binary {
-        rows: Vec<String>,
-        truncated: bool,
-        /// Guessed from the extension alone -- the only evidence there is --
-        /// and `application/octet-stream` when nothing matches.
-        mime: String,
-    },
     Symlink {
         target: PathBuf,
         broken: bool,
@@ -57,8 +56,11 @@ pub enum Preview {
 }
 
 /// Limits `build` is kept inside, all from `[preview]` in `config.toml`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PreviewConfig {
+    pub timeout_ms: u64,
+    pub cache_bytes: usize,
+    pub pdf_page_bytes: usize,
     pub max_bytes: u64,
     pub max_lines: usize,
     pub max_image_dimension: u32,
@@ -68,6 +70,9 @@ pub struct PreviewConfig {
 impl Default for PreviewConfig {
     fn default() -> Self {
         Self {
+            timeout_ms: 2000,
+            cache_bytes: 32 * 1024 * 1024,
+            pdf_page_bytes: 262_144,
             max_bytes: 262_144,
             max_lines: 400,
             max_image_dimension: 4096,
@@ -75,13 +80,6 @@ impl Default for PreviewConfig {
         }
     }
 }
-
-/// A file above this size is not even opened for an image preview.
-///
-/// The dimension check inside `decode_limited` is what refuses a hostile
-/// *header*; this refuses spending the time and memory to `read` a merely
-/// enormous, honestly-encoded one before that check ever runs.
-const MAX_IMAGE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Build a preview for `path`, checking `cancel` as it goes.
 ///
@@ -102,11 +100,9 @@ pub fn build(path: &Path, cfg: &PreviewConfig, cancel: &AtomicBool) -> Preview {
     }
 
     if meta.is_dir() {
-        let budget = Budget {
-            max_entries: cfg.dir_budget,
-            max_depth: 64,
-        };
-        return Preview::Dir(summary::summarize(path, &budget, cancel));
+        return Preview::Dir(directory::build(path, cfg, &|| {
+            cancel.load(Ordering::Relaxed)
+        }));
     }
 
     if !meta.is_file() {
@@ -154,153 +150,19 @@ fn build_file(path: &Path, full_len: u64, cfg: &PreviewConfig, cancel: &AtomicBo
         return Preview::Empty;
     }
 
+    if let Some(result) = providers::build(path, &head, 1, cfg) {
+        return Preview::Document(result);
+    }
+
     if looks_like_image(path, &head) {
         return build_image(path, full_len, cfg);
     }
 
     if is_binary(&head) {
-        let mime = mime_guess::from_path(path)
-            .first_or_octet_stream()
-            .essence_str()
-            .to_string();
-        let (rows, rows_truncated) = hexdump(&head, cfg.max_lines);
-        return Preview::Binary {
-            rows,
-            truncated: rows_truncated || bytes_capped,
-            mime,
-        };
+        return Preview::Document(providers::metadata(path));
     }
 
     text_preview(&head, bytes_capped, full_len, cfg.max_lines)
-}
-
-fn looks_like_image(path: &Path, head: &[u8]) -> bool {
-    starkit::image::ImageFormat::from_path(path).is_ok()
-        || starkit::image::guess_format(head).is_ok()
-}
-
-fn build_image(path: &Path, full_len: u64, cfg: &PreviewConfig) -> Preview {
-    if full_len > MAX_IMAGE_FILE_BYTES {
-        return Preview::Error(format!("image is {full_len} bytes, too large to preview"));
-    }
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) => return Preview::Error(e.to_string()),
-    };
-    match starkit::graphics::decode_limited(&bytes, cfg.max_image_dimension) {
-        Ok(image) => {
-            let format = starkit::image::ImageFormat::from_path(path)
-                .ok()
-                .or_else(|| starkit::image::guess_format(&bytes).ok())
-                .map(format_name)
-                .unwrap_or("image");
-            let rgba = image.to_rgba8();
-            let (width, height) = rgba.dimensions();
-            Preview::Image {
-                data: Arc::new(rgba),
-                width,
-                height,
-                format,
-            }
-        }
-        Err(e) => Preview::Error(format!("could not decode the image: {e}")),
-    }
-}
-
-fn format_name(fmt: starkit::image::ImageFormat) -> &'static str {
-    use starkit::image::ImageFormat;
-    match fmt {
-        ImageFormat::Png => "png",
-        ImageFormat::Jpeg => "jpeg",
-        ImageFormat::Gif => "gif",
-        ImageFormat::WebP => "webp",
-        ImageFormat::Bmp => "bmp",
-        _ => "image",
-    }
-}
-
-/// A head is binary when it either contains a NUL byte -- the one thing a
-/// text file never legitimately does -- or is not valid UTF-8 once a
-/// trailing sequence that `max_bytes` may have cut mid-character is
-/// forgiven. A genuinely invalid byte *earlier* in the head is not forgiven:
-/// that is not a cut character, it is not text.
-fn is_binary(head: &[u8]) -> bool {
-    head.contains(&0) || utf8_prefix(head).is_none()
-}
-
-/// The longest valid-UTF-8 prefix of `head`, forgiving only an incomplete
-/// multi-byte sequence at the very end -- what `max_bytes` cutting a file
-/// mid-character looks like. Any other invalid byte returns `None`.
-fn utf8_prefix(head: &[u8]) -> Option<&str> {
-    match std::str::from_utf8(head) {
-        Ok(s) => Some(s),
-        Err(e) if e.error_len().is_none() => {
-            // `error_len` is `None` exactly when the error is "ran out of
-            // bytes", i.e. an incomplete sequence at the end.
-            std::str::from_utf8(&head[..e.valid_up_to()]).ok()
-        }
-        Err(_) => None,
-    }
-}
-
-fn text_preview(head: &[u8], bytes_capped: bool, full_len: u64, max_lines: usize) -> Preview {
-    let text = utf8_prefix(head).unwrap_or_default();
-    let mut truncated = bytes_capped || text.len() < head.len();
-    let mut out = String::new();
-    let mut lines = 0usize;
-    for line in text.split_inclusive('\n') {
-        if lines >= max_lines {
-            truncated = true;
-            break;
-        }
-        out.push_str(line);
-        lines += 1;
-    }
-    Preview::Text {
-        head: out,
-        truncated,
-        bytes: full_len,
-        lines,
-    }
-}
-
-/// Sixteen bytes to a row: `00000000  48 65 6c 6c 6f 20 77 6f  72 6c 64 21 0a
-/// 00 01 02  |Hello world!....|`. Capped at `max_rows`; the second return
-/// value says whether more rows existed.
-fn hexdump(bytes: &[u8], max_rows: usize) -> (Vec<String>, bool) {
-    use std::fmt::Write as _;
-
-    let mut rows = Vec::new();
-    let mut truncated = false;
-    for (i, chunk) in bytes.chunks(16).enumerate() {
-        if i >= max_rows {
-            truncated = true;
-            break;
-        }
-        let offset = i * 16;
-        let mut hex = String::with_capacity(16 * 3 + 1);
-        for (j, b) in chunk.iter().enumerate() {
-            if j == 8 {
-                hex.push(' ');
-            }
-            let _ = write!(hex, "{b:02x} ");
-        }
-        while hex.len() < 16 * 3 + 1 {
-            hex.push(' ');
-        }
-        let ascii: String = chunk
-            .iter()
-            .map(|&b| {
-                if (0x20..0x7f).contains(&b) {
-                    b as char
-                } else {
-                    '.'
-                }
-            })
-            .collect();
-        rows.push(format!("{offset:08x}  {hex} |{ascii}|"));
-    }
-    (rows, truncated)
 }
 
 #[cfg(test)]
@@ -396,28 +258,21 @@ mod tests {
     }
 
     #[test]
-    fn a_nul_blob_previews_as_a_hexdump() {
+    fn a_nul_blob_previews_as_metadata() {
         let f = Fixture::tree();
         let got = build(
             &f.path("blob.bin"),
             &PreviewConfig::default(),
             &AtomicBool::new(false),
         );
-        match got {
-            Preview::Binary { rows, mime, .. } => {
-                assert!(rows[0].starts_with("00000000"));
-                assert_eq!(mime, "application/octet-stream");
-                // 256 bytes is exactly sixteen full rows; every one of them
-                // should show sixteen byte pairs between the offset and the
-                // ascii column, whatever the exact spacing is.
-                assert_eq!(rows.len(), 16);
-                for row in &rows {
-                    let hex_part = &row[8..row.find('|').unwrap()];
-                    assert_eq!(hex_part.split_whitespace().count(), 16);
-                }
-            }
-            other => panic!("expected binary, got {other:?}"),
-        }
+        let Preview::Document(d) = got else {
+            panic!("expected metadata")
+        };
+        assert!(d
+            .fields
+            .iter()
+            .any(|f| f.label == "Type" && f.value == "application/octet-stream"));
+        assert!(d.fields.iter().any(|f| f.label == "Size"));
     }
 
     #[test]
@@ -465,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_previews_as_a_summary() {
+    fn a_directory_previews_as_a_tree() {
         let f = Fixture::tree();
         let got = build(
             &f.path("projects/starwire"),
@@ -474,10 +329,10 @@ mod tests {
         );
         match got {
             Preview::Dir(s) => {
-                assert_eq!(s.dirs, 2);
-                assert_eq!(s.files, 4);
+                assert_eq!(s.summary.dirs, 2);
+                assert_eq!(s.summary.files, 4);
             }
-            other => panic!("expected a directory summary, got {other:?}"),
+            other => panic!("expected a directory tree, got {other:?}"),
         }
     }
 
@@ -489,7 +344,9 @@ mod tests {
             &PreviewConfig::default(),
             &AtomicBool::new(false),
         );
-        assert!(matches!(got, Preview::Dir(s) if s == DirSummary::default()));
+        assert!(
+            matches!(got, Preview::Dir(s) if s.entries.is_empty() && s.notice.is_none() && s.summary == super::super::summary::DirSummary::default())
+        );
     }
 
     #[cfg(unix)]

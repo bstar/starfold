@@ -436,7 +436,7 @@ fn preview_text_shows_the_head_of_the_file() {
 }
 
 #[test]
-fn preview_dir_shows_a_summary() {
+fn preview_dir_shows_a_tree() {
     let (mut app, fk) = build("terminal");
     cursor_to(&mut app, &fk, "projects");
     enter(&mut app, &fk);
@@ -449,7 +449,23 @@ fn preview_dir_shows_a_summary() {
 }
 
 #[test]
-fn preview_binary_shows_a_hexdump() {
+fn directory_tree_in_both_views_and_sizes() {
+    let (mut app, fk) = build("terminal");
+    cursor_to(&mut app, &fk, "projects");
+    app.key(alt('2'));
+    insta::assert_snapshot!("directory-tree-fold-100x30", render(&mut app, 100, 30));
+    insta::assert_snapshot!("directory-tree-fold-60x21", render(&mut app, 60, 21));
+    app.key(alt('1'));
+    app.key(key('v'));
+    settle(&mut app, &fk);
+    cursor_to(&mut app, &fk, "projects");
+    app.key(alt('2'));
+    insta::assert_snapshot!("directory-tree-commander-100x30", render(&mut app, 100, 30));
+    insta::assert_snapshot!("directory-tree-commander-60x21", render(&mut app, 60, 21));
+}
+
+#[test]
+fn preview_binary_shows_metadata() {
     let (mut app, fk) = build("terminal");
     cursor_to(&mut app, &fk, "blob.bin");
     settle(&mut app, &fk);
@@ -561,4 +577,37 @@ fn three_queued_operations_with_the_module_focused() {
     settle(&mut app, &fk);
 
     insta::assert_snapshot!("operations-open-terminal-100x30", render(&mut app, 100, 30));
+}
+
+#[test]
+fn file_context_menu_at_both_terminal_sizes() {
+    for (w, h) in [(100, 30), (60, 21)] {
+        let (mut app, fk) = build("terminal");
+        cursor_to(&mut app, &fk, "blob.bin");
+        settle(&mut app, &fk);
+        app.key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
+        insta::assert_snapshot!(format!("file-menu-{w}x{h}"), render(&mut app, w, h));
+    }
+}
+#[test]
+fn structured_previews_render_at_both_sizes() {
+    use crate::fold::preview::{
+        model::{ArchiveEntry, Content, Document, Page},
+        Preview,
+    };
+    use std::sync::Arc;
+    for (kind,content) in [
+        ("Audio",Content::Metadata),
+        ("PDF",Content::Pages(vec![Page{number:1,text:"Chapter One\nUseful document text appears immediately.\nScroll to load subsequent pages.".into(),truncated:false}])),
+        ("Archive",Content::Archive(vec![ArchiveEntry{name:"notes/readme.txt".into(),bytes:Some(128),directory:false},ArchiveEntry{name:"music/song.flac".into(),bytes:Some(12000000),directory:false}]))
+    ] {
+        for (w,h) in [(100,30),(60,21)] {
+            let (mut app,fk)=build("terminal");cursor_to(&mut app,&fk,"blob.bin");settle(&mut app,&fk);
+            let mut d=Document::new(kind);d.content=content.clone();
+            if kind=="Audio" {d.field("Title","Evening light");d.field("Artist","Example artist");d.field("Album","Home recordings");d.field("Duration","0:03:42");d.field("Sample rate","48000 Hz");}
+            if kind=="PDF" {d.total_pages=Some(12);d.next_page=Some(2);d.field("Pages",12);d.notice=Some("Loading pages 2…".into());}
+            {let mut s=fk.state_mut();s.preview=Some((fk.fixture.path("blob.bin"),Arc::new(Preview::Document(d))));s.version+=1;}
+            app.tick();insta::assert_snapshot!(format!("structured-{}-{w}x{h}",kind.to_lowercase()),render(&mut app,w,h));
+        }
+    }
 }

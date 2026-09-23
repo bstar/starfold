@@ -97,6 +97,9 @@ impl Default for Ops {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preview {
+    pub timeout_ms: u64,
+    pub cache_bytes: usize,
+    pub pdf_page_bytes: usize,
     /// Prefer a separately installed compatible STAR/AMP for audio playback.
     pub audio_player: AudioPlayer,
     /// Embedded transport pictures where supported, or always text.
@@ -118,6 +121,9 @@ pub struct Preview {
 impl Default for Preview {
     fn default() -> Self {
         Self {
+            timeout_ms: 2000,
+            cache_bytes: 32 * 1024 * 1024,
+            pdf_page_bytes: 262_144,
             audio_player: AudioPlayer::default(),
             audio_buttons: AudioButtons::default(),
             max_bytes: 262_144,
@@ -282,6 +288,9 @@ impl Config {
                 show_hidden: self.ui.show_hidden,
             },
             preview: fold::preview::PreviewConfig {
+                timeout_ms: self.preview.timeout_ms.clamp(100, 30_000),
+                cache_bytes: self.preview.cache_bytes.clamp(1_048_576, 134_217_728),
+                pdf_page_bytes: self.preview.pdf_page_bytes.clamp(1024, 262_144),
                 max_bytes: self.preview.max_bytes,
                 max_lines: self.preview.max_lines,
                 max_image_dimension: self.preview.max_image_dimension,
@@ -346,6 +355,10 @@ conflicts = "ask"
 preserve_times = true
 
 [preview]
+# Smart preview parser deadline and bounded in-memory cache.
+timeout_ms = 2000
+cache_bytes = 33554432
+pdf_page_bytes = 262144
 # auto uses compatible STAR/AMP when installed, unless [open] command is set.
 # staramp explicitly prefers it; external always uses the existing opener.
 audio_player = "auto"

@@ -39,6 +39,9 @@ pub fn run(
         OpKind::Delete(DeleteHow::Trash) => run_trash_delete(plan, progress),
         OpKind::Delete(DeleteHow::Permanent) => run_permanent_delete(plan, progress),
         OpKind::Rename => run_rename(plan, policy, progress),
+        OpKind::Compress(_) | OpKind::Extract => {
+            crate::fold::archive::operation::run(kind, plan, policy, progress)
+        }
     }
 }
 

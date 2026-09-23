@@ -21,6 +21,8 @@ pub const PATHS: Paths = Paths::new("starfold", "STARFOLD_DIR", "STARFOLD_CONFIG
 mod tests {
     use super::*;
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// STAR/KIT's own tests cover the layout; what is worth asserting here is
     /// that this application's own three strings reach it -- an environment
     /// variable spelled for another program would relocate nothing.
@@ -41,6 +43,7 @@ mod tests {
 
     #[test]
     fn everything_hangs_off_one_base_directory() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         if std::env::var_os("STARFOLD_DIR").is_some()
             || std::env::var_os("STARFOLD_CONFIG_DIR").is_some()
         {
@@ -59,10 +62,9 @@ mod tests {
     /// `std::env::set_var` is unsafe in edition 2024 and racy in any edition;
     /// this is its only user, and it still runs on the process-wide table.
     fn temp_env(key: &str, value: &std::ffi::OsStr, f: impl FnOnce()) {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let old = std::env::var_os(key);
-        // SAFETY: serialised by `LOCK` above, which every caller of this
+        // SAFETY: serialised by `ENV_LOCK` above, which every caller of this
         // helper takes before touching the environment.
         unsafe { std::env::set_var(key, value) };
         f();

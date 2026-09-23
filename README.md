@@ -2,8 +2,6 @@
 
 [![ci](https://github.com/bstar/starfold/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bstar/starfold/actions/workflows/ci.yml)
 [![nix](https://github.com/bstar/starfold/actions/workflows/nix.yml/badge.svg?branch=main)](https://github.com/bstar/starfold/actions/workflows/nix.yml)
-[![debian](https://github.com/bstar/starfold/actions/workflows/debian.yml/badge.svg?branch=main)](https://github.com/bstar/starfold/actions/workflows/debian.yml)
-[![arch](https://github.com/bstar/starfold/actions/workflows/arch.yml/badge.svg?branch=main)](https://github.com/bstar/starfold/actions/workflows/arch.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A terminal file manager in the STAR family. The directories you drill through
@@ -20,10 +18,8 @@ Unfold your filesystem.
 
 ## Get it
 
-Packages for Linux are on the
-[releases page](https://github.com/bstar/starfold/releases/latest): an AppImage
-that needs nothing installed, a `.deb` for Debian and Ubuntu, a portable
-tarball, and the source the Arch `PKGBUILD` builds.
+Linux releases use Nix and AppImage. Apple Silicon macOS builds are available
+on the [releases page](https://github.com/bstar/starfold/releases/latest).
 
 ```sh
 nix run github:bstar/starfold        # Nix, on Linux or Apple Silicon macOS
@@ -59,13 +55,18 @@ rest of it.
 - **Persistent marks.** `space` marks a file wherever you are; the marks
   follow you to a different directory, so `y` or `m` mean "copy or move what I
   marked, to here".
-- **An operations queue.** Copies, moves, deletes and renames are queued
+- **An operations queue.** Copies, moves, deletes, renames, compression and extraction are queued
   rather than run on the spot; nothing touches the filesystem until you run
   the queue, and a delete goes to the trash where the platform has one.
-- **A preview panel.** Text, an image drawn with real pixels where the
-  terminal supports it, a directory summary, or a hexdump for anything else.
+- **Intelligent previews.** Music/video tags, PDF text loaded three pages at
+  a time as you scroll, archive contents, images, text and directory summaries.
+  Other binary files show useful metadata. Unicode file-type icons appear in
+  Fold, Commander and previews; no special font is required.
   Open an audio track to play it here using a separately installed,
   embedding-compatible STAR/AMP; without it, the existing opener still works.
+- **File actions menus.** Right-click a file or press Menu / Shift+F10 to open
+  actions including compression and extraction. Archive jobs appear in OPERATIONS.
+  See [previews and archives](docs/previews-and-archives.md).
 - **Commander view and Places.** Press `v` for two independently browsable
   panes. `b` opens searchable bookmarks, mounted devices, network locations,
   Home and Root; `B` bookmarks the current directory.

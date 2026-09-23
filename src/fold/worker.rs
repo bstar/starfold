@@ -97,6 +97,7 @@ impl Senders {
 /// rather than overwriting the newer one.
 #[derive(Debug, Clone)]
 pub enum Job {
+    ClosePreview,
     LoadPlaces(PathBuf),
     RefreshPlaces,
     SaveBookmarks {
@@ -106,6 +107,11 @@ pub enum Job {
     },
     List(PathBuf),
     Summarize(PathBuf),
+    PreviewPage {
+        path: PathBuf,
+        generation: u64,
+        page: u32,
+    },
     Preview {
         path: PathBuf,
         generation: u64,
@@ -298,6 +304,28 @@ pub fn perform_io(
                 preview,
             })
         }
+        Job::PreviewPage {
+            path,
+            generation,
+            page,
+        } => {
+            if is_stale_preview(state, generation) {
+                return IoOutcome::None;
+            }
+            let mut head = [0; 512];
+            use std::io::Read;
+            let n = std::fs::File::open(&path)
+                .and_then(|mut f| f.read(&mut head))
+                .unwrap_or(0);
+            let preview = preview::providers::build(&path, &head[..n], page, &cfg.preview)
+                .map(Preview::Document)
+                .unwrap_or(Preview::Empty);
+            IoOutcome::Done(Done::Previewed {
+                path,
+                generation,
+                preview,
+            })
+        }
         Job::Open(path) => match open::open_external(&path, &cfg.open) {
             Ok(()) => IoOutcome::None,
             Err(e) => IoOutcome::Note(Note::error(
@@ -309,7 +337,7 @@ pub fn perform_io(
         // `Plan`/`Run` to the ops queue before this is ever called. Kept
         // here, rather than assumed away, so this match stays exhaustive if
         // `Job` grows another kind.
-        Job::Shutdown | Job::Plan { .. } | Job::Run { .. } => IoOutcome::None,
+        Job::ClosePreview | Job::Shutdown | Job::Plan { .. } | Job::Run { .. } => IoOutcome::None,
     }
 }
 
@@ -352,7 +380,9 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
         | Job::List(_)
         | Job::Summarize(_)
         | Job::Preview { .. }
+        | Job::PreviewPage { .. }
         | Job::Open(_)
+        | Job::ClosePreview
         | Job::Shutdown => None,
     }
 }
@@ -371,14 +401,42 @@ pub fn spawn_io(
         .name("starfold-io".into())
         .spawn(move || {
             let mut watch = Watch::new();
+            let (preview_tx, preview_rx) = crossbeam_channel::bounded::<Job>(32);
+            let stop = Arc::new(AtomicBool::new(false));
+            let pending_previews = preview_rx.clone();
+            let preview_thread = spawn_preview(
+                preview_rx,
+                state.clone(),
+                events.clone(),
+                senders.clone(),
+                cfg.preview,
+                stop.clone(),
+            );
 
             loop {
                 let job = match jobs.recv_timeout(POLL) {
                     Ok(job) => job,
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                        let dirs = watched_dirs(&state);
+                        let mut dirs = watched_dirs(&state);
+                        let selected = state
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .cursor_entry()
+                            .map(|e| e.path.clone());
+                        if let Some(path) = &selected {
+                            dirs.push(path.clone());
+                        }
                         watch.watch(&dirs);
-                        let changed = watch.changed();
+                        let mut changed = watch.changed();
+                        for path in &mut changed {
+                            if Some(&*path) == selected.as_ref() {
+                                if let Some(parent) = path.parent() {
+                                    *path = parent.to_path_buf();
+                                }
+                            }
+                        }
+                        changed.sort();
+                        changed.dedup();
                         if !changed.is_empty() {
                             finish(Done::Changed(changed), &state, &events, &senders);
                         }
@@ -389,6 +447,15 @@ pub fn spawn_io(
 
                 match job {
                     Job::Shutdown => break,
+                    job @ (Job::Preview { .. } | Job::PreviewPage { .. } | Job::ClosePreview) => {
+                        // Obsolete requests are skipped by the preview worker.
+                        if let Err(crossbeam_channel::TrySendError::Full(job)) =
+                            preview_tx.try_send(job)
+                        {
+                            let _ = pending_previews.try_recv();
+                            let _ = preview_tx.try_send(job);
+                        }
+                    }
                     other @ (Job::Plan { .. } | Job::Run { .. }) => {
                         // `Senders::dispatch` always routes these to `ops`;
                         // arriving here would mean something upstream sent a
@@ -406,8 +473,61 @@ pub fn spawn_io(
                     }
                 }
             }
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            drop(preview_tx);
+            let _ = preview_thread.join();
         })
         .expect("spawning the io thread")
+}
+
+fn spawn_preview(
+    jobs: crossbeam_channel::Receiver<Job>,
+    state: Arc<RwLock<State>>,
+    events: EventSink,
+    senders: Senders,
+    cfg: preview::PreviewConfig,
+    stop: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("starfold-preview".into())
+        .spawn(move || {
+            let mut connection = preview::connection::Connection::default();
+            while let Ok(job) = jobs.recv() {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                if matches!(job, Job::ClosePreview) {
+                    connection.close();
+                    continue;
+                }
+                let (path, generation, page) = match job {
+                    Job::Preview { path, generation } => (path, generation, 1),
+                    Job::PreviewPage {
+                        path,
+                        generation,
+                        page,
+                    } => (path, generation, page),
+                    _ => continue,
+                };
+                let stale = || {
+                    stop.load(std::sync::atomic::Ordering::Relaxed)
+                        || is_stale_preview(&state, generation)
+                };
+                if let Some(preview) = connection.build(&path, page, &cfg, &stale) {
+                    finish(
+                        Done::Previewed {
+                            path,
+                            generation,
+                            preview,
+                        },
+                        &state,
+                        &events,
+                        &senders,
+                    );
+                }
+            }
+        })
+        .expect("spawning preview supervisor")
 }
 
 /// Start the ops thread: the queue, one entry at a time.

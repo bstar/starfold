@@ -526,7 +526,7 @@ pub const MOUSE: &[MouseHelp] = &[
     },
     MouseHelp {
         gesture: "right-click",
-        label: "mark it",
+        label: "file actions menu",
         group: "stack",
     },
     MouseHelp {

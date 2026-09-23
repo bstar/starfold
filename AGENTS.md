@@ -19,7 +19,7 @@ CARGO_NET_GIT_FETCH_WITH_CLI=true nix develop -c cargo build --release
 CARGO_NET_GIT_FETCH_WITH_CLI=true nix develop -c cargo test --all
 ```
 
-There are no system libraries. That is worth stating for a program that
+There are no separately installed system libraries. `unrar_sys` compiles the bundled RARLAB C++ engine using the compiler in the flake; CI supplies the native C++ toolchain. Its notice is installed from `LICENSES/UnRAR.txt`. `libbz2-rs-sys` is pure Rust despite its name. That is worth stating for a program that
 deletes to the trash and draws pictures: trash is the freedesktop
 specification, in pure Rust, on Linux, and `NSFileManager` through the `objc2`
 bindings on macOS — Rust bindings to a system framework, with no `-sys` crate
@@ -108,11 +108,12 @@ The dependency runs the other way as well. `src/ui/` never reaches into
 `State`, and `Handle::from_parts` exists so the UI can be driven by a fake core
 in tests.
 
-## Two threads, and the one function both fold through
+## Workers and the one function they fold through
 
-`starfold-io` (listings, directory summaries, previews, external opens, the
-mtime poll) and `starfold-ops` (the operations queue, one entry at a time)
-are the core's two OS threads. Both are plain `std::thread` plus
+`starfold-io` (listings, directory summaries, external opens, the mtime poll),
+`starfold-preview` (preview supervision), and `starfold-ops` (the operations
+queue, one entry at a time) are the core workers. The IO worker owns and joins
+the preview supervisor. They use plain `std::thread` plus
 `crossbeam-channel`; there is no async runtime, because nothing here waits on
 a socket. Neither thread ever writes to `State` directly: `worker::finish`
 (`src/fold/worker.rs`) is the one function that takes the write lock, folds a
@@ -266,3 +267,52 @@ The following broader terminal/platform checks are still outstanding:
   `smooth` and `pixels` look like where the terminal reports no cell size is
   reasoned about too -- all three fall back to the old fit, which cannot be
   seen without a terminal that does it.
+
+
+## Modular previews and archive operations
+
+`fold::preview::providers` is the registry: providers open sessions and sessions
+return presentation data from `preview::model`. PDF sessions retain the parsed
+document, returning three requested pages. `preview::connection` owns a bounded
+cache keyed by path, device/inode, size, mtime and ctime, and a disposable
+`starfold --preview-worker` child. Cancellation and deadlines kill/reap the child;
+closing Preview releases the session. The UI keeps at most 24 PDF pages and can
+request evicted pages again. Backend APIs never reach the renderer.
+
+`fold::archive` is independent of preview presentation. It owns archive entries,
+formats, validation and codec adapters. `archive::operation` plans source trees
+and owns private staging/publishing; `archive::connection` supervises codecs in
+`starfold --archive-worker`, reports progress, and terminates on cancellation.
+Failed or cancelled work cannot publish partial archives/extractions. Codec
+processes share a 768 MiB resource ceiling from `fold::process`. RAR uses bundled
+native UnRAR: the considered Rust port also had GPL terms, so it is not linked.
+
+The pinned sevenz-rust2 0.20.2 writer inverts empty-entry anti bits. The adapter
+compensates when writing directories; its round-trip test and external 7z check
+cover this. Revisit that compensation when upgrading the pinned backend.
+
+Context menus capture the clicked path and applicable marked set when opened.
+`ui::overlays::context` owns menu/dialog presentation; `ui::app::file_actions`
+translates responses to core commands. Compression and extraction use OPERATIONS,
+not a second job queue. Shared cheap classification in `fold::file_type` supplies
+Unicode icons without doing filesystem IO during drawing.
+
+Directory previews use `preview::directory`: a bounded, cancellable walk returns
+a tree of values, and `ui::panels::preview` supplies branches/icons and scrolling.
+Counts describe displayed entries; marked-directory sizes remain the independent
+`summary` worker job and must not replace the tree when they complete. Directory
+trees are rebuilt on request, not stored in the file parser cache.
+
+Fullscreen repaints must not call `Terminal::clear`: Ratatui 0.30 asks the
+backend for the cursor position there and a missing reply aborts the UI.
+`Terminal::resize` with the current size clears and invalidates the fullscreen
+buffers without that query. `tests/terminal.rs` exercises startup, Ctrl+L,
+resize and clean exit on a PTY that never answers terminal queries.
+
+## Release targets
+
+Release Linux through Nix and AppImage, and macOS through the native Apple
+Silicon archive (Nix remains available there too). Do not restore Debian, Arch
+or standalone Linux tarball build jobs. `scripts/build-dist.sh` accepts only
+`nix`, `appimage` and `macos`; branch release dispatches build artifacts without
+publishing, while version tags create a draft release.

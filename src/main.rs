@@ -17,6 +17,16 @@ use clap::Parser as _;
 use paths::PATHS;
 
 fn main() -> Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--preview-worker")) {
+        return fold::preview::connection::child_main();
+    }
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--archive-worker")) {
+        return fold::archive::connection::child_main(&PathBuf::from(
+            std::env::args_os()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("Missing archive request"))?,
+        ));
+    }
     let cli = cli::Cli::parse();
 
     PATHS.init_private_dirs();

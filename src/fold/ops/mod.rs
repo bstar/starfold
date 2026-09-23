@@ -33,6 +33,8 @@ pub enum OpKind {
     /// be before anything runs.
     Delete(DeleteHow),
     Rename,
+    Compress(super::archive::Format),
+    Extract,
 }
 
 /// How a delete removes a file. Decided once, at plan time, from
@@ -189,6 +191,8 @@ impl Op {
             OpKind::Delete(DeleteHow::Trash) => "TRASH",
             OpKind::Delete(DeleteHow::Permanent) => "DELETE",
             OpKind::Rename => "RENAME",
+            OpKind::Compress(_) => "COMPRESS",
+            OpKind::Extract => "EXTRACT",
         };
         let count = self.sources.len();
         let noun = if count == 1 { "item" } else { "items" };

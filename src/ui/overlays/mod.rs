@@ -25,6 +25,7 @@
 
 pub mod confirm;
 pub mod conflict;
+pub mod context;
 pub mod rename;
 
 use std::path::PathBuf;
@@ -54,6 +55,8 @@ pub enum Pending {
 /// itself between frames.
 #[derive(Debug)]
 pub enum Overlay {
+    Context(context::Menu),
+    Destination(context::Destination),
     Help { scroll: u16 },
     Confirm(confirm::Confirm),
     Rename(rename::Rename),
@@ -70,6 +73,8 @@ pub struct Overlays {
 /// What handling a key or a click did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
+    Context(context::Target, context::Action),
+    Operation(context::Request),
     /// The overlay took the key or click; nothing else happened.
     Consumed,
     /// The overlay closed without deciding anything -- `n`, `esc`, a click
@@ -79,9 +84,15 @@ pub enum Answer {
     Confirmed(Pending),
     /// A [`rename::Rename`] was submitted with a name that passed
     /// validation.
-    Renamed { from: PathBuf, to: PathBuf },
+    Renamed {
+        from: PathBuf,
+        to: PathBuf,
+    },
     /// `o`/`s`/`r` on a [`conflict::Prompt`], applied to the whole op.
-    Policy { op: OpId, policy: ConflictPolicy },
+    Policy {
+        op: OpId,
+        policy: ConflictPolicy,
+    },
     /// `ctrl+c`, which quits from inside an overlay the same as it does
     /// everywhere else.
     Quit,
@@ -119,6 +130,13 @@ impl Overlays {
         self.current = Some(Overlay::Confirm(c));
     }
 
+    pub fn open_context(&mut self, target: context::Target, anchor: (u16, u16)) {
+        self.current = Some(Overlay::Context(context::Menu::new(target, anchor)));
+    }
+    pub fn open_destination(&mut self, request: context::Request) {
+        self.current = Some(Overlay::Destination(context::Destination::new(request)));
+    }
+
     pub fn open_rename(&mut self, from: PathBuf) {
         self.current = Some(Overlay::Rename(rename::Rename::new(from)));
     }
@@ -149,6 +167,14 @@ impl Overlays {
 
         let overlay = self.current.as_mut().expect("checked above");
         let (close, answer) = match overlay {
+            Overlay::Context(m) => match m.key(k) {
+                Some(a) => (true, Answer::Context(m.target.clone(), a)),
+                None => (false, Answer::Consumed),
+            },
+            Overlay::Destination(d) => match d.handle(k) {
+                Some(r) => (true, Answer::Operation(r)),
+                None => (false, Answer::Consumed),
+            },
             Overlay::Help { scroll } => match k.code {
                 KeyCode::Char('j') | KeyCode::Down => {
                     *scroll = scroll.saturating_add(1);
@@ -212,6 +238,26 @@ impl Overlays {
         }
         let overlay = self.current.as_mut().expect("checked above");
         let (close, answer) = match overlay {
+            Overlay::Context(m) => {
+                let r = m.rect(area);
+                if !inside(r, x, y) {
+                    (true, Answer::Closed)
+                } else if y > r.y && y < r.bottom() - 1 {
+                    match m.actions.get((y - r.y - 1) as usize) {
+                        Some(a) => (true, Answer::Context(m.target.clone(), *a)),
+                        None => (false, Answer::Consumed),
+                    }
+                } else {
+                    (false, Answer::Consumed)
+                }
+            }
+            Overlay::Destination(_) => {
+                if inside(context::Destination::rect(area), x, y) {
+                    (false, Answer::Consumed)
+                } else {
+                    (true, Answer::Closed)
+                }
+            }
             Overlay::Help { .. } => {
                 let r = help_rect(area);
                 if inside(r, x, y) {
@@ -292,6 +338,11 @@ impl Overlays {
         bars: &mut Bars,
     ) -> Option<(u16, u16)> {
         match self.current.as_mut()? {
+            Overlay::Context(m) => {
+                m.render(area, buf, theme);
+                None
+            }
+            Overlay::Destination(d) => d.render(area, buf, theme),
             Overlay::Help { scroll } => {
                 // `HelpView` takes STAR/KIT's own `Theme`, which this crate's
                 // wrapper derefs to; a struct literal is not a coercion site,

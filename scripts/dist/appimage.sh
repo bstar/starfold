@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The AppImage. Run inside the same old-glibc container as portable.sh.
+# The AppImage. Build in Debian Bullseye to retain the supported glibc floor.
 #
 # What it carries is, today, nothing: this binary links the C runtime and
 # libgcc and that is the whole of its NEEDED list, so the library walk below
@@ -37,6 +37,7 @@ bin="${CARGO_TARGET_DIR:-target}/release/starfold"
 scripts/dist/glibc-floor.sh "$bin"
 
 work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 appdir=$work/AppDir
 install -Dm755 "$bin"                         "$appdir/usr/bin/starfold"
 install -Dm644 packaging/starfold.desktop     "$appdir/starfold.desktop"
@@ -45,6 +46,7 @@ install -Dm644 packaging/starfold.desktop     "$appdir/usr/share/applications/st
 install -Dm644 packaging/starfold.png         "$appdir/usr/share/icons/hicolor/256x256/apps/starfold.png"
 install -Dm644 packaging/starfold.svg         "$appdir/usr/share/icons/hicolor/scalable/apps/starfold.svg"
 install -Dm644 README.md LICENSE -t           "$appdir/usr/share/doc/starfold/"
+install -Dm644 LICENSES/UnRAR.txt "$appdir/usr/share/doc/starfold/LICENSES/UnRAR.txt"
 cp "$appdir/starfold.png" "$appdir/.DirIcon"
 mkdir -p "$appdir/usr/lib"
 

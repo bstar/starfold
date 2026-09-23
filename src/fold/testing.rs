@@ -184,6 +184,40 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+pub fn write_pdf(path: &std::path::Path, pages: u32) {
+    use lopdf::{
+        content::{Content, Operation},
+        dictionary, Object, Stream,
+    };
+    let mut doc = lopdf::Document::with_version("1.5");
+    let root = doc.new_object_id();
+    let font =
+        doc.add_object(dictionary! {"Type"=>"Font","Subtype"=>"Type1","BaseFont"=>"Helvetica"});
+    let resources = doc.add_object(dictionary! {"Font"=>dictionary!{"F1"=>font}});
+    let mut kids = vec![];
+    for n in 1..=pages {
+        let content = Content {
+            operations: vec![
+                Operation::new("BT", vec![]),
+                Operation::new("Tf", vec!["F1".into(), 12.into()]),
+                Operation::new("Td", vec![50.into(), 700.into()]),
+                Operation::new(
+                    "Tj",
+                    vec![Object::string_literal(format!("Page {n} contents"))],
+                ),
+                Operation::new("ET", vec![]),
+            ],
+        };
+        let contents = doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+        let page = doc.add_object(dictionary! {"Type"=>"Page","Parent"=>root,"Contents"=>contents});
+        kids.push(Object::Reference(page));
+    }
+    doc.objects.insert(root,dictionary!{"Type"=>"Pages","Kids"=>kids,"Count"=>pages,"Resources"=>resources,"MediaBox"=>vec![0.into(),0.into(),612.into(),792.into()]}.into());
+    let catalog = doc.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+    doc.trailer.set("Root", catalog);
+    doc.save(path).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

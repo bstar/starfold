@@ -17,6 +17,8 @@ grouped by what you are trying to do.
 
 ## Going further
 
+- [Intelligent previews, file icons and archive actions](previews-and-archives.md)
+
 - [Themes](themes.md): the format, your own themes, and the `[fold]` roles.
 - [On the command line](cli.md): `starfold list`, which prints a directory
   with no window involved.

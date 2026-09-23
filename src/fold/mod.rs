@@ -21,6 +21,10 @@
 //! - [`worker`] owns the two threads; [`handle`] is the contract between them
 //!   and the terminal.
 
+pub mod archive;
+pub mod file_type;
+mod process;
+
 pub mod entry;
 pub mod filter;
 pub mod format;

@@ -1,0 +1,25 @@
+---
+source: src/ui/frames.rs
+expression: "render(&mut app, 60, 21)"
+---
+╔═ S T A R / F O L D ══════════════════════════════ stack ═╗
+║          ‹  hidden  sort  filter  bookmark  places  view ║
+║─ ~ ── 3 files · 3 dirs · 290 B ──────────────────────────║
+║    ▸ empty/                               -  Sep 10      ║
+║    ▸ pictures/                            -  Sep 10      ║
+║    ▸ projects/                            -  Sep 10      ║
+║    ◇ blob.bin                         256 B  Sep 10      ║
+║    ↗ dangling                           7 B  Sep 10      ║
+║    ↗ notes.txt                         27 B  Sep 10      ║
+║                                                          ║
+║                                                          ║
+╚══════════════════════════════════════════════════════════╝
+╔═ PREVIEW — ▸ projects ═══════════════════════════════════╗
+║                                                    close ║
+║└── ▸ starwire/                                           █
+╚══════════════════════════════════════════════════════════╝
+╔═ OPERATIONS ═════════════════════════════════════════════╗
+║                                               run  clear ║
+║                      nothing queued                      ║
+╚══════════════════════════════════════════════════════════╝
+? help  j/k scroll  i fold  z scale                   ~  off

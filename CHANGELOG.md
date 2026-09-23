@@ -5,6 +5,8 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-09-23
+
 ### Added
 
 - **The fold stack.** Entering a directory pushes a level onto the column;
@@ -21,9 +23,14 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
   about when a name at the destination would collide. A delete goes to the
   trash where the platform has one; a running operation can be cancelled
   without leaving anything half-done.
-- **The preview panel.** Text, a decoded image, a budgeted directory summary,
-  a hexdump for anything else, and what a symlink points at — built from the
-  same limits `config.toml`'s `[preview]` table states.
+- **Intelligent previews.** Media tags, incremental PDF text, archive listings,
+  directory trees, text, images and file metadata, with modular providers,
+  bounded parser processes, cancellation and caching.
+- **Commander and Places.** Two-pane browsing, mounted locations and bookmarks.
+- **File actions.** Context menus and queued archive creation/extraction.
+- **File-type icons** across browser views and previews.
+- **Embedded STAR/AMP playback** with graphical controls and host-specific styles.
+- **Release packages.** Linux Nix and AppImage, plus Apple Silicon macOS archives.
 - **The column and its themes.** One-column chrome shared with the rest of
   the STAR family: the stack, preview and operations modules, a status row,
   every key and mouse gesture, and the `[fold]` colour roles derived from
@@ -43,3 +50,7 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
   planning and execution code inline, so the core and the drawn frames are
   both tested against a real filesystem with no terminal and no worker
   thread involved.
+
+### Fixed
+
+- Fullscreen startup and repaint no longer require a terminal cursor-position reply.

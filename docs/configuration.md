@@ -44,10 +44,13 @@ than drawing something it cannot draw honestly.
 
 | Key | Does |
 | --- | --- |
+| `[preview] timeout_ms` | smart-preview request deadline, clamped to 100–30000 ms. Default `2000` |
+| `[preview] cache_bytes` | in-memory preview cache budget, clamped to 1–128 MiB. Default `33554432` (32 MiB) |
+| `[preview] pdf_page_bytes` | extracted text limit per PDF page, clamped to 1–256 KiB. Default `262144` |
 | `[preview] max_bytes` | how much of a text file is read for the preview. Default `262144` (256 KiB) |
 | `[preview] max_lines` | how many lines of that text are drawn. Default `400` |
 | `[preview] max_image_dimension` | a picture wider or taller than this, in pixels, is refused rather than decoded. Default `4096` |
-| `[preview] dir_budget` | the most entries a directory summary will walk before it stops counting and says so. Default `20000` |
+| `[preview] dir_budget` | the most entries inspected for a directory tree or marked-directory size. Trees also stop at 400 displayed entries, four levels and 200 ms. Default `20000` |
 | `[preview] image_scale` | how a picture smaller than the panel is grown: `1x`, `pixels` or `smooth`. Default `1x` |
 
 `image_scale` is the one of those `z` changes while STAR/FOLD is running, and
