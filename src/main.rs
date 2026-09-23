@@ -246,7 +246,7 @@ mod startup_tests {
             ..Default::default()
         };
         let restored = restore_locations(None, &session, dir.path());
-        assert_eq!(restored.fold_dir, dir.path());
+        assert_eq!(restored.fold_dir, dir.path().canonicalize().unwrap());
         assert!(restored.commander.is_none());
     }
 
@@ -268,8 +268,18 @@ mod startup_tests {
             ..Default::default()
         };
         let restored = restore_locations(Some(requested.clone()), &session, dir.path());
-        assert_eq!(restored.fold_dir, dir.path());
-        assert_eq!(restored.commander, Some(([left, requested], 1, true)));
+        assert_eq!(restored.fold_dir, dir.path().canonicalize().unwrap());
+        assert_eq!(
+            restored.commander,
+            Some((
+                [
+                    left.canonicalize().unwrap(),
+                    requested.canonicalize().unwrap()
+                ],
+                1,
+                true
+            ))
+        );
     }
 
     #[test]
