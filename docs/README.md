@@ -10,6 +10,7 @@ grouped by what you are trying to do.
 - [The stack](the-stack.md): Fold and Commander views, Places, marks and the
   operations queue.
 - [Keys and mouse](keys-and-mouse.md): every binding and gesture, per module.
+- [Drag and drop](drag-and-drop.md): native file gestures, destinations, and SSH transfers.
 - [Configuration](configuration.md): every setting, the themes, and where the
   files live.
 - [If something is wrong](troubleshooting.md): the first things to check, and

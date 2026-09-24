@@ -14,6 +14,7 @@ pub mod plan;
 pub mod progress;
 pub mod trash;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -177,6 +178,9 @@ pub struct Op {
     pub status: OpStatus,
     pub policy: ConflictPolicy,
     pub plan: Option<Plan>,
+    /// Items left at the source by a conflict policy. A drop must never
+    /// report a completed Move to the desktop when this is nonzero.
+    pub skipped: usize,
     /// Shared with the ops thread while the op runs: the same `Arc` goes out
     /// in `Job::Run`, and the status row reads the atomics through this one.
     pub progress: Arc<Progress>,
@@ -185,6 +189,14 @@ pub struct Op {
 impl Op {
     /// `COPY 14 files → ~/Archive`, the line the OPERATIONS panel draws.
     pub fn title(&self) -> String {
+        if self.kind == OpKind::Copy && self.dest.is_none() {
+            let noun = if self.sources.len() == 1 {
+                "item"
+            } else {
+                "items"
+            };
+            return format!("EXPORT {} {noun}", self.sources.len());
+        }
         let verb = match self.kind {
             OpKind::Copy => "COPY",
             OpKind::Move => "MOVE",
@@ -218,6 +230,8 @@ impl Op {
 pub struct Queue {
     ops: Vec<Op>,
     next_id: u64,
+    auto_start: HashSet<OpId>,
+    manual_running: bool,
 }
 
 impl Queue {
@@ -242,9 +256,59 @@ impl Queue {
             status: OpStatus::Queued,
             policy,
             plan: None,
+            skipped: 0,
             progress: Arc::new(Progress::new(0)),
         });
         id
+    }
+
+    /// A dropped transfer starts as soon as the operations worker is free.
+    /// Pending manual entries remain drafts until Run is requested again.
+    pub fn enqueue_drop(
+        &mut self,
+        kind: OpKind,
+        sources: Vec<PathBuf>,
+        dest: PathBuf,
+        policy: ConflictPolicy,
+    ) -> OpId {
+        let id = self.enqueue(kind, sources, Some(dest), policy);
+        self.auto_start.insert(id);
+        self.manual_running = false;
+        id
+    }
+
+    pub fn begin_export(&mut self, sources: Vec<PathBuf>, policy: ConflictPolicy) -> OpId {
+        let id = self.enqueue(OpKind::Copy, sources, None, policy);
+        if let Some(op) = self.get_mut(id) {
+            op.status = OpStatus::Running;
+        }
+        id
+    }
+
+    pub fn begin_import(
+        &mut self,
+        sources: Vec<PathBuf>,
+        dest: PathBuf,
+        policy: ConflictPolicy,
+    ) -> OpId {
+        let id = self.enqueue(OpKind::Copy, sources, Some(dest), policy);
+        if let Some(op) = self.get_mut(id) {
+            op.status = OpStatus::Running;
+        }
+        self.manual_running = false;
+        id
+    }
+
+    pub fn start_manual(&mut self) {
+        self.manual_running = true;
+    }
+
+    pub fn next_runnable(&self) -> Option<OpId> {
+        self.ops
+            .iter()
+            .find(|op| op.status == OpStatus::Queued && self.auto_start.contains(&op.id))
+            .map(|op| op.id)
+            .or_else(|| self.manual_running.then(|| self.first_runnable()).flatten())
     }
 
     /// One entry by id, to be changed in place: its status, its policy, its
@@ -259,6 +323,7 @@ impl Queue {
     pub fn remove(&mut self, id: OpId) -> bool {
         let before = self.ops.len();
         self.ops.retain(|op| op.id != id);
+        self.auto_start.remove(&id);
         self.ops.len() != before
     }
 
@@ -266,6 +331,9 @@ impl Queue {
     /// op is left to finish, or to be stopped with `Command::Cancel`.
     pub fn clear_pending(&mut self) {
         self.ops.retain(|op| !op.is_pending());
+        self.auto_start
+            .retain(|id| self.ops.iter().any(|op| op.id == *id));
+        self.manual_running = false;
     }
 
     /// The next queued entry the worker should start, in queue order. Skips
@@ -309,6 +377,7 @@ mod tests {
             status,
             policy: ConflictPolicy::Ask,
             plan: None,
+            skipped: 0,
             progress: Arc::new(Progress::new(0)),
         }
     }

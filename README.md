@@ -6,7 +6,7 @@
 
 A terminal file manager in the STAR family. The directories you drill through
 stack up behind you, the files you mark stay marked wherever you go, and
-nothing is copied, moved or deleted until you run the queue.
+keyboard-queued operations wait until you run the queue.
 
 <!-- The screenshot goes here, as docs/screenshot.png, the way STAR/AMP's
      README carries one. There is no picture yet: the window is still being
@@ -57,7 +57,11 @@ rest of it.
   marked, to here".
 - **An operations queue.** Copies, moves, deletes, renames, compression and extraction are queued
   rather than run on the spot; nothing touches the filesystem until you run
-  the queue, and a delete goes to the trash where the platform has one.
+  the queue, and a delete goes to the trash where the platform has one. A
+  dropped file starts its own tracked transfer automatically.
+- **Native drag and drop.** In terminals that support the [OSC 72 protocol](https://sw.kovidgoyal.net/kitty/dnd-protocol/),
+  drag files into Fold or Commander, between panes, or out to the desktop.
+  Remote sessions can transfer files over the terminal connection.
 - **Intelligent previews.** Music/video tags, PDF text loaded three pages at
   a time as you scroll, archive contents, images, text and directory summaries.
   Other binary files show useful metadata. Unicode file-type icons appear in
@@ -89,6 +93,7 @@ most people want first:
 
 - [The stack](docs/the-stack.md)
 - [Keys and mouse](docs/keys-and-mouse.md)
+- [Drag and drop](docs/drag-and-drop.md)
 - [Configuration](docs/configuration.md)
 - [If something is wrong](docs/troubleshooting.md)
 

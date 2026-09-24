@@ -72,6 +72,14 @@ impl Format {
 }
 pub fn destination(path: &Path) -> PathBuf {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
+    path.with_file_name(
+        suffix(&name)
+            .map(|s| &name[..name.len() - s.len()])
+            .filter(|s| !s.is_empty())
+            .unwrap_or("extracted"),
+    )
+}
+fn suffix(name: &str) -> Option<&str> {
     let lower = name.to_ascii_lowercase();
     let suffix = [
         ".tar.gz", ".tar.zst", ".tar.xz", ".tar.bz2", ".tgz", ".tbz2", ".tzst", ".txz", ".zip",
@@ -79,12 +87,7 @@ pub fn destination(path: &Path) -> PathBuf {
     ]
     .into_iter()
     .find(|s| lower.ends_with(s));
-    path.with_file_name(
-        suffix
-            .map(|s| &name[..name.len() - s.len()])
-            .filter(|s| !s.is_empty())
-            .unwrap_or("extracted"),
-    )
+    suffix.map(|s| &name[name.len() - s.len()..])
 }
 /// Never repair hostile names into different names: reject the archive.
 fn safe_path(name: &str) -> anyhow::Result<PathBuf> {

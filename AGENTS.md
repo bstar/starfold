@@ -19,6 +19,15 @@ CARGO_NET_GIT_FETCH_WITH_CLI=true nix develop -c cargo build --release
 CARGO_NET_GIT_FETCH_WITH_CLI=true nix develop -c cargo test --all
 ```
 
+On the Linux development workstation, the `starfold` command in the user's
+shell is `~/.local/bin/starfold`, a symlink to this checkout's
+`target/release/starfold`. After changing application code, always complete a
+release build before saying the change is ready for desktop testing. Verify
+`command -v starfold` and `readlink -f "$(command -v starfold)"` point to the
+built executable; a debug/test build does not update the user's command.
+Restart running STAR/FOLD instances when desktop testing requires the new
+binary, since existing processes keep the old executable loaded.
+
 There are no separately installed system libraries. `unrar_sys` compiles the bundled RARLAB C++ engine using the compiler in the flake; CI supplies the native C++ toolchain. Its notice is installed from `LICENSES/UnRAR.txt`. `libbz2-rs-sys` is pure Rust despite its name. That is worth stating for a program that
 deletes to the trash and draws pictures: trash is the freedesktop
 specification, in pure Rust, on Linux, and `NSFileManager` through the `objc2`
@@ -286,6 +295,13 @@ and owns private staging/publishing; `archive::connection` supervises codecs in
 Failed or cancelled work cannot publish partial archives/extractions. Codec
 processes share a 768 MiB resource ceiling from `fold::process`. RAR uses bundled
 native UnRAR: the considered Rust port also had GPL terms, so it is not linked.
+
+Archive destinations must be disjoint from their sources in both directions:
+overwriting a directory containing the source archive would delete it during
+staging cleanup. Check aliases when planning and again before publishing.
+Conflict renaming preserves the full archive suffix (including `.tar.gz`).
+Archive regression fixtures are generated in temporary directories, never
+checked in as archive files.
 
 The pinned sevenz-rust2 0.20.2 writer inverts empty-entry anti bits. The adapter
 compensates when writing directories; its round-trip test and external 7z check

@@ -59,6 +59,7 @@ pub struct Menu {
     pub actions: Vec<Action>,
     pub cursor: usize,
     pub anchor: (u16, u16),
+    pub title: &'static str,
 }
 impl Menu {
     pub fn new(target: Target, anchor: (u16, u16)) -> Self {
@@ -84,6 +85,21 @@ impl Menu {
             actions,
             cursor: 0,
             anchor,
+            title: "file actions",
+        }
+    }
+    pub fn for_drop(anchor: (u16, u16)) -> Self {
+        Self {
+            target: Target {
+                clicked: PathBuf::new(),
+                directory: true,
+                sources: Vec::new(),
+                destination: PathBuf::new(),
+            },
+            actions: vec![Action::Copy, Action::Move],
+            cursor: 0,
+            anchor,
+            title: "drop files",
         }
     }
     pub fn rect(&self, area: Rect) -> Rect {
@@ -115,7 +131,7 @@ impl Menu {
             buf,
             &overlay::Overlay {
                 theme: t,
-                title: "file actions",
+                title: self.title,
                 detail: None,
                 footer: None,
             },

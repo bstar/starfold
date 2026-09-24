@@ -9,6 +9,7 @@ pub mod app;
 mod audio_graphics;
 #[cfg(test)]
 mod commander_tests;
+pub mod dnd;
 #[cfg(test)]
 pub mod fake;
 #[cfg(test)]

@@ -56,6 +56,7 @@ pub enum Pending {
 #[derive(Debug)]
 pub enum Overlay {
     Context(context::Menu),
+    Drop(context::Menu),
     Destination(context::Destination),
     Help { scroll: u16 },
     Confirm(confirm::Confirm),
@@ -74,6 +75,7 @@ pub struct Overlays {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     Context(context::Target, context::Action),
+    Drop(crate::fold::ops::OpKind),
     Operation(context::Request),
     /// The overlay took the key or click; nothing else happened.
     Consumed,
@@ -133,6 +135,9 @@ impl Overlays {
     pub fn open_context(&mut self, target: context::Target, anchor: (u16, u16)) {
         self.current = Some(Overlay::Context(context::Menu::new(target, anchor)));
     }
+    pub fn open_drop(&mut self, anchor: (u16, u16)) {
+        self.current = Some(Overlay::Drop(context::Menu::for_drop(anchor)));
+    }
     pub fn open_destination(&mut self, request: context::Request) {
         self.current = Some(Overlay::Destination(context::Destination::new(request)));
     }
@@ -167,6 +172,19 @@ impl Overlays {
 
         let overlay = self.current.as_mut().expect("checked above");
         let (close, answer) = match overlay {
+            Overlay::Drop(m) => match k.code {
+                KeyCode::Char('c') => (true, Answer::Drop(crate::fold::ops::OpKind::Copy)),
+                KeyCode::Char('m') => (true, Answer::Drop(crate::fold::ops::OpKind::Move)),
+                _ => match m.key(k) {
+                    Some(context::Action::Copy) => {
+                        (true, Answer::Drop(crate::fold::ops::OpKind::Copy))
+                    }
+                    Some(context::Action::Move) => {
+                        (true, Answer::Drop(crate::fold::ops::OpKind::Move))
+                    }
+                    _ => (false, Answer::Consumed),
+                },
+            },
             Overlay::Context(m) => match m.key(k) {
                 Some(a) => (true, Answer::Context(m.target.clone(), a)),
                 None => (false, Answer::Consumed),
@@ -238,6 +256,24 @@ impl Overlays {
         }
         let overlay = self.current.as_mut().expect("checked above");
         let (close, answer) = match overlay {
+            Overlay::Drop(m) => {
+                let r = m.rect(area);
+                if !inside(r, x, y) {
+                    (true, Answer::Closed)
+                } else if y > r.y && y < r.bottom() - 1 {
+                    match m.actions.get((y - r.y - 1) as usize) {
+                        Some(context::Action::Copy) => {
+                            (true, Answer::Drop(crate::fold::ops::OpKind::Copy))
+                        }
+                        Some(context::Action::Move) => {
+                            (true, Answer::Drop(crate::fold::ops::OpKind::Move))
+                        }
+                        _ => (false, Answer::Consumed),
+                    }
+                } else {
+                    (false, Answer::Consumed)
+                }
+            }
             Overlay::Context(m) => {
                 let r = m.rect(area);
                 if !inside(r, x, y) {
@@ -338,6 +374,10 @@ impl Overlays {
         bars: &mut Bars,
     ) -> Option<(u16, u16)> {
         match self.current.as_mut()? {
+            Overlay::Drop(m) => {
+                m.render(area, buf, theme);
+                None
+            }
             Overlay::Context(m) => {
                 m.render(area, buf, theme);
                 None

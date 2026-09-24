@@ -38,6 +38,7 @@
 //! `starkit::term::init`'s own doc and `docs/graphics.md`. So it happens in
 //! [`App::run`], before [`starkit::term::init`], never inside [`App::new`].
 
+mod dnd;
 mod file_actions;
 
 use std::collections::HashMap;
@@ -62,6 +63,7 @@ use starkit::ratatui::widgets::Widget as _;
 use starkit::ratatui_image::Image;
 use starkit::term::{self, Tui};
 
+use super::dnd as wire_dnd;
 use super::keymap::{self, Action};
 use super::layout::{self, pane_rect, LayoutState, Regions};
 use super::overlays::confirm::Confirm;
@@ -232,6 +234,7 @@ fn place_items(state: &crate::fold::State) -> Vec<super::places::PlaceItem> {
 }
 
 pub struct App {
+    dnd: wire_dnd::State,
     audio: AudioClient,
     audio_path: Option<PathBuf>,
     audio_error: Option<String>,
@@ -719,6 +722,7 @@ impl App {
         let audio_cell_size = transport_cell_size(&mut graphics);
 
         let mut app = Self {
+            dnd: wire_dnd::State::default(),
             audio: AudioClient::new(),
             audio_path: None,
             audio_error: None,
@@ -790,8 +794,10 @@ impl App {
         let mut app = App::new(core, cfg, cfg_path, session_path, graphics);
 
         let mut term = term::init()?;
+        app.dnd_query();
         let result = app.event_loop(&mut term);
         app.stop_audio();
+        app.dnd_stop();
         term::restore()?;
 
         if let Some(path) = app.session_path.clone() {
@@ -833,26 +839,35 @@ impl App {
             })?;
 
             if event::poll(FRAME)? {
-                match event::read()? {
-                    TermEvent::Key(k) if k.kind == KeyEventKind::Press => self.key(k),
-                    TermEvent::Mouse(m) => self.mouse(m),
-                    // A font zoom arrives as a resize, and it changes the
-                    // cell size any built protocol was sized for.
-                    TermEvent::Resize(..) => {
-                        self.graphics.remeasure();
-                        self.audio_cell_size = transport_cell_size(&mut self.graphics);
-                        self.audio_graphics.clear(&mut self.graphics);
-                        self.repaint = true;
-                    }
-                    TermEvent::Paste(text) => {
-                        if let Some(input) = self.filter.as_mut() {
-                            input.paste(&text);
-                            let text = input.text().to_string();
-                            self.core.send(Command::SetFilter(text));
+                // OSC 72 file content arrives in 4 KiB chunks. Drain a
+                // bounded batch before repainting so a large transfer is not
+                // throttled to one chunk per frame.
+                for _ in 0..2048 {
+                    match event::read()? {
+                        TermEvent::Key(k) if k.kind == KeyEventKind::Press => self.key(k),
+                        TermEvent::Mouse(m) => self.mouse(m),
+                        TermEvent::Osc72(raw) => self.dnd_message(&raw),
+                        // A font zoom arrives as a resize, and it changes the
+                        // cell size any built protocol was sized for.
+                        TermEvent::Resize(..) => {
+                            self.graphics.remeasure();
+                            self.audio_cell_size = transport_cell_size(&mut self.graphics);
+                            self.audio_graphics.clear(&mut self.graphics);
+                            self.repaint = true;
                         }
+                        TermEvent::Paste(text) => {
+                            if let Some(input) = self.filter.as_mut() {
+                                input.paste(&text);
+                                let text = input.text().to_string();
+                                self.core.send(Command::SetFilter(text));
+                            }
+                        }
+                        TermEvent::FocusGained | TermEvent::FocusLost => {}
+                        _ => {}
                     }
-                    TermEvent::FocusGained | TermEvent::FocusLost => {}
-                    _ => {}
+                    if !event::poll(Duration::ZERO)? {
+                        break;
+                    }
                 }
             }
         }
@@ -861,6 +876,7 @@ impl App {
 
     /// Everything a frame does before it draws.
     pub fn tick(&mut self) {
+        self.dnd_poll_completion();
         let batch: Vec<Event> = self.core.drain().take(DRAIN_CAP).collect();
         for event in batch {
             match event {
@@ -1140,6 +1156,10 @@ impl App {
 
     pub fn key(&mut self, k: KeyEvent) {
         self.refresh();
+        if self.dnd.choice.is_some() && k.code == KeyCode::Esc && !self.overlays.is_open() {
+            self.dnd_cancel_choice();
+            return;
+        }
         if self.places.is_some()
             && k.code == KeyCode::Char('c')
             && k.modifiers
@@ -1218,6 +1238,7 @@ impl App {
 
     fn after_overlay_answer(&mut self, answer: Answer) {
         match answer {
+            Answer::Drop(kind) => self.dnd_choose(kind),
             Answer::Context(target, action) => self.context_action(target, action),
             Answer::Operation(r) => {
                 if r.kind == OpKind::Extract && r.sources.len() > 1 {
@@ -1237,14 +1258,14 @@ impl App {
                     });
                 }
             }
-            Answer::Consumed | Answer::Closed => {}
+            Answer::Consumed => {}
+            Answer::Closed => self.dnd_cancel_choice(),
             Answer::Confirmed(pending) => self.on_confirmed(pending),
             Answer::Renamed { from, to } => {
                 self.core.send(Command::QueueRename { from, to });
             }
             Answer::Policy { op, policy } => {
                 self.core.send(Command::SetPolicy(op, policy));
-                self.core.send(Command::Run);
             }
             Answer::Quit => self.quit = true,
         }
@@ -2089,6 +2110,21 @@ impl App {
             panels::stack::render(regions.rect_of(ModuleId::Stack), buf, &sv, &mut bars);
         }
 
+        if let Some((x, y)) = self.dnd.hover_coords {
+            let stack = regions.rect_of(ModuleId::Stack);
+            if x >= stack.x && x < stack.right() && y >= stack.y && y < stack.bottom() {
+                let row = if self.commander {
+                    pane_rect(stack, usize::from(x >= stack.x + stack.width / 2))
+                } else {
+                    stack
+                };
+                for cell_x in row.x..row.right() {
+                    let style = buf[(cell_x, y)].style().add_modifier(Modifier::REVERSED);
+                    buf[(cell_x, y)].set_style(style);
+                }
+            }
+        }
+
         let placement = if self.audio_path.is_some() {
             self.draw_audio(regions.rect_of(ModuleId::Preview), buf);
             None
@@ -2396,11 +2432,25 @@ fn build_op_row(op: &Op, home: &std::path::Path) -> panels::operations::OpRow {
             (format!("waiting: {n} {noun}"), Tone::Conflict)
         }
         OpStatus::Running => {
-            let pct = (op.progress.fraction() * 100.0).round() as u32;
-            (
-                format!("{} {pct}%", running_verb_lower(op.kind)),
-                Tone::Running,
-            )
+            if op.kind == OpKind::Copy
+                && op.plan.is_none()
+                && op.progress.total() == 0
+                && op.dest.is_some()
+            {
+                (
+                    format!(
+                        "receiving {}",
+                        crate::fold::format::size(op.progress.done())
+                    ),
+                    Tone::Running,
+                )
+            } else {
+                let pct = (op.progress.fraction() * 100.0).round() as u32;
+                (
+                    format!("{} {pct}%", running_verb_lower(op.kind)),
+                    Tone::Running,
+                )
+            }
         }
         OpStatus::Done => ("done".to_string(), Tone::Done),
         // `Op` keeps no `Outcome` of its own (see `fold/ops/mod.rs`) -- the
@@ -2409,7 +2459,8 @@ fn build_op_row(op: &Op, home: &std::path::Path) -> panels::operations::OpRow {
         OpStatus::Failed => ("failed".to_string(), Tone::Failed),
         OpStatus::Cancelled => ("cancelled".to_string(), Tone::Failed),
     };
-    let bar = matches!(op.status, OpStatus::Running).then(|| op.progress.bar(10));
+    let bar = (matches!(op.status, OpStatus::Running) && op.progress.total() > 0)
+        .then(|| op.progress.bar(10));
 
     panels::operations::OpRow {
         title: op_title(op, home),

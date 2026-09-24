@@ -513,8 +513,6 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 [[package]]
 name = "crossterm"
 version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8b9f2e4c67f833b660cdb0a3523065869fb35570177239812ed4c905aeff87b"
 dependencies = [
  "bitflags 2.13.2",
  "crossterm_winapi",
@@ -2538,6 +2536,7 @@ name = "starfold"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "base64",
  "bzip2",
  "clap",
  "crossbeam-channel",
@@ -2553,11 +2552,13 @@ dependencies = [
  "mp4parse",
  "nucleo-matcher",
  "pdf-extract",
+ "percent-encoding",
  "proptest",
  "ruzstd",
  "serde",
  "serde_json",
  "sevenz-rust2",
+ "sha2 0.10.9",
  "starkit",
  "tar",
  "tempfile",

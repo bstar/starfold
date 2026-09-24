@@ -388,6 +388,65 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
                 events: vec![Event::Queue(id)],
             }
         }
+        Command::QueueDrop {
+            kind,
+            sources,
+            dest,
+        } => {
+            if sources.is_empty() || !matches!(kind, OpKind::Copy | OpKind::Move) {
+                return Effects::default();
+            }
+            let id = state
+                .queue
+                .enqueue_drop(kind, sources, dest, state.conflicts);
+            let mut effects = run_next(state);
+            effects.events.insert(0, Event::Queue(id));
+            effects
+        }
+        Command::BeginExport(sources) => {
+            if sources.is_empty() {
+                return Effects::default();
+            }
+            let id = state.queue.begin_export(sources, state.conflicts);
+            Effects {
+                jobs: vec![],
+                events: vec![Event::Queue(id)],
+            }
+        }
+        Command::FinishExport { op, success } => {
+            if let Some(entry) = state.queue.get_mut(op) {
+                entry.status = if success {
+                    OpStatus::Done
+                } else {
+                    OpStatus::Failed
+                };
+            }
+            let mut effects = run_next(state);
+            effects.events.insert(0, Event::Queue(op));
+            effects
+        }
+        Command::BeginImport { sources, dest } => {
+            if sources.is_empty() {
+                return Effects::default();
+            }
+            let id = state.queue.begin_import(sources, dest, state.conflicts);
+            Effects {
+                jobs: vec![],
+                events: vec![Event::Queue(id)],
+            }
+        }
+        Command::FinishImport { op, success } => {
+            if let Some(entry) = state.queue.get_mut(op) {
+                entry.status = if success {
+                    OpStatus::Done
+                } else {
+                    OpStatus::Failed
+                };
+            }
+            let mut effects = run_next(state);
+            effects.events.insert(0, Event::Queue(op));
+            effects
+        }
         Command::PreviewPage {
             path,
             generation,
@@ -419,7 +478,10 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::QueueRename { from, to } => cmd_queue_rename(state, from, to),
         Command::RemoveOp(id) => cmd_remove_op(state, id),
         Command::ClearQueue => cmd_clear_queue(state),
-        Command::Run => run_next(state),
+        Command::Run => {
+            state.queue.start_manual();
+            run_next(state)
+        }
         Command::SetPolicy(id, policy) => cmd_set_policy(state, id, policy),
         Command::Cancel(id) => cmd_cancel(state, id),
         Command::Preview(path) => cmd_preview(state, path),
@@ -1175,7 +1237,7 @@ fn run_next(state: &mut State) -> Effects {
             events: vec![Event::Note(Note::info("an operation is already running"))],
         };
     }
-    let Some(id) = state.queue.first_runnable() else {
+    let Some(id) = state.queue.next_runnable() else {
         return Effects::default();
     };
     let Some(op) = state.queue.get_mut(id) else {
@@ -1226,10 +1288,9 @@ fn cmd_set_policy(state: &mut State, id: OpId, policy: ConflictPolicy) -> Effect
     if op.status == OpStatus::NeedsPolicy {
         op.status = OpStatus::Queued;
     }
-    Effects {
-        jobs: Vec::new(),
-        events: vec![Event::Queue(id)],
-    }
+    let mut effects = run_next(state);
+    effects.events.insert(0, Event::Queue(id));
+    effects
 }
 
 fn cmd_cancel(state: &mut State, id: OpId) -> Effects {
@@ -1439,6 +1500,7 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
     let mut moved_or_deleted: Vec<PathBuf> = Vec::new();
 
     if let Some(op) = state.queue.get_mut(op_id) {
+        op.skipped = outcome.skipped;
         op.status = if outcome.cancelled {
             OpStatus::Cancelled
         } else if !outcome.failed.is_empty() {
@@ -1943,19 +2005,59 @@ mod tests {
     }
 
     #[test]
-    fn setpolicy_then_run_proceeds_to_job_run() {
+    fn setpolicy_resumes_the_started_operation() {
         let mut s = state_at("/home");
         let id = queued_copy_with_a_conflict(&mut s);
 
-        apply(
+        let effects = apply(
             &mut s,
             Change::Command(Command::SetPolicy(id, ConflictPolicy::Overwrite)),
         );
-        assert_eq!(s.queue.iter().next().unwrap().status, OpStatus::Queued);
-
-        let effects = apply(&mut s, Change::Command(Command::Run));
         assert!(matches!(effects.jobs.as_slice(), [Job::Run { .. }]));
         assert_eq!(s.queue.iter().next().unwrap().status, OpStatus::Running);
+    }
+
+    #[test]
+    fn dropped_transfer_runs_next_without_starting_old_manual_entries() {
+        let mut s = state_at("/dest");
+        apply(
+            &mut s,
+            Change::Command(Command::QueueOperation {
+                kind: OpKind::Copy,
+                sources: vec!["/old".into()],
+                dest: Some("/dest".into()),
+            }),
+        );
+        let old = s.queue.iter().next().unwrap().id;
+        let started = apply(
+            &mut s,
+            Change::Command(Command::QueueDrop {
+                kind: OpKind::Copy,
+                sources: vec!["/new".into()],
+                dest: "/dest".into(),
+            }),
+        );
+        let drop_id = s.queue.iter().nth(1).unwrap().id;
+        assert!(matches!(started.jobs.as_slice(), [Job::Plan { op, .. }] if *op == drop_id));
+        apply(
+            &mut s,
+            Change::Done(Done::Planned {
+                op: drop_id,
+                result: Ok(super::super::ops::Plan::default()),
+            }),
+        );
+        let finished = apply(
+            &mut s,
+            Change::Done(Done::Finished {
+                op: drop_id,
+                outcome: super::super::ops::Outcome::default(),
+            }),
+        );
+        assert!(!finished
+            .jobs
+            .iter()
+            .any(|job| matches!(job, Job::Plan { op, .. } if *op == old)));
+        assert_eq!(s.queue.iter().next().unwrap().status, OpStatus::Queued);
     }
 
     #[test]

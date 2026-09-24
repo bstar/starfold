@@ -23,13 +23,7 @@ pub fn plan(kind: OpKind, sources: &[PathBuf], dest: &Path) -> anyhow::Result<Pl
         dest: target.clone(),
         ..Plan::default()
     };
-    for source in sources {
-        let canonical = fs::canonicalize(source)?;
-        anyhow::ensure!(
-            canonical != target && !parent.starts_with(&canonical),
-            "Archive destination is inside its source"
-        );
-    }
+    check_source_overlap(sources, &target)?;
     if fs::symlink_metadata(&target).is_ok() {
         p.conflicts.push(Conflict {
             source: sources[0].clone(),
@@ -65,6 +59,34 @@ pub fn plan(kind: OpKind, sources: &[PathBuf], dest: &Path) -> anyhow::Result<Pl
     }
     p.total_items = p.items.len();
     Ok(p)
+}
+// Replacing an ancestor of a source would delete that source when staging
+// cleanup removes the previous destination. Resolve aliases on both sides.
+fn check_source_overlap(sources: &[PathBuf], dest: &Path) -> anyhow::Result<()> {
+    let target = fs::canonicalize(dest).or_else(|_| {
+        Ok::<_, std::io::Error>(
+            fs::canonicalize(dest.parent().unwrap())?.join(dest.file_name().unwrap()),
+        )
+    })?;
+    for source in sources {
+        let canonical = fs::canonicalize(source)?;
+        let named = if let Some(name) = source.file_name() {
+            let parent = source
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            fs::canonicalize(parent)?.join(name)
+        } else {
+            canonical.clone()
+        };
+        anyhow::ensure!(
+            !target.starts_with(&canonical)
+                && !canonical.starts_with(&target)
+                && !named.starts_with(&target),
+            "Archive source and destination overlap"
+        );
+    }
+    Ok(())
 }
 fn walk(path: &Path, name: &Path, p: &mut Plan, depth: usize) -> anyhow::Result<()> {
     anyhow::ensure!(
@@ -111,8 +133,14 @@ pub fn run(kind: OpKind, p: &Plan, policy: ConflictPolicy, progress: &Progress) 
                 }
                 ConflictPolicy::RenameNew => {
                     let name = dest.file_name().unwrap().to_string_lossy().into_owned();
+                    let suffix = if matches!(kind, OpKind::Compress(_)) {
+                        super::suffix(&name).unwrap_or("")
+                    } else {
+                        ""
+                    };
+                    let stem = &name[..name.len() - suffix.len()];
                     for n in 1u64.. {
-                        let candidate = dest.with_file_name(format!("{name} ({n})"));
+                        let candidate = dest.with_file_name(format!("{stem} ({n}){suffix}"));
                         if fs::symlink_metadata(&candidate).is_err() {
                             dest = candidate;
                             break;
@@ -122,6 +150,7 @@ pub fn run(kind: OpKind, p: &Plan, policy: ConflictPolicy, progress: &Progress) 
                 ConflictPolicy::Overwrite => {}
             }
         }
+        check_source_overlap(&p.sources, &dest)?;
         let parent = dest.parent().unwrap();
         let stage = tempfile::Builder::new()
             .prefix(".starfold-archive-")
@@ -138,6 +167,7 @@ pub fn run(kind: OpKind, p: &Plan, policy: ConflictPolicy, progress: &Progress) 
                 policy == ConflictPolicy::Overwrite,
                 "Destination appeared while operation was running"
             );
+            check_source_overlap(&p.sources, &dest)?;
             fs::rename(&dest, &backup)?;
         }
         if let Err(e) = publish(&payload, &dest) {
@@ -204,6 +234,87 @@ fn publish(from: &Path, to: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn extraction_rejects_source_inside_destination_even_through_aliases() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("downloads");
+        fs::create_dir(&dest).unwrap();
+        let source = dest.join("archive.zip");
+        fs::write(&source, b"original archive").unwrap();
+        let alias = tmp.path().join("alias");
+        std::os::unix::fs::symlink(&dest, &alias).unwrap();
+        for source in [source.clone(), alias.join("archive.zip")] {
+            for dest in [&dest, &alias] {
+                assert!(plan(OpKind::Extract, std::slice::from_ref(&source), dest).is_err());
+            }
+        }
+        assert_eq!(fs::read(source).unwrap(), b"original archive");
+    }
+
+    #[test]
+    fn execution_rechecks_source_overlap_after_planning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("downloads");
+        fs::create_dir(&dest).unwrap();
+        let source = tmp.path().join("archive.zip");
+        fs::write(&source, b"original archive").unwrap();
+        let p = plan(OpKind::Extract, std::slice::from_ref(&source), &dest).unwrap();
+        let moved = dest.join("archive.zip");
+        fs::rename(&source, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &source).unwrap();
+        let out = run(
+            OpKind::Extract,
+            &p,
+            ConflictPolicy::Overwrite,
+            &Progress::default(),
+        );
+        assert!(out.failed[0].1.contains("overlap"));
+        assert_eq!(fs::read(moved).unwrap(), b"original archive");
+    }
+
+    #[test]
+    fn conflict_renaming_preserves_suffix_and_round_trips_every_writable_format() {
+        for (format, suffix) in [
+            (Format::Zip, ".zip"),
+            (Format::Tar, ".tar"),
+            (Format::TarGz, ".tar.gz"),
+            (Format::TarGz, ".TGZ"),
+            (Format::TarZst, ".tar.zst"),
+            (Format::SevenZip, ".7z"),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let source = tmp.path().join("hello.txt");
+            fs::write(&source, b"hello").unwrap();
+            let dest = tmp.path().join(format!("archive{suffix}"));
+            let first = tmp.path().join(format!("archive (1){suffix}"));
+            for existing in [&dest, &first] {
+                fs::write(existing, b"keep").unwrap();
+            }
+            let p = plan(OpKind::Compress(format), &[source], &dest).unwrap();
+            let out = run(
+                OpKind::Compress(format),
+                &p,
+                ConflictPolicy::RenameNew,
+                &Progress::default(),
+            );
+            assert!(out.failed.is_empty(), "{out:?}");
+            let renamed = tmp.path().join(format!("archive (2){suffix}"));
+            assert_eq!(Format::detect(&renamed).unwrap(), format);
+            let extracted = tmp.path().join("extracted");
+            let p = plan(OpKind::Extract, &[renamed], &extracted).unwrap();
+            let out = run(
+                OpKind::Extract,
+                &p,
+                ConflictPolicy::Ask,
+                &Progress::default(),
+            );
+            assert!(out.failed.is_empty(), "{out:?}");
+            assert_eq!(fs::read(extracted.join("hello.txt")).unwrap(), b"hello");
+            for existing in [&dest, &first] {
+                assert_eq!(fs::read(existing).unwrap(), b"keep");
+            }
+        }
+    }
     #[test]
     fn every_writable_format_round_trips_a_tree() {
         for (format, extension) in [

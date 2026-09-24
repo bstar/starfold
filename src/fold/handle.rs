@@ -97,6 +97,25 @@ pub enum Command {
         sources: Vec<PathBuf>,
         dest: Option<PathBuf>,
     },
+    /// Queue a native drop and run it ahead of untouched manual entries.
+    QueueDrop {
+        kind: super::ops::OpKind,
+        sources: Vec<PathBuf>,
+        dest: PathBuf,
+    },
+    BeginExport(Vec<PathBuf>),
+    FinishExport {
+        op: OpId,
+        success: bool,
+    },
+    BeginImport {
+        sources: Vec<PathBuf>,
+        dest: PathBuf,
+    },
+    FinishImport {
+        op: OpId,
+        success: bool,
+    },
     PreviewPage {
         path: PathBuf,
         generation: u64,

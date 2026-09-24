@@ -186,6 +186,11 @@ among your marks is queued as one item, recreated as a link at the other end,
 not walked into. Copying or moving a directory into itself, or into its own
 descendant, is refused outright rather than attempted.
 
+A drop is the deliberate start gesture for a transfer: it enters OPERATIONS
+and runs when the operations worker is free. Earlier keyboard-queued entries
+do not start just because a drop did. A drop still uses the same planning and
+conflict handling as an ordinary copy or move.
+
 When a plan finds a name already at the destination, the queue stops and
 asks — the OPERATIONS module shows the conflicts, and there are three
 answers: **overwrite** (replace what is there), **skip** (leave it alone), or

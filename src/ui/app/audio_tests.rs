@@ -128,7 +128,9 @@ fn fake_player_with_hello(
 
 #[cfg(unix)]
 fn wait_for(mut condition: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // The Nix package check runs many process-spawning tests in parallel;
+    // the fake shell can be scheduled late even though its handshake is fast.
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !condition() {
         assert!(
             Instant::now() < deadline,
