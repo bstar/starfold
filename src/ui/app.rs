@@ -2147,6 +2147,42 @@ impl App {
             panels::operations::render(regions.rect_of(ModuleId::Operations), buf, &ov, &mut bars);
         }
 
+        let hotkeys_enabled = self.filter.is_none()
+            && self.places.is_none()
+            && !self.overlays.is_open()
+            && !self.g_pending;
+        if self.commander {
+            for pane in 0..self.panes.len() {
+                panels::highlight_header_hotkeys(
+                    pane_rect(regions.rect_of(ModuleId::Stack), pane),
+                    ModuleId::Stack,
+                    buf,
+                    &self.theme,
+                    hotkeys_enabled,
+                    focus == ModuleId::Stack,
+                );
+            }
+        } else {
+            panels::highlight_header_hotkeys(
+                regions.rect_of(ModuleId::Stack),
+                ModuleId::Stack,
+                buf,
+                &self.theme,
+                hotkeys_enabled,
+                focus == ModuleId::Stack,
+            );
+        }
+        for module in [ModuleId::Preview, ModuleId::Operations] {
+            panels::highlight_header_hotkeys(
+                regions.rect_of(module),
+                module,
+                buf,
+                &self.theme,
+                hotkeys_enabled,
+                focus == module,
+            );
+        }
+
         status::render(regions.status, buf, &self.status_view(Instant::now()));
 
         if let Some(p) = placement {
@@ -2524,6 +2560,7 @@ mod tests {
     use super::*;
     use crate::ui::fake;
     use starkit::crossterm::event::KeyModifiers;
+    use starkit::ratatui::style::Color;
 
     fn key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
@@ -2560,6 +2597,71 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn header_letter_color(app: &mut App, module: ModuleId, word: panels::Word) -> Color {
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        let rect = app.layout.last.as_ref().unwrap().rect_of(module);
+        let (_, slot) = header::slots(rect, &panels::words(module))
+            .into_iter()
+            .find(|(w, _)| *w == word)
+            .expect("header word is visible");
+        let (_, offset) = word.mnemonic().expect("header word has a key");
+        buf[(slot.x + offset, slot.y)].fg
+    }
+
+    #[test]
+    fn header_letters_follow_focus_and_filter_typing() {
+        let (mut app, fk, _dir) = app();
+        fk.pump();
+        app.tick();
+        let bright = panels::rgb(
+            app.theme
+                .panel_bg
+                .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]),
+        );
+        let dim = panels::rgb(app.theme.dim);
+        assert_eq!(
+            header_letter_color(&mut app, ModuleId::Stack, panels::Word::Hidden),
+            bright
+        );
+        assert_eq!(
+            header_letter_color(&mut app, ModuleId::Preview, panels::Word::Close),
+            dim
+        );
+
+        app.key(key('f'));
+        assert!(app.filter.is_some());
+        assert_eq!(
+            header_letter_color(&mut app, ModuleId::Stack, panels::Word::Hidden),
+            dim
+        );
+        let shown = app.view.show_hidden;
+        app.key(key('n'));
+        assert_eq!(app.filter.as_ref().unwrap().text(), "n");
+        assert_eq!(app.view.show_hidden, shown);
+        app.key(code(KeyCode::Enter));
+
+        app.layout.focus_set(ModuleId::Preview);
+        assert_eq!(
+            header_letter_color(&mut app, ModuleId::Preview, panels::Word::Close),
+            bright
+        );
+        assert_eq!(
+            header_letter_color(&mut app, ModuleId::Operations, panels::Word::Run),
+            dim
+        );
+        app.layout.focus_set(ModuleId::Operations);
+        assert_eq!(
+            header_letter_color(&mut app, ModuleId::Preview, panels::Word::Close),
+            dim
+        );
+        assert_eq!(
+            header_letter_color(&mut app, ModuleId::Operations, panels::Word::Run),
+            bright
+        );
     }
 
     fn row_index(app: &App, name: &str) -> usize {

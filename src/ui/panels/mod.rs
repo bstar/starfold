@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use starkit::chrome::header;
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::Style;
+use starkit::ratatui::style::{Modifier, Style};
+
+use crate::ui::theme::Theme;
 
 use super::keymap::Module;
 
@@ -101,12 +103,30 @@ pub enum Word {
     Close,
 }
 
+impl Word {
+    /// The keyboard mnemonic and its cell within the visible header word.
+    /// `Back` stays an arrow: `h` remains the Stack navigation key.
+    pub fn mnemonic(self) -> Option<(char, u16)> {
+        match self {
+            Word::Back => None,
+            Word::Hidden => Some(('n', 5)),
+            Word::Sort => Some(('s', 0)),
+            Word::Filter => Some(('f', 0)),
+            Word::Bookmark => Some(('B', 0)),
+            Word::Places => Some(('e', 4)),
+            Word::View => Some(('v', 0)),
+            Word::Run => Some(('r', 0)),
+            Word::Clear | Word::Close => Some(('c', 0)),
+        }
+    }
+}
+
 impl header::Word for Word {
     fn word(self) -> Cow<'static, str> {
         match self {
             Word::View => "view".into(),
             Word::Places => "places".into(),
-            Word::Bookmark => "bookmark".into(),
+            Word::Bookmark => "Bookmark".into(),
             Word::Back => "\u{2039}".into(),
             Word::Hidden => "hidden".into(),
             Word::Sort => "sort".into(),
@@ -115,6 +135,36 @@ impl header::Word for Word {
             Word::Clear => "clear".into(),
             Word::Close => "close".into(),
         }
+    }
+}
+
+/// Color the mnemonic cells in the shared header's own slots. This keeps the
+/// color overlay aligned with both the rendered words and their mouse hits.
+pub fn highlight_header_hotkeys(
+    area: Rect,
+    module: ModuleId,
+    buf: &mut Buffer,
+    theme: &Theme,
+    enabled: bool,
+    focused: bool,
+) {
+    if !enabled || (module != ModuleId::Stack && !focused) {
+        return;
+    }
+    let color = theme
+        .panel_bg
+        .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]);
+    for (word, slot) in header::slots(area, &words(module)) {
+        let Some((key, offset)) = word.mnemonic() else {
+            continue;
+        };
+        if offset >= slot.width
+            || header::Word::word(word).chars().nth(usize::from(offset)) != Some(key)
+        {
+            continue;
+        }
+        let cell = &mut buf[(slot.x + offset, slot.y)];
+        cell.set_style(cell.style().fg(rgb(color)).add_modifier(Modifier::BOLD));
     }
 }
 
@@ -193,6 +243,67 @@ pub fn summary_row(body: Rect, buf: &mut Buffer, text: &str, style: Style) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hotkey_letters_follow_visible_header_slots_in_dark_and_light_themes() {
+        for theme_name in ["terminal", "catppuccin-latte"] {
+            let theme = crate::ui::theme::tests_support::theme(theme_name);
+            let expected = rgb(theme
+                .panel_bg
+                .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]));
+            assert_eq!(
+                expected,
+                rgb(if theme_name == "terminal" {
+                    starkit::theme::WHITE
+                } else {
+                    starkit::theme::BLACK
+                })
+            );
+            for (module, width) in [
+                (ModuleId::Stack, 100),
+                (ModuleId::Stack, 60),
+                (ModuleId::Stack, 30),
+                (ModuleId::Preview, 60),
+                (ModuleId::Operations, 60),
+            ] {
+                let area = Rect::new(0, 0, width, 6);
+                let list = words(module);
+                let mut buf = Buffer::empty(area);
+                header::render(area, &list, &mut buf, &theme);
+                highlight_header_hotkeys(area, module, &mut buf, &theme, true, true);
+                for (word, slot) in header::slots(area, &list) {
+                    assert_eq!(header::hit(area, &list, slot.x, slot.y), Some(word));
+                    if let Some((key, offset)) = word.mnemonic() {
+                        let cell = &buf[(slot.x + offset, slot.y)];
+                        assert_eq!(cell.symbol(), key.to_string());
+                        assert_eq!(cell.fg, expected, "{theme_name} {module:?} {word:?}");
+                        assert!(cell.modifier.contains(Modifier::BOLD));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn panel_mnemonics_dim_without_focus_or_while_typing() {
+        let theme = crate::ui::theme::tests_support::theme("terminal");
+        let area = Rect::new(0, 0, 60, 6);
+        for (module, enabled, focused) in [
+            (ModuleId::Preview, true, false),
+            (ModuleId::Operations, true, false),
+            (ModuleId::Stack, false, true),
+        ] {
+            let list = words(module);
+            let mut buf = Buffer::empty(area);
+            header::render(area, &list, &mut buf, &theme);
+            highlight_header_hotkeys(area, module, &mut buf, &theme, enabled, focused);
+            for (word, slot) in header::slots(area, &list) {
+                if let Some((_, offset)) = word.mnemonic() {
+                    assert_eq!(buf[(slot.x + offset, slot.y)].fg, rgb(theme.dim));
+                }
+            }
+        }
+    }
 
     #[test]
     fn every_module_is_in_the_column_once() {

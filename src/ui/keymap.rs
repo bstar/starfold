@@ -41,7 +41,7 @@
 //!
 //! The plan's Keys section describes the OPERATIONS queue's actions in two
 //! scopes at once -- `y`/`p`/`m`/`d`/`X`/`ctrl+x` reach from anywhere, while
-//! `enter`/`x`/`esc` only mean "run this op", "drop this one" and "clear the
+//! `enter`/`r`/`x`/`esc`/`c` only mean "run this op", "drop this one" and "clear the
 //! queue" while the OPERATIONS module has focus -- and [`Scope`] is a
 //! property of a *group*, not of one binding, the same as in STAR/CORD. Two
 //! scopes cannot share one group, so the global queue actions are the
@@ -54,7 +54,8 @@
 //! why, and a test asserts nothing else in any module shadows a global
 //! binding by accident.
 //!
-//! Ordinary PREVIEW content scrolls with the global navigation keys. While
+//! Ordinary PREVIEW content scrolls with the global navigation keys. Its
+//! `c` header mnemonic closes the panel only while Preview has focus. While
 //! an embedded player is pinned there, `App::audio_key` adds transport keys
 //! only when Preview has focus, after overlays/filter dispatch and before
 //! this static table. Global focus, quit, themes, and `h` parent navigation
@@ -147,8 +148,7 @@ pub enum Action {
     ReverseSort,
     Filter,
     /// `z`: the next of the preview's three picture scales. Global, like
-    /// every other `view` key, because the preview has no bindings of its
-    /// own -- see the module doc.
+    /// every other `view` key.
     NextPictureScale,
 
     // -- appearance --
@@ -184,15 +184,15 @@ pub enum Scope {
 }
 
 /// Every group in [`BINDINGS`], and where it applies. See the module doc for
-/// why the operations queue is two groups rather than one. `Module::Preview`
-/// appears in no `Scope::Modules` list here -- see the module doc's note on
-/// why the preview has no bindings of its own.
+/// why the operations queue is two groups rather than one. Preview has a
+/// scoped `c` binding for its header's close action.
 pub const GROUPS: &[(&str, Scope)] = &[
     ("navigation", Scope::Global),
     ("stack", Scope::Modules(&[Module::Stack])),
     ("selection", Scope::Modules(&[Module::Stack])),
     ("operations", Scope::Global),
     ("queue", Scope::Modules(&[Module::Operations])),
+    ("preview", Scope::Modules(&[Module::Preview])),
     ("view", Scope::Global),
     ("appearance", Scope::Global),
     ("application", Scope::Global),
@@ -407,7 +407,7 @@ pub const BINDINGS: &[Binding] = &[
     // -- the operations queue's own keys -------------------------------------
     Binding {
         action: Action::RunOp,
-        keys: "enter",
+        keys: "enter/r",
         label: "run it",
         group: "queue",
     },
@@ -419,9 +419,16 @@ pub const BINDINGS: &[Binding] = &[
     },
     Binding {
         action: Action::ClearQueue,
-        keys: "esc",
+        keys: "esc/c",
         label: "clear the queue",
         group: "queue",
+    },
+    // -- the preview's own header key ---------------------------------------
+    Binding {
+        action: Action::TogglePreview,
+        keys: "c",
+        label: "close preview",
+        group: "preview",
     },
     // -- view ----------------------------------------------------------------
     Binding {
@@ -432,7 +439,7 @@ pub const BINDINGS: &[Binding] = &[
     },
     Binding {
         action: Action::Places,
-        keys: "b",
+        keys: "b/e",
         label: "places",
         group: "view",
     },
@@ -450,7 +457,7 @@ pub const BINDINGS: &[Binding] = &[
     },
     Binding {
         action: Action::ToggleHidden,
-        keys: ".",
+        keys: "./n",
         label: "hidden files",
         group: "view",
     },
@@ -468,7 +475,7 @@ pub const BINDINGS: &[Binding] = &[
     },
     Binding {
         action: Action::Filter,
-        keys: "/",
+        keys: "f, /",
         label: "filter this level",
         group: "view",
     },
@@ -765,6 +772,11 @@ catches whatever nothing above wanted, which is what makes it work from
 everywhere. While the filter has focus, every `alt+\u{2026}` falls through
 it and so does `?`, so help and the appearance and panel keys stay reachable
 mid-search; `esc` and `enter` are always the way out.
+
+The header highlights each word's keyboard letter. `n` also toggles hidden
+files, `f` also opens the filter, and `e` also opens Places. The existing
+`.`, `/`, and `b` keys still work. Preview's `c` and Operations' `r`/`c` work only
+when that module has focus. The back arrow keeps its `h` navigation key.
 
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
 the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
@@ -1181,15 +1193,52 @@ mod tests {
         }
     }
 
-    /// The preview has no group of its own in [`GROUPS`] -- see the module
-    /// doc's note on why -- so it has no module-scoped bindings at all;
-    /// scrolling it is entirely the global navigation group's job.
+    /// Preview owns only its close mnemonic; scrolling still uses global
+    /// navigation, and its other controls are handled by the audio layer.
     #[test]
-    fn the_preview_module_has_no_bindings_of_its_own() {
+    fn the_preview_module_only_claims_its_close_mnemonic() {
         assert!(
-            module_bindings(Module::Preview).is_empty(),
-            "the preview is meant to scroll on the global navigation keys alone"
+            module_bindings(Module::Preview)
+                .iter()
+                .all(|b| b.action == Action::TogglePreview && b.keys == "c"),
+            "preview should only add its focused close mnemonic"
         );
+        assert_eq!(
+            module(Module::Preview, plain('c')),
+            Some(Action::TogglePreview)
+        );
+    }
+
+    #[test]
+    fn header_aliases_keep_existing_keys_and_panel_scopes() {
+        for (new, old, action) in [
+            ('n', '.', Action::ToggleHidden),
+            ('f', '/', Action::Filter),
+            ('e', 'b', Action::Places),
+        ] {
+            assert_eq!(resolve(plain(new)), Some(action));
+            assert_eq!(resolve(plain(old)), Some(action));
+            assert!(filter_eats(plain(new)), "{new} must type into a filter");
+        }
+        assert_eq!(resolve(plain('B')), Some(Action::Bookmark));
+        assert_eq!(resolve(plain('s')), Some(Action::NextSortKey));
+        assert_eq!(resolve(plain('S')), Some(Action::ReverseSort));
+        assert_eq!(resolve(plain('v')), Some(Action::ToggleView));
+
+        assert_eq!(module(Module::Stack, plain('h')), Some(Action::Pop));
+        assert_eq!(module(Module::Stack, plain('r')), Some(Action::Rename));
+        assert_eq!(module(Module::Operations, plain('r')), Some(Action::RunOp));
+        assert_eq!(
+            module(Module::Operations, plain('c')),
+            Some(Action::ClearQueue)
+        );
+        assert_eq!(
+            module(Module::Preview, plain('c')),
+            Some(Action::TogglePreview)
+        );
+        assert_eq!(module(Module::Stack, plain('c')), None);
+        assert_eq!(resolve(plain('c')), None);
+        assert_eq!(resolve(plain('r')), None);
     }
 
     /// A module's own binding is allowed to claim a key the global table

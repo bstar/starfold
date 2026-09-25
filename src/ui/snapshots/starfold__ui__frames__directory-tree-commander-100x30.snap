@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: "render(&mut app, 100, 30)"
 ---
 ╔═ S T A R / F O L D — ›LEFT ════════ commander ═╗╔═ RIGHT ════════════════════════════ commander ═╗
-║   hidden  sort  filter  bookmark  places  view ║║   hidden  sort  filter  bookmark  places  view ║
+║   hidden  sort  filter  Bookmark  places  view ║║   hidden  sort  filter  Bookmark  places  view ║
 ║─ ~ ────────────────────────────────────────────║║─ ~ ────────────────────────────────────────────║
 ║    ▸ empty/                                   -║║    ▸ empty/                                   -║
 ║    ▸ pictures/                                -║║    ▸ pictures/                                -║

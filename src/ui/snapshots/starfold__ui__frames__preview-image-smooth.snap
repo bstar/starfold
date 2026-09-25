@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: text
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
-║                                                  ‹  hidden  sort  filter  bookmark  places  view ║
+║                                                  ‹  hidden  sort  filter  Bookmark  places  view ║
 ║▸ ~                                                                                        6 items║
 ║─ pictures/ ── 1 files · 0 dirs · 482 B ──────────────────────────────────────────────────────────║
 ║    ▧ harbour.png                                                  png         482 B  Sep 10      ║

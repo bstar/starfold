@@ -15,6 +15,11 @@ everywhere. While the filter has focus, every `alt+…` falls through
 it and so does `?`, so help and the appearance and panel keys stay reachable
 mid-search; `esc` and `enter` are always the way out.
 
+The header highlights each word's keyboard letter. `n` also toggles hidden
+files, `f` also opens the filter, and `e` also opens Places. The existing
+`.`, `/`, and `b` keys still work. Preview's `c` and Operations' `r`/`c` work only
+when that module has focus. The back arrow keeps its `h` navigation key.
+
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
 the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
 `m` queue files from the active pane into the opposite directory, using
@@ -90,9 +95,17 @@ _in operations_
 
 | key | what it does |
 |---|---|
-| `enter`        | run it |
+| `enter/r`      | run it |
 | `x/delete`     | drop one |
-| `esc`          | clear the queue |
+| `esc/c`        | clear the queue |
+
+## preview
+
+_in the preview_
+
+| key | what it does |
+|---|---|
+| `c`            | close preview |
 
 ## view
 
@@ -101,13 +114,13 @@ _everywhere_
 | key | what it does |
 |---|---|
 | `v`            | fold / commander |
-| `b`            | places |
+| `b/e`          | places |
 | `B`            | bookmark directory |
 | `i`            | show, fold preview |
-| `.`            | hidden files |
+| `./n`          | hidden files |
 | `s`            | next sort key |
 | `S`            | reverse the sort |
-| `/`            | filter this level |
+| `f, /`         | filter this level |
 | `z`            | picture scale |
 
 ## appearance

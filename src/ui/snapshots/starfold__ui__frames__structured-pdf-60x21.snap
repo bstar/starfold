@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: "render(&mut app,w,h)"
 ---
 ╔═ S T A R / F O L D ══════════════════════════════ stack ═╗
-║          ‹  hidden  sort  filter  bookmark  places  view ║
+║          ‹  hidden  sort  filter  Bookmark  places  view ║
 ║─ ~ ── 3 files · 3 dirs · 290 B ──────────────────────────║
 ║    ▸ empty/                               -  Sep 10      ║
 ║    ▸ pictures/                            -  Sep 10      ║
