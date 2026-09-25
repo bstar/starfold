@@ -5,10 +5,13 @@ Commander views. [The file manager roadmap](file-manager-roadmap.md) tracks the
 remaining daily-work features and gives each one an acceptance check. The
 [milestone 0 baseline](baseline-validation.md) records how to test the current
 behavior without touching an ordinary STAR/FOLD session.
+The [milestone 1 checklist](create-validation.md) covers file and directory
+creation in both views.
 
 | Area | Current state |
 | --- | --- |
 | Fold stack, navigation, persistent marks, sort, hidden files, and current-directory filter | Implemented; core tests, UI fixture tests, and isolated PTY checks cover navigation and drawing. |
+| File and directory creation | Implemented with immediate worker dispatch, no overwrite, listing refresh, and cursor selection; automated Fold and Commander checks cover the main path. Permission errors need a manual check in an unwritable directory. |
 | Copy, move, trash/delete, rename, conflicts, cancellation, and the inspectable operations queue | Implemented and tested with temporary trees. Real Trash and cross-device behavior need separate platform checks. |
 | Commander and Places | Implemented. Two panes, mounted-location discovery, searchable bookmarks, drive details, and local-drive unmount have tests. Linux PTY checks covered browsing, Places, and session restore. Physical devices and network mounts need hands-on checks. |
 | Previews, file icons, and archive actions | Implemented. Text, images, directories, audio/video tags, PDF pages, archive inspection, compression, and extraction have automated coverage. Terminal graphics and complex real-world files need broader manual checks. |
@@ -19,15 +22,16 @@ behavior without touching an ordinary STAR/FOLD session.
 
 Milestone 0's automated Linux checks and release build passed on 2026-09-25;
 its [interactive checklist](baseline-validation.md) is ready for desktop
-validation. The first feature milestone will add file and directory creation.
+validation. Milestone 1 adds file and directory creation; its
+[interactive checklist](create-validation.md) is ready for review.
 Recursive search, recovery, bulk rename, shell handoff, durable tabs, and other
 desktop file actions follow in the roadmap's stated order.
 
 ## Known boundaries
 
 - `/` filters one directory; it does not search descendants or file contents.
-- There is no create-file/create-directory action, bulk rename, Trash browser
-  or restore action, shell picker output, or multi-tab session yet.
+- There is no bulk rename, Trash browser or restore action, shell picker output,
+  or multi-tab session yet.
 - `std::fs::copy` reports progress between files and checks cancellation
   between files, not partway through one large file.
 - Places discovers mounted network locations; it does not establish network

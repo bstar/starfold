@@ -29,6 +29,8 @@ grouped by what you are trying to do.
   acceptance checks from the comparison with terminal and desktop managers.
 - [Baseline validation](baseline-validation.md): a disposable fixture and
   manual checks for the current application.
+- [Creation validation](create-validation.md): milestone 1 checks for new files
+  and directories in Fold and Commander.
 - [Status](status.md): what is done, what is in progress, and what is not
   started.
 - [Contributing](../CONTRIBUTING.md), [Security](../SECURITY.md),

@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use super::create::{self, Kind as CreateKind, Origin as CreateOrigin};
 use super::handle::{Event, EventSink, Note};
 use super::listing::{self, Listing};
 use super::ops::progress::Progress;
@@ -48,7 +49,7 @@ pub struct Senders {
 }
 
 impl Senders {
-    /// Places edits must report queue saturation rather than appearing saved.
+    /// Places actions and creation must report queue saturation to the UI.
     pub fn dispatch_checked(&self, job: Job, state: &Arc<RwLock<State>>, events: &EventSink) {
         if !matches!(
             job,
@@ -56,6 +57,7 @@ impl Senders {
                 | Job::LoadPlaces(_)
                 | Job::RefreshPlaces
                 | Job::UnmountPlace { .. }
+                | Job::Create { .. }
         ) {
             self.dispatch(job);
             return;
@@ -81,6 +83,17 @@ impl Senders {
                 Job::UnmountPlace { path, .. } => Done::PlaceUnmounted {
                     path,
                     result: Err(message),
+                },
+                Job::Create {
+                    dir,
+                    name,
+                    kind,
+                    origin,
+                } => Done::Created {
+                    path: dir.join(name),
+                    kind,
+                    origin,
+                    result: Err("creation worker is busy or unavailable; retry the action".into()),
                 },
                 _ => unreachable!(),
             };
@@ -122,6 +135,12 @@ pub enum Job {
         revision: u64,
     },
     List(PathBuf),
+    Create {
+        dir: PathBuf,
+        name: String,
+        kind: CreateKind,
+        origin: CreateOrigin,
+    },
     Summarize(PathBuf),
     PreviewPage {
         path: PathBuf,
@@ -177,6 +196,12 @@ pub enum Done {
         result: Result<(), String>,
     },
     Listed(Listing),
+    Created {
+        path: PathBuf,
+        kind: CreateKind,
+        origin: CreateOrigin,
+        result: Result<(), String>,
+    },
     Summarized {
         dir: PathBuf,
         summary: DirSummary,
@@ -300,6 +325,17 @@ pub fn perform_io(
             let listing = listing::read(&dir, &cfg.list);
             IoOutcome::Done(Done::Listed(listing))
         }
+        Job::Create {
+            dir,
+            name,
+            kind,
+            origin,
+        } => IoOutcome::Done(Done::Created {
+            path: dir.join(&name),
+            kind,
+            origin,
+            result: create::create(kind, &dir, &name).map(|_| ()),
+        }),
         Job::Summarize(dir) => {
             let budget = Budget {
                 max_entries: cfg.preview.dir_budget,
@@ -406,6 +442,7 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
         | Job::RefreshPlaces
         | Job::SaveBookmarks { .. }
         | Job::List(_)
+        | Job::Create { .. }
         | Job::Summarize(_)
         | Job::Preview { .. }
         | Job::PreviewPage { .. }

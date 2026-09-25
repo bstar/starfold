@@ -19,6 +19,15 @@ Run the queue with `X`. Marks in Fold keep their existing across-directory
 behavior; Commander marks belong to each pane and clear when that pane changes
 directory.
 
+Press `N` to create an empty file or `F7` to create a directory in the active
+location. Type one name and press Enter. Creation runs immediately through the
+IO worker; it does not enter the operations queue. An existing file, directory,
+or symlink is never overwritten. A successful creation refreshes the listing
+and selects the new item, so Enter can open a new directory at once. In
+Commander, creation belongs to the active pane, even if you switch panes while
+the worker runs. The file actions menu also offers both actions, including in
+an empty directory.
+
 Press `b` for Places and search by name or path. It groups your bookmarks,
 mounted devices, mounted network locations, Home and Root. `B` saves the
 current directory as a bookmark with an editable name; bookmarks can be

@@ -42,6 +42,9 @@ The cache is memory-only and defaults to 32 MiB. See [configuration](configurati
 Right-click a listing entry, or use Menu / Shift+F10. Up/Down or j/k selects an
 action; Enter activates it. Escape and clicking outside dismiss the menu. Opening
 the menu does not toggle marks. Mark/unmark remains in the menu and on Space.
+Right-click empty listing space, or open the menu in an empty directory, for
+New file and New directory. Both create in the active directory immediately;
+they never overwrite an existing name.
 
 Open, Preview and Rename apply to the clicked entry. Copy, Move, Delete,
 Compress and Extract apply to the marked set if the clicked entry is marked;

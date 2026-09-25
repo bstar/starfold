@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
+use super::create::Kind as CreateKind;
 use super::ops::{ConflictPolicy, OpId};
 use super::sort::SortOrder;
 use super::state::{self, Change, State};
@@ -82,6 +83,12 @@ pub enum Command {
     /// crumb click, a path typed on the command line.
     Push(PathBuf),
     Reload,
+    /// Create in the active directory immediately, without overwriting.
+    Create {
+        dir: PathBuf,
+        kind: CreateKind,
+        name: String,
+    },
     /// Move the cursor to a row by index.
     CursorTo(usize),
     /// Move the cursor by a signed number of rows.

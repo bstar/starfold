@@ -3,6 +3,21 @@ use super::*;
 use crate::ui::overlays;
 use std::path::Path;
 impl App {
+    pub(super) fn open_directory_menu(&mut self, x: u16, y: u16) {
+        let dir = self.view.active_dir.clone();
+        self.overlays.open_context(
+            overlays::context::Target {
+                clicked: dir.clone(),
+                directory: true,
+                sources: vec![],
+                destination: dir.clone(),
+                create_dir: dir,
+            },
+            (x, y),
+        );
+        self.repaint = true;
+    }
+
     pub(super) fn request_pdf_pages(&mut self, direction: i32) {
         use crate::fold::preview::model::Content;
         let Some(Preview::Document(d)) = self.view.preview.as_deref() else {
@@ -52,24 +67,29 @@ impl App {
 
     pub(super) fn open_file_menu(&mut self, x: u16, y: u16) {
         let state = self.core.state();
-        let Some(entry) = state.cursor_entry() else {
+        let create_dir = self.view.active_dir.clone();
+        let target = if let Some(entry) = state.cursor_entry() {
+            let sources = if state.selection.is_marked(&entry.path) {
+                state.selection.paths().map(Path::to_path_buf).collect()
+            } else {
+                vec![entry.path.clone()]
+            };
+            let destination = if self.commander {
+                self.panes[1 - self.active_pane].dir.clone()
+            } else {
+                create_dir.clone()
+            };
+            overlays::context::Target {
+                clicked: entry.path.clone(),
+                directory: entry.is_dir_like(),
+                sources,
+                destination,
+                create_dir,
+            }
+        } else {
+            drop(state);
+            self.open_directory_menu(x, y);
             return;
-        };
-        let sources = if state.selection.is_marked(&entry.path) {
-            state.selection.paths().map(Path::to_path_buf).collect()
-        } else {
-            vec![entry.path.clone()]
-        };
-        let destination = if self.commander {
-            self.panes[1 - self.active_pane].dir.clone()
-        } else {
-            entry.path.parent().unwrap_or(Path::new(".")).to_path_buf()
-        };
-        let target = overlays::context::Target {
-            clicked: entry.path.clone(),
-            directory: entry.is_dir_like(),
-            sources,
-            destination,
         };
         drop(state);
         self.overlays.open_context(target, (x, y));
@@ -102,6 +122,12 @@ impl App {
             }
             A::Mark => self.core.send(Command::ToggleMarkPath(target.clicked)),
             A::Rename => self.overlays.open_rename(target.clicked),
+            A::CreateFile => self
+                .overlays
+                .open_create(target.create_dir, CreateKind::File),
+            A::CreateDirectory => self
+                .overlays
+                .open_create(target.create_dir, CreateKind::Directory),
             A::Delete => self.core.send(Command::QueueDeleteSources(target.sources)),
             A::Copy | A::Move => self.overlays.open_destination(Request {
                 kind: if action == A::Copy {
@@ -157,6 +183,19 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use starkit::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn type_name(app: &mut App, name: &str) {
+        for ch in name.chars() {
+            app.key(key(KeyCode::Char(ch)));
+        }
+        app.key(key(KeyCode::Enter));
+    }
+
     fn app() -> (App, crate::ui::fake::Fake) {
         let cfg = crate::config::Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
@@ -173,9 +212,108 @@ mod tests {
     }
     fn cursor(app: &mut App, name: &str) {
         app.refresh();
-        let index = app.view.rows.iter().position(|r| r.name == name).unwrap();
+        let index = app
+            .view
+            .rows
+            .iter()
+            .position(|r| r.name.trim_end_matches('/') == name)
+            .unwrap();
         app.core.send(Command::CursorTo(index));
         app.refresh();
+    }
+
+    #[test]
+    fn new_file_is_created_by_worker_and_selected_in_fold() {
+        let (mut app, fake) = app();
+        app.key(key(KeyCode::Char('N')));
+        assert!(matches!(app.overlays.current(), Some(Overlay::Create(_))));
+        type_name(&mut app, "new note.txt");
+        let path = fake.fixture.path("new note.txt");
+        assert!(!path.exists(), "creation should wait for the IO worker");
+        fake.pump();
+        app.tick();
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+        assert_eq!(app.view.cursor_path.as_ref(), Some(&path));
+        assert!(app.view.rows.iter().any(|row| row.name == "new note.txt"));
+
+        app.key(key(KeyCode::Char('N')));
+        type_name(&mut app, "new note.txt");
+        fake.pump();
+        app.tick();
+        assert!(app.note.as_ref().unwrap().0.contains("File exists"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+    }
+
+    #[test]
+    fn new_hidden_file_becomes_visible_and_selected() {
+        let (mut app, fake) = app();
+        app.key(key(KeyCode::Char('N')));
+        type_name(&mut app, ".new-hidden");
+        fake.pump();
+        app.tick();
+        assert!(app.view.show_hidden);
+        assert_eq!(app.view.cursor_path, Some(fake.fixture.path(".new-hidden")));
+    }
+
+    #[test]
+    fn new_directory_from_empty_commander_pane_is_enterable() {
+        let (mut app, fake) = app();
+        app.key(key(KeyCode::Char('v')));
+        app.refresh();
+        cursor(&mut app, "empty");
+        app.key(key(KeyCode::Enter));
+        fake.pump();
+        app.tick();
+        assert!(app.view.rows.is_empty());
+
+        app.open_file_menu(2, 2);
+        let Some(Overlay::Context(menu)) = app.overlays.current() else {
+            panic!("expected an empty-directory menu")
+        };
+        assert_eq!(
+            menu.actions,
+            vec![
+                overlays::context::Action::CreateFile,
+                overlays::context::Action::CreateDirectory
+            ]
+        );
+        app.key(key(KeyCode::Enter));
+        assert!(matches!(app.overlays.current(), Some(Overlay::Create(_))));
+        type_name(&mut app, "inside.txt");
+        fake.pump();
+        app.tick();
+        assert!(fake.fixture.path("empty/inside.txt").is_file());
+        app.key(key(KeyCode::F(7)));
+        type_name(&mut app, "nested");
+        let path = fake.fixture.path("empty/nested");
+        assert!(!path.exists());
+        fake.pump();
+        app.tick();
+        assert!(path.is_dir());
+        assert_eq!(app.view.cursor_path.as_ref(), Some(&path));
+        app.key(key(KeyCode::Enter));
+        fake.pump();
+        app.tick();
+        assert_eq!(app.view.active_dir, path);
+    }
+
+    #[test]
+    fn commander_creation_selects_item_in_requesting_pane_after_focus_switch() {
+        let (mut app, fake) = app();
+        app.key(key(KeyCode::Char('v')));
+        app.refresh();
+        let source_dir = app.view.active_dir.clone();
+        app.key(key(KeyCode::F(7)));
+        type_name(&mut app, "from left");
+        app.key(key(KeyCode::Tab));
+        let right_dir = app.view.active_dir.clone();
+        fake.pump();
+        app.tick();
+        assert!(source_dir.join("from left").is_dir());
+        assert_eq!(app.view.active_dir, right_dir);
+        app.key(key(KeyCode::Tab));
+        app.refresh();
+        assert_eq!(app.view.cursor_path, Some(source_dir.join("from left")));
     }
     #[test]
     fn context_target_does_not_capture_unrelated_marks() {

@@ -115,6 +115,8 @@ pub enum Action {
     GoRoot,
     OpenExternal,
     Rename,
+    CreateFile,
+    CreateDirectory,
     Reload,
 
     // -- selection --
@@ -343,6 +345,18 @@ pub const BINDINGS: &[Binding] = &[
         group: "stack",
     },
     Binding {
+        action: Action::CreateFile,
+        keys: "N",
+        label: "new file",
+        group: "stack",
+    },
+    Binding {
+        action: Action::CreateDirectory,
+        keys: "F7",
+        label: "new directory",
+        group: "stack",
+    },
+    Binding {
         action: Action::Reload,
         keys: "F5/ctrl+r",
         label: "reload",
@@ -533,7 +547,7 @@ pub const MOUSE: &[MouseHelp] = &[
     },
     MouseHelp {
         gesture: "right-click",
-        label: "file actions menu",
+        label: "actions menu",
         group: "stack",
     },
     MouseHelp {
@@ -777,6 +791,7 @@ The header highlights each word's keyboard letter. `n` also toggles hidden
 files, `f` also opens the filter, and `e` also opens Places. The existing
 `.`, `/`, and `b` keys still work. Preview's `c` and Operations' `r`/`c` work only
 when that module has focus. The back arrow keeps its `h` navigation key.
+`N` creates an empty file and `F7` creates a directory in the active location.
 
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
 the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and

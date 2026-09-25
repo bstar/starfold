@@ -74,6 +74,7 @@ use super::theme::{self, Theme};
 use super::{Bar, Bars};
 use crate::audio_embed::{self, Client as AudioClient, Presentation};
 use crate::config::{AudioButtons, Config, Scale};
+use crate::fold::create::Kind as CreateKind;
 use crate::fold::entry::{Entry, EntryKind};
 use crate::fold::handle::{Command, Event, Handle, NoteLevel};
 use crate::fold::ops::{Op, OpId, OpKind, OpStatus};
@@ -1306,6 +1307,10 @@ impl App {
             Answer::Renamed { from, to } => {
                 self.core.send(Command::QueueRename { from, to });
             }
+            Answer::Created { dir, kind, name } => {
+                self.filter = None;
+                self.core.send(Command::Create { dir, kind, name });
+            }
             Answer::Policy { op, policy } => {
                 self.core.send(Command::SetPolicy(op, policy));
             }
@@ -1407,6 +1412,16 @@ impl App {
                     self.overlays.open_rename(path);
                     self.repaint = true;
                 }
+            }
+            Action::CreateFile => {
+                self.overlays
+                    .open_create(self.view.active_dir.clone(), CreateKind::File);
+                self.repaint = true;
+            }
+            Action::CreateDirectory => {
+                self.overlays
+                    .open_create(self.view.active_dir.clone(), CreateKind::Directory);
+                self.repaint = true;
             }
             Action::Reload => self.core.send(Command::Reload),
 
@@ -1987,9 +2002,13 @@ impl App {
         }
         let rect = regions.rect_of(ModuleId::Stack);
         let v = self.stack_view();
-        if let Some(panels::stack::Hit::Row(i)) = panels::stack::hit(rect, &v, x, y) {
-            self.core.send(Command::CursorTo(i));
-            self.open_file_menu(x, y);
+        match panels::stack::hit(rect, &v, x, y) {
+            Some(panels::stack::Hit::Row(i)) => {
+                self.core.send(Command::CursorTo(i));
+                self.open_file_menu(x, y);
+            }
+            None => self.open_directory_menu(x, y),
+            Some(panels::stack::Hit::Crumb(_)) => {}
         }
     }
 

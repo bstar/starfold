@@ -7,7 +7,7 @@ expression: "render(&mut app, 100, 30)"
 ║─ ~ ── 3 ║  navigation                         stack                                    ║─────────║
 ║    ▸ emp║  tab           next module          click                move the cursor     ║ 10      ║
 ║    ▸ pic║  shift+tab     previous module      double-click         open it             ║ 10      ║
-║    ▸ pro║  alt+1         the stack            right-click          file actions menu   ║ 10      ║
+║    ▸ pro║  alt+1         the stack            right-click          actions menu        ║ 10      ║
 ║    ◇ blo║  alt+2         the preview          click a crumb        jump there          ║ 10      ║
 ║    ↗ dan║  alt+3         operations           wheel                scroll three rows   ║ 10      ║
 ║    ↗ not║  up/k          up one               modules                                  ║ 10      ║
@@ -29,6 +29,6 @@ expression: "render(&mut app, 100, 30)"
 ╚═════════║  gr            the root                                                      ║═════════╝
 ╔═ OPERATI║  o             open externally                                               ║═════════╗
 ║         ║  r             rename                                                        ║n  clear ║
-║         ║  F5/ctrl+r     reload                                                        ║         ║
+║         ║  N             new file                                                      ║         ║
 ╚═════════╚══════════════════════════════════════════════════════ more below · esc close ╝═════════╝
 ? help  / filter  space mark  enter open  y copy  m move  d delete                            ~  off

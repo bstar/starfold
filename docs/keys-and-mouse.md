@@ -19,6 +19,7 @@ The header highlights each word's keyboard letter. `n` also toggles hidden
 files, `f` also opens the filter, and `e` also opens Places. The existing
 `.`, `/`, and `b` keys still work. Preview's `c` and Operations' `r`/`c` work only
 when that module has focus. The back arrow keeps its `h` navigation key.
+`N` creates an empty file and `F7` creates a directory in the active location.
 
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
 the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
@@ -66,6 +67,8 @@ _in the stack_
 | `gr`           | the root |
 | `o`            | open externally |
 | `r`            | rename |
+| `N`            | new file |
+| `F7`           | new directory |
 | `F5/ctrl+r`    | reload |
 
 ## selection
@@ -163,7 +166,7 @@ seek bar to cycle the seek style; wheel over a visualizer cycles it.
 |---|---|---|
 | stack    | click                 | move the cursor |
 | stack    | double-click          | open it |
-| stack    | right-click           | file actions menu |
+| stack    | right-click           | actions menu |
 | stack    | click a crumb         | jump there |
 | stack    | wheel                 | scroll three rows |
 | modules  | click a fold          | open it |

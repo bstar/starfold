@@ -20,6 +20,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::create::{self, Kind as CreateKind, Origin as CreateOrigin};
 use super::entry::{Entry, EntryKind};
 use super::filter;
 use super::handle::{Command, Event, Note};
@@ -361,6 +362,29 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::Forward => cmd_forward(state),
         Command::Push(dir) => push_dir(state, dir),
         Command::Reload => cmd_reload(state),
+        Command::Create { dir, kind, name } => {
+            if let Err(error) = create::validate_name(&name) {
+                return Effects {
+                    jobs: vec![],
+                    events: vec![Event::Note(Note::error("create", error))],
+                };
+            }
+            let tab = state.tabs.active();
+            let origin = CreateOrigin {
+                tab: tab.id,
+                stack: tab.active_stack,
+                frame: tab.active_stack().active().id,
+            };
+            Effects {
+                jobs: vec![Job::Create {
+                    dir,
+                    name,
+                    kind,
+                    origin,
+                }],
+                events: vec![],
+            }
+        }
         Command::CursorTo(row) => set_cursor(state, row),
         Command::CursorBy(delta) => cmd_cursor_by(state, delta),
         Command::SetFilter(query) => cmd_set_filter(state, query),
@@ -641,6 +665,12 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
             }
         }
         Done::Listed(listing) => done_listed(state, listing),
+        Done::Created {
+            path,
+            kind,
+            origin,
+            result,
+        } => done_created(state, path, kind, origin, result),
         Done::Summarized { dir, summary } => done_summarized(state, dir, summary),
         Done::Previewed {
             path,
@@ -1424,6 +1454,68 @@ fn cmd_preview(state: &mut State, path: PathBuf) -> Effects {
 // ---------------------------------------------------------------------
 // Worker results.
 // ---------------------------------------------------------------------
+
+fn done_created(
+    state: &mut State,
+    path: PathBuf,
+    kind: CreateKind,
+    origin: CreateOrigin,
+    result: Result<(), String>,
+) -> Effects {
+    if let Err(error) = result {
+        return Effects {
+            jobs: vec![],
+            events: vec![Event::Note(Note::error("create", error))],
+        };
+    }
+
+    let Some(dir) = path.parent().map(Path::to_path_buf) else {
+        return Effects::default();
+    };
+    let name = path.file_name().map(|name| name.to_os_string());
+    let mut events = vec![Event::Note(Note::info(format!(
+        "Created {} {}",
+        kind.label(),
+        path.display()
+    )))];
+
+    // A newly created dotfile must be visible if the cursor is to land on it.
+    // Rebuild first: doing it after setting cursor_name would replace that
+    // name with an old entry because the fresh listing has not arrived yet.
+    if path
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+        && !state.show_hidden
+    {
+        state.show_hidden = true;
+        rebuild_all_frames(state);
+        events.push(Event::Stack);
+    }
+
+    // The user may have switched panes or jumped to another Fold level while
+    // the IO worker was busy. Only the frame that requested this creation
+    // should move its cursor when its listing refreshes.
+    if let Some(frame) = state
+        .tabs
+        .tabs
+        .iter_mut()
+        .find(|tab| tab.id == origin.tab)
+        .and_then(|tab| tab.stacks.get_mut(origin.stack))
+        .and_then(|stack| stack.frames_mut().find(|frame| frame.id == origin.frame))
+        .filter(|frame| frame.dir == dir)
+    {
+        frame.cursor_name = name;
+        frame.filter.clear();
+        events.push(Event::Stack);
+    }
+
+    let jobs = if all_frame_dirs(state).contains(&dir) {
+        vec![Job::List(dir)]
+    } else {
+        vec![]
+    };
+    Effects { jobs, events }
+}
 
 fn done_listed(state: &mut State, listing: Listing) -> Effects {
     let dir = listing.dir.clone();

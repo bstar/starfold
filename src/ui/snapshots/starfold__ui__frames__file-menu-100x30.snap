@@ -11,11 +11,11 @@ expression: "render(&mut app, w, h)"
 ║ ║Copy…                   ║                                        bin         256 B  Sep 10      ║
 ║ ║Move…                   ║                                        link          7 B  Sep 10      ║
 ║ ║Rename…                 ║                                        link         27 B  Sep 10      ║
+║ ║New file…               ║                                                                       ║
+║ ║New directory…          ║                                                                       ║
 ║ ║Delete (queue)          ║                                                                       ║
 ║ ║Compress…               ║                                                                       ║
 ║ ╚════════════════════════╝                                                                       ║
-║                                                                                                  ║
-║                                                                                                  ║
 ║                                                                                                  ║
 ║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝

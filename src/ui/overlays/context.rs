@@ -25,6 +25,9 @@ pub struct Target {
     pub directory: bool,
     pub sources: Vec<PathBuf>,
     pub destination: PathBuf,
+    /// The directory receiving a newly created item, independent of the
+    /// opposite-pane destination used for copy and move.
+    pub create_dir: PathBuf,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -34,6 +37,8 @@ pub enum Action {
     Copy,
     Move,
     Rename,
+    CreateFile,
+    CreateDirectory,
     Delete,
     Compress,
     Extract,
@@ -47,6 +52,8 @@ impl Action {
             Self::Copy => "Copy…",
             Self::Move => "Move…",
             Self::Rename => "Rename…",
+            Self::CreateFile => "New file…",
+            Self::CreateDirectory => "New directory…",
             Self::Delete => "Delete (queue)",
             Self::Compress => "Compress…",
             Self::Extract => "Extract…",
@@ -63,20 +70,28 @@ pub struct Menu {
 }
 impl Menu {
     pub fn new(target: Target, anchor: (u16, u16)) -> Self {
-        let mut actions = vec![
-            Action::Open,
-            Action::Preview,
-            Action::Mark,
-            Action::Copy,
-            Action::Move,
-            Action::Rename,
-            Action::Delete,
-            Action::Compress,
-        ];
-        if target
-            .sources
-            .iter()
-            .all(|p| Format::from_path(p).is_some())
+        let empty = target.sources.is_empty();
+        let mut actions = if target.sources.is_empty() {
+            vec![Action::CreateFile, Action::CreateDirectory]
+        } else {
+            vec![
+                Action::Open,
+                Action::Preview,
+                Action::Mark,
+                Action::Copy,
+                Action::Move,
+                Action::Rename,
+                Action::CreateFile,
+                Action::CreateDirectory,
+                Action::Delete,
+                Action::Compress,
+            ]
+        };
+        if !target.sources.is_empty()
+            && target
+                .sources
+                .iter()
+                .all(|p| Format::from_path(p).is_some())
         {
             actions.push(Action::Extract);
         }
@@ -85,7 +100,11 @@ impl Menu {
             actions,
             cursor: 0,
             anchor,
-            title: "file actions",
+            title: if empty {
+                "directory actions"
+            } else {
+                "file actions"
+            },
         }
     }
     pub fn for_drop(anchor: (u16, u16)) -> Self {
@@ -95,6 +114,7 @@ impl Menu {
                 directory: true,
                 sources: Vec::new(),
                 destination: PathBuf::new(),
+                create_dir: PathBuf::new(),
             },
             actions: vec![Action::Copy, Action::Move],
             cursor: 0,
@@ -280,6 +300,7 @@ mod tests {
             directory: false,
             sources: vec!["/tmp/book.zip".into()],
             destination: "/tmp".into(),
+            create_dir: "/tmp".into(),
         }
     }
     #[test]

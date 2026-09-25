@@ -65,7 +65,8 @@ rest of it.
   Open an audio track to play it here using a separately installed,
   embedding-compatible STAR/AMP; without it, the existing opener still works.
 - **File actions menus.** Right-click a file or press Menu / Shift+F10 to open
-  actions including compression and extraction. Archive jobs appear in OPERATIONS.
+  actions including creation, compression and extraction. `N` creates an empty
+  file and `F7` creates a directory in the active location. Archive jobs appear in OPERATIONS.
   See [previews and archives](docs/previews-and-archives.md).
 - **Commander view and Places.** Press `v` for two independently browsable
   panes. `b` opens searchable bookmarks, mounted devices, network locations,
@@ -78,8 +79,7 @@ rest of it.
 
 ## What it does not do yet
 
-Creating files or directories, recursive search, recovery from Trash, bulk
-rename, shell picker output, and durable tabs are on the
+Recursive search, recovery from Trash, bulk rename, shell picker output, and durable tabs are on the
 [file manager roadmap](docs/file-manager-roadmap.md). Commander uses two
 independent directory panes alongside the Fold stack; Places can unmount a
 selected local drive, while mounting, physical ejection and network login

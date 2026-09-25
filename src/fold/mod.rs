@@ -22,6 +22,7 @@
 //!   and the terminal.
 
 pub mod archive;
+pub mod create;
 pub mod file_type;
 mod process;
 

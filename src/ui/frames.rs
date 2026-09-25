@@ -402,6 +402,19 @@ fn the_rename_overlay_opens_on_the_cursor_entry() {
     insta::assert_snapshot!("rename-terminal-100x30", render(&mut app, 100, 30));
 }
 
+#[test]
+fn create_dialogs_at_both_terminal_sizes() {
+    for (w, h) in [(100, 30), (60, 21)] {
+        let (mut app, fk) = build("terminal");
+        settle(&mut app, &fk);
+        app.key(key('N'));
+        insta::assert_snapshot!(format!("create-file-{w}x{h}"), render(&mut app, w, h));
+        app.key(code(KeyCode::Esc));
+        app.key(code(KeyCode::F(7)));
+        insta::assert_snapshot!(format!("create-directory-{w}x{h}"), render(&mut app, w, h));
+    }
+}
+
 /// `q` while an operation is running asks first, rather than quitting out
 /// from under it.
 #[test]

@@ -26,6 +26,7 @@
 pub mod confirm;
 pub mod conflict;
 pub mod context;
+pub mod create;
 pub mod rename;
 
 use std::path::PathBuf;
@@ -36,6 +37,7 @@ use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::widgets::Widget;
 
+use crate::fold::create::Kind as CreateKind;
 use crate::fold::ops::{ConflictPolicy, OpId};
 use crate::ui::keymap::{BINDINGS, MOUSE};
 use crate::ui::theme::Theme;
@@ -60,6 +62,7 @@ pub enum Overlay {
     Destination(context::Destination),
     Help { scroll: u16 },
     Confirm(confirm::Confirm),
+    Create(create::Create),
     Rename(rename::Rename),
     Conflict(conflict::Prompt),
 }
@@ -89,6 +92,11 @@ pub enum Answer {
     Renamed {
         from: PathBuf,
         to: PathBuf,
+    },
+    Created {
+        dir: PathBuf,
+        kind: CreateKind,
+        name: String,
     },
     /// `o`/`s`/`r` on a [`conflict::Prompt`], applied to the whole op.
     Policy {
@@ -144,6 +152,10 @@ impl Overlays {
 
     pub fn open_rename(&mut self, from: PathBuf) {
         self.current = Some(Overlay::Rename(rename::Rename::new(from)));
+    }
+
+    pub fn open_create(&mut self, dir: PathBuf, kind: CreateKind) {
+        self.current = Some(Overlay::Create(create::Create::new(dir, kind)));
     }
 
     pub fn open_conflict(&mut self, p: conflict::Prompt) {
@@ -234,6 +246,13 @@ impl Overlays {
                     },
                 ),
             },
+            Overlay::Create(form) => match form.handle(k) {
+                create::Action::Taken => (false, Answer::Consumed),
+                create::Action::Close => (true, Answer::Closed),
+                create::Action::Create { dir, kind, name } => {
+                    (true, Answer::Created { dir, kind, name })
+                }
+            },
             Overlay::Conflict(p) => match p.handle(k) {
                 conflict::Action::Taken => (false, Answer::Consumed),
                 conflict::Action::Close => (true, Answer::Closed),
@@ -311,6 +330,14 @@ impl Overlays {
             },
             Overlay::Rename(_) => {
                 let r = rename::rect(area);
+                if inside(r, x, y) {
+                    (false, Answer::Consumed)
+                } else {
+                    (true, Answer::Closed)
+                }
+            }
+            Overlay::Create(_) => {
+                let r = create::rect(area);
                 if inside(r, x, y) {
                     (false, Answer::Consumed)
                 } else {
@@ -403,6 +430,7 @@ impl Overlays {
                 None
             }
             Overlay::Rename(r) => rename::render(area, buf, theme, r),
+            Overlay::Create(form) => create::render(area, buf, theme, form),
             Overlay::Conflict(p) => {
                 conflict::render(area, buf, theme, p, bars);
                 None

@@ -67,6 +67,9 @@ colliding with existing keys.
 try an unwritable directory. Automated tests verify no overwrite and correct
 refresh in Fold and Commander.
 
+Implementation and the [milestone 1 manual checklist](create-validation.md)
+are available for validation before starting milestone 2.
+
 ### 2a. Recursive filename search
 
 Keep `/` as the current-directory filter. Add a separate recursive search
