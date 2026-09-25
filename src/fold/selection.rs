@@ -126,6 +126,17 @@ impl Selection {
         }
     }
 
+    /// A successfully unmounted volume cannot supply any of its old marks.
+    pub fn forget_under(&mut self, mount: &Path) {
+        let gone = self
+            .marked
+            .keys()
+            .filter(|path| path.starts_with(mount))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.forget_paths(&gone);
+    }
+
     /// A `Done::Summarized` arrived for a marked directory: fold its byte
     /// count into the total and move it out of `unsized_dirs`. A no-op for a
     /// path that is not marked, or not a directory -- a summary racing an
@@ -295,6 +306,19 @@ mod tests {
         assert!(!s.is_marked(Path::new("/a")));
         assert!(s.is_marked(Path::new("/b")));
         assert_eq!(s.bytes, 200);
+    }
+
+    #[test]
+    fn forgetting_an_unmounted_volume_preserves_other_marks_and_totals() {
+        let mut selection = Selection::default();
+        selection.toggle(&file("/media/usb/photo.jpg", 100));
+        selection.toggle(&dir("/media/usb/folder"));
+        selection.toggle(&file("/media/usb-2/report.txt", 50));
+        selection.forget_under(Path::new("/media/usb"));
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection.bytes, 50);
+        assert_eq!(selection.unsized_dirs, 0);
+        assert!(selection.is_marked(Path::new("/media/usb-2/report.txt")));
     }
 
     #[test]

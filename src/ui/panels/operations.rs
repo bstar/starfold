@@ -42,6 +42,9 @@ pub struct View<'a> {
     pub focused: bool,
     pub folded: bool,
     pub rows: &'a [OpRow],
+    /// A volume unmount is worker activity, not a removable queue entry.
+    pub unmounting: Option<&'a str>,
+    pub spinner: &'a str,
     pub cursor: usize,
     pub scroll: usize,
     /// `"enter run · esc clear"` -- shown beside the cursor row's own status
@@ -68,7 +71,10 @@ fn running<'a>(v: &View<'a>) -> Option<&'a OpRow> {
 }
 
 pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
-    let detail = running(v).map(|r| r.status.clone());
+    let detail = v
+        .unmounting
+        .map(|_| activity_status(v).to_string())
+        .or_else(|| running(v).map(|r| r.status.clone()));
     let word_list = words(ModuleId::Operations);
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
@@ -96,6 +102,20 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
 }
 
 fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
+    if let Some(name) = v.unmounting {
+        let status = format!(" · {}", activity_status(v));
+        let title_w = area.width.saturating_sub(width_of(&status));
+        summary_row(
+            area,
+            buf,
+            &format!(
+                "{}{status}",
+                elide_middle(&format!("{} UNMOUNT {name}", v.spinner), title_w)
+            ),
+            Style::default().fg(rgb(v.theme.fold.progress_fg)),
+        );
+        return;
+    }
     let row = running(v).or_else(|| v.rows.iter().find(|r| r.tone == Tone::Pending));
     match row {
         Some(r) => {
@@ -115,8 +135,28 @@ fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
 }
 
 fn render_open(outer: Rect, area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
+    let mut area = area;
+    if let Some(name) = v.unmounting {
+        if area.height > 0 {
+            let status = activity_status(v);
+            let right_w = width_of(status).min(area.width);
+            let left_w = area.width.saturating_sub(right_w + 1);
+            let style = Style::default().fg(rgb(v.theme.fold.progress_fg));
+            buf.set_string(
+                area.x,
+                area.y,
+                elide_middle(&format!("{} UNMOUNT {name}", v.spinner), left_w),
+                style,
+            );
+            buf.set_string(area.x + area.width - right_w, area.y, status, style);
+            area.y += 1;
+            area.height -= 1;
+        }
+    }
     if v.rows.is_empty() {
-        empty(area, buf, v.theme, "nothing queued");
+        if v.unmounting.is_none() {
+            empty(area, buf, v.theme, "nothing queued");
+        }
         return;
     }
     let t = v.theme;
@@ -172,8 +212,21 @@ pub fn hit(area: Rect, v: &View<'_>, x: u16, y: u16) -> Option<usize> {
     if x < body.x || x >= body.x + body.width || y < body.y || y >= body.y + body.height {
         return None;
     }
-    let index = v.scroll + usize::from(y - body.y);
+    let offset = usize::from(v.unmounting.is_some());
+    let row = usize::from(y - body.y);
+    if row < offset {
+        return None;
+    }
+    let index = v.scroll + row - offset;
     (index < v.rows.len()).then_some(index)
+}
+
+fn activity_status(v: &View<'_>) -> &'static str {
+    if running(v).is_some() {
+        "waiting"
+    } else {
+        "unmounting"
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +249,8 @@ mod tests {
             focused: true,
             folded: false,
             rows,
+            unmounting: None,
+            spinner: "⠋",
             cursor: 0,
             scroll: 0,
             hint: "enter run \u{b7} esc clear",
@@ -252,6 +307,29 @@ mod tests {
         let mut buf2 = Buffer::empty(area);
         render(area, &mut buf2, &v2, &mut Bars::new());
         assert!(dump(&buf2, area).contains("nothing queued"));
+    }
+
+    #[test]
+    fn unmount_activity_is_visible_but_not_a_selectable_queue_row() {
+        let t = theme("terminal");
+        let rows = vec![row("COPY 1 item → ~/Work", "queued", Tone::Pending)];
+        let mut v = view(&t, &rows);
+        v.unmounting = Some("Camera");
+        v.spinner = "⠹";
+        let area = Rect::new(0, 0, 60, 7);
+        let body = frame::body(area, &words(ModuleId::Operations));
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v, &mut Bars::new());
+        let text = dump(&buf, area);
+        assert!(text.contains("⠹ UNMOUNT Camera"), "{text:?}");
+        assert!(text.contains("COPY 1 item"), "{text:?}");
+        assert_eq!(hit(area, &v, 5, body.y), None);
+        assert_eq!(hit(area, &v, 5, body.y + 1), Some(0));
+
+        v.folded = true;
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v, &mut Bars::new());
+        assert!(dump(&buf, area).contains("⠹ UNMOUNT Camera"));
     }
 
     #[test]

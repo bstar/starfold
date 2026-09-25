@@ -126,6 +126,8 @@ pub struct ViewData {
     pub preview_name: Option<String>,
     pub preview: Option<Arc<Preview>>,
     pub ops: Vec<panels::operations::OpRow>,
+    /// An unmount is visible as transient activity, separate from queue ops.
+    pub unmounting: Option<String>,
     /// [`OpId`]s in the same order as [`Self::ops`] -- `OpRow` is a pure
     /// render struct with no id of its own, so this is how a click or a key
     /// on a row finds the [`Op`] it names.
@@ -160,6 +162,7 @@ impl ViewData {
             preview_name: None,
             preview: None,
             ops: Vec::new(),
+            unmounting: None,
             op_ids: Vec::new(),
             running_bar: None,
             has_forward: false,
@@ -207,6 +210,8 @@ fn place_items(state: &crate::fold::State) -> Vec<super::places::PlaceItem> {
             group: PlaceGroup::Bookmarks,
             name: b.name.clone(),
             path: b.path.clone(),
+            unmount_source: None,
+            info: None,
         })
         .collect();
     items.extend(state.places.locations.iter().map(|l| PlaceItem {
@@ -217,17 +222,23 @@ fn place_items(state: &crate::fold::State) -> Vec<super::places::PlaceItem> {
         },
         name: l.name.clone(),
         path: l.path.clone(),
+        unmount_source: l.unmount_source.clone(),
+        info: l.info.clone(),
     }));
     items.extend([
         PlaceItem {
             group: PlaceGroup::Standard,
             name: "Home".into(),
             path: state.home.clone(),
+            unmount_source: None,
+            info: None,
         },
         PlaceItem {
             group: PlaceGroup::Standard,
             name: "Root".into(),
             path: PathBuf::from("/"),
+            unmount_source: None,
+            info: None,
         },
     ]);
     items
@@ -275,6 +286,7 @@ pub struct App {
     pdf_requested: Option<(u64, u32)>,
     ops_cursor: usize,
     ops_scroll: usize,
+    unmount_started: Option<(PathBuf, Instant)>,
     /// Every scrollbar the column drew last frame, and the one a press is
     /// holding -- see `starkit::chrome::scrollbar::Scrollbars`'s own doc for
     /// the contract [`App::scroll_bar_to`] keeps with it.
@@ -632,7 +644,15 @@ impl App {
     }
 
     fn open_places(&mut self, bookmark: bool) {
-        let mut places = super::places::Places::new(place_items(&self.core.state()));
+        let state = self.core.state();
+        let mut places = super::places::Places::new(place_items(&state));
+        places.select_containing_mount(&self.view.active_dir);
+        places.set_status(
+            state.places.loading,
+            state.places.error.clone(),
+            state.places.unmounting.clone(),
+        );
+        drop(state);
         if bookmark {
             let path = self.view.active_dir.clone();
             let name = self
@@ -672,6 +692,9 @@ impl App {
                 self.core.send(Command::RenameBookmark { path, name })
             }
             PlaceAction::RemoveBookmark(path) => self.core.send(Command::RemoveBookmark(path)),
+            PlaceAction::Unmount { path, source } => {
+                self.core.send(Command::UnmountPlace { path, source })
+            }
             PlaceAction::Refresh => self.core.send(Command::RefreshPlaces),
         }
         self.repaint = true;
@@ -759,6 +782,7 @@ impl App {
             pdf_requested: None,
             ops_cursor: 0,
             ops_scroll: 0,
+            unmount_started: None,
             bars: Bars::new(),
             clicks: ClickTracker::new(),
             repaint: true,
@@ -991,9 +1015,24 @@ impl App {
                 }
             })
             .collect();
+        let unmounting = state.places.unmounting.clone();
+        if self.unmount_started.as_ref().map(|(path, _)| path) != unmounting.as_ref() {
+            self.unmount_started = unmounting
+                .as_ref()
+                .map(|path| (path.clone(), Instant::now()));
+        }
+        let unmounting_name = unmounting.as_ref().map(|path| {
+            state
+                .places
+                .locations
+                .iter()
+                .find(|location| &location.path == path)
+                .map(|location| location.name.clone())
+                .unwrap_or_else(|| display_name(path))
+        });
         if let Some(places) = &mut self.places {
             places.set_items(place_items(&state));
-            places.set_status(state.places.loading, state.places.error.clone());
+            places.set_status(state.places.loading, state.places.error.clone(), unmounting);
         }
         let rows: Vec<panels::stack::Row> = state
             .rows(active)
@@ -1089,6 +1128,7 @@ impl App {
             preview_name,
             preview,
             ops,
+            unmounting: unmounting_name,
             op_ids,
             running_bar,
             has_forward: state.tabs.active().active_stack().has_forward(),
@@ -1147,7 +1187,9 @@ impl App {
 
         let ops_rect = regions.rect_of(ModuleId::Operations);
         let ops_body = header::body(ops_rect);
-        let ops_visible = usize::from(ops_body.height).max(1);
+        let ops_visible = usize::from(ops_body.height)
+            .saturating_sub(usize::from(self.view.unmounting.is_some()))
+            .max(1);
         self.ops_scroll =
             starkit::list::clamp_scroll(self.ops_cursor, self.ops_scroll, ops_visible);
     }
@@ -1506,6 +1548,7 @@ impl App {
             }
             ModuleId::Operations => {
                 usize::from(header::body(regions.rect_of(ModuleId::Operations)).height)
+                    .saturating_sub(usize::from(self.view.unmounting.is_some()))
             }
         };
         i32::try_from(rows).unwrap_or(i32::MAX).max(1)
@@ -2014,10 +2057,21 @@ impl App {
             focused: self.layout.focus() == ModuleId::Operations,
             folded: !self.layout.is_open(ModuleId::Operations),
             rows: &self.view.ops,
+            unmounting: self.view.unmounting.as_deref(),
+            spinner: self.unmount_spinner(),
             cursor: self.ops_cursor,
             scroll: self.ops_scroll,
             hint: "enter run \u{b7} x drop \u{b7} esc clear",
         }
+    }
+
+    fn unmount_spinner(&self) -> &'static str {
+        let phase = self
+            .unmount_started
+            .as_ref()
+            .map(|(_, started)| (started.elapsed().as_millis() / 120) as usize)
+            .unwrap_or(0);
+        super::SPINNER[phase % super::SPINNER.len()]
     }
 
     fn status_view(&self, now: Instant) -> status::View<'_> {
@@ -2074,7 +2128,9 @@ impl App {
         bars.begin_frame();
 
         let padding = (self.cfg.ui.padding_x, self.cfg.ui.padding_y);
-        let queued = u16::try_from(self.view.ops.len()).unwrap_or(u16::MAX);
+        let queued =
+            u16::try_from(self.view.ops.len() + usize::from(self.view.unmounting.is_some()))
+                .unwrap_or(u16::MAX);
         let Some(regions) = self.layout.regions(area, padding, queued).cloned() else {
             too_small(area, buf, &self.theme);
             self.bars = bars;
@@ -2087,18 +2143,23 @@ impl App {
             for pane in 0..self.panes.len() {
                 let rect = pane_rect(regions.rect_of(ModuleId::Stack), pane);
                 let view = self.pane_view(pane);
+                // The spaced heading and the active marker fit exactly at 30
+                // columns without the dash. Keep the marker visible there.
+                let compact_left = pane == 0 && pane == self.active_pane && rect.width < 31;
+                let compact_left_title =
+                    compact_left.then(|| format!("{} › LEFT", panels::HEADING));
                 panels::stack::render_named(
                     rect,
                     buf,
                     &view,
                     &mut bars,
                     match (pane, pane == self.active_pane) {
-                        (0, _) => panels::HEADING,
+                        (0, _) => compact_left_title.as_deref().unwrap_or(panels::HEADING),
                         (_, true) => "› RIGHT",
                         (_, false) => "RIGHT",
                     },
-                    (pane == 0).then_some(if pane == self.active_pane {
-                        "›LEFT"
+                    (pane == 0 && !compact_left).then_some(if pane == self.active_pane {
+                        "› LEFT"
                     } else {
                         "LEFT"
                     }),
@@ -2234,8 +2295,10 @@ impl App {
         }
 
         self.bars = bars;
+        let spinner = self.unmount_spinner();
         if let Some(places) = &mut self.places {
             self.bars.begin_frame();
+            places.set_spinner(spinner);
             if let Some((x, y)) = places.render(regions.area, buf, &self.theme) {
                 reverse_cell(buf, regions.area, x, y);
             }
@@ -2786,6 +2849,50 @@ mod tests {
         app.tick();
         assert_eq!(app.panes[0].dir, path);
         assert_eq!(app.panes[1].dir, fk.home().join("pictures"));
+    }
+
+    #[test]
+    fn unmount_activity_survives_closing_places_and_clears_on_failure() {
+        use crate::fold::places::{Location, LocationKind};
+
+        let (mut app, fk, _dir) = app();
+        fk.pump();
+        app.tick();
+        let path: PathBuf = "/mnt/starfold-test-camera".into();
+        let source: PathBuf = "/dev/starfold-test-camera".into();
+        {
+            let mut state = fk.state_mut();
+            state.places.locations.push(Location {
+                name: "Camera".into(),
+                path: path.clone(),
+                kind: LocationKind::Device,
+                unmount_source: Some(source.clone()),
+                info: None,
+            });
+            state.version += 1;
+        }
+        app.tick();
+        app.core.send(Command::UnmountPlace { path, source });
+        app.tick();
+        assert_eq!(app.view.unmounting.as_deref(), Some("Camera"));
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        assert!(dump(&buf, area).contains("UNMOUNT Camera"));
+
+        app.open_places(false);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        assert!(dump(&buf, area).contains("Unmounting Camera"));
+        app.place_action(super::super::places::PlaceAction::Close);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        assert!(dump(&buf, area).contains("UNMOUNT Camera"));
+
+        fk.pump();
+        app.tick();
+        assert!(app.view.unmounting.is_none());
     }
 
     #[test]

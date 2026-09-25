@@ -24,8 +24,20 @@ mounted devices, mounted network locations, Home and Root. `B` saves the
 current directory as a bookmark with an editable name; bookmarks can be
 renamed or removed in Places. A saved bookmark stays in the list when its
 device or network share is disconnected, and navigation reports the failure.
-Places lists mounted locations; it does not mount drives, eject them or log in
-to network shares.
+Mounted local drives show capacity and device in the list. On wider terminals,
+the selected place has a detail pane with its mount path, filesystem and
+available space. Linux also shows label, UUID, model, serial and connection
+type when the device reports them. Drive information is gathered during the
+mount scan, not while drawing the window. Press `F3` for a full-width detail
+view, including on smaller terminals.
+Select a local drive in Places and press `F6`, or click its `[unmount]` button,
+to unmount it after confirmation.
+While it runs, Places shows an animated status and OPERATIONS shows a temporary
+unmount activity row. That row is separate from queued file operations.
+STAR/FOLD moves panes that were viewing the drive to its mount-point parent.
+Unmounting can fail while another app is using the drive; the error appears in
+Places. Places does not mount drives, eject physical media or log in to network
+shares.
 
 STAR/FOLD remembers the last view, both Commander directories and the Fold
 directory. An explicit directory on the command line opens in the active view.

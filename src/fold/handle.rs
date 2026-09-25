@@ -46,6 +46,10 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 pub enum Command {
     LoadPlaces(PathBuf),
     RefreshPlaces,
+    UnmountPlace {
+        path: PathBuf,
+        source: PathBuf,
+    },
     SaveBookmark {
         name: String,
         path: PathBuf,

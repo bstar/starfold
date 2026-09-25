@@ -143,11 +143,11 @@ fn commander_frames() {
     settle(&mut app, &fk);
     let left = render(&mut app, 100, 30);
     assert!(left.lines().next().unwrap().contains("S T A R / F O L D"));
-    assert!(left.lines().next().unwrap().contains("›LEFT"));
+    assert!(left.lines().next().unwrap().contains("› LEFT"));
     insta::assert_snapshot!("commander-left-100x30", left);
     let floor = render(&mut app, 60, 21);
     assert!(floor.lines().next().unwrap().contains("S T A R / F O L D"));
-    assert!(floor.lines().next().unwrap().contains("›LEFT"));
+    assert!(floor.lines().next().unwrap().contains("› LEFT"));
     assert_eq!(floor.lines().count(), 21);
     insta::assert_snapshot!("commander-floor-60x21", floor);
     app.key(code(KeyCode::Tab));

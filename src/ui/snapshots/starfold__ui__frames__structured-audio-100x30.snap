@@ -21,11 +21,11 @@ expression: "render(&mut app,w,h)"
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ PREVIEW — ◇ blob.bin ═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
-║                                                                                             Audio║
-║Title: Evening light                                                                              █
-║Artist: Example artist                                                                            ║
-║Album: Home recordings                                                                            ║
-║Duration: 0:03:42                                                                                 ║
+║                                                                                            Audio ║
+║ Title: Evening light                                                                             █
+║ Artist: Example artist                                                                           ║
+║ Album: Home recordings                                                                           ║
+║ Duration: 0:03:42                                                                                ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                       run  clear ║

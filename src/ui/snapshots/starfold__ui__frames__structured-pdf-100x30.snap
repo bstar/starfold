@@ -21,11 +21,11 @@ expression: "render(&mut app,w,h)"
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ PREVIEW — ◇ blob.bin ═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
-║                                                                                    PDF · 12 pages║
-║── Page 1 ──                                                                                      █
-║Chapter One                                                                                       ║
-║Useful document text appears immediately.                                                         ║
-║Scroll to load subsequent pages.                                                                  ║
+║                                                                                   PDF · 12 pages ║
+║ ── Page 1 ──                                                                                     █
+║ Chapter One                                                                                      ║
+║ Useful document text appears immediately.                                                        ║
+║ Scroll to load subsequent pages.                                                                 ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                       run  clear ║

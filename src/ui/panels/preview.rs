@@ -300,6 +300,7 @@ pub fn render(
             words: &word_list,
         },
     );
+    let body = pad_body(body);
 
     if v.folded {
         render_folded(body, buf, v);
@@ -401,7 +402,17 @@ pub fn render(
             format,
         } => {
             let data = Arc::clone(data);
-            render_image(body, buf, v, &data, *width, *height, format)
+            // Keep the picture's canvas at full width; only its text label
+            // needs the side inset.
+            render_image(
+                frame::body(area, &word_list),
+                buf,
+                v,
+                &data,
+                *width,
+                *height,
+                format,
+            )
         }
     }
 }
@@ -440,7 +451,23 @@ pub fn lines(preview: &Preview, width: u16) -> Vec<String> {
 }
 
 pub fn content_rect(area: Rect) -> Rect {
-    below_meta(frame::body(area, &words(ModuleId::Preview)))
+    below_meta(body(area))
+}
+
+/// The preview's content stays one cell clear of each vertical border.
+pub fn body(area: Rect) -> Rect {
+    pad_body(frame::body(area, &words(ModuleId::Preview)))
+}
+
+fn pad_body(body: Rect) -> Rect {
+    if body.width < 3 {
+        return body;
+    }
+    Rect {
+        x: body.x + 1,
+        width: body.width - 2,
+        ..body
+    }
 }
 pub fn page_rows(page: &crate::fold::preview::model::Page, width: u16) -> usize {
     1 + usize::from(page.truncated)
@@ -660,7 +687,7 @@ fn render_image(
             "{format} \u{b7} {width} \u{d7} {height} \u{b7} {}",
             scale_label(v.scale, 1.0)
         );
-        draw_meta(area, buf, v.theme, &meta);
+        draw_meta(pad_body(area), buf, v.theme, &meta);
         return None;
     }
     let pic = Rect {
@@ -711,7 +738,7 @@ fn render_image(
         None
     };
 
-    draw_meta(meta_row, buf, v.theme, &meta);
+    draw_meta(pad_body(meta_row), buf, v.theme, &meta);
     placement
 }
 
@@ -935,7 +962,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &mut v, &mut Bars::new());
         // The first body row is the meta line; the text starts under it.
-        let body = frame::body(area, &words(ModuleId::Preview));
+        let body = body(area);
         let row1: String = (0..10)
             .map(|x| buf[(body.x + x, body.y + 1)].symbol().to_string())
             .collect();

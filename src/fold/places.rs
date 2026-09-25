@@ -23,6 +23,24 @@ pub struct Location {
     pub name: String,
     pub path: PathBuf,
     pub kind: LocationKind,
+    /// Present only for local block-device mounts we can unmount.
+    pub unmount_source: Option<PathBuf>,
+    pub info: Option<LocationInfo>,
+}
+
+/// Read during mount discovery, never from the renderer. Optional fields are
+/// absent when the OS cannot provide them for this volume.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocationInfo {
+    pub source: String,
+    pub fs_type: String,
+    pub label: Option<String>,
+    pub uuid: Option<String>,
+    pub model: Option<String>,
+    pub serial: Option<String>,
+    pub transport: Option<String>,
+    pub capacity: Option<u64>,
+    pub available: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -30,6 +48,8 @@ pub struct PlacesState {
     pub bookmarks: Vec<Bookmark>,
     pub locations: Vec<Location>,
     pub loading: bool,
+    /// The local volume currently waiting for or undergoing unmount.
+    pub unmounting: Option<PathBuf>,
     pub error: Option<String>,
     pub(crate) bookmarks_error: Option<String>,
     pub(crate) locations_error: Option<String>,
@@ -107,7 +127,9 @@ pub fn discover_locations() -> Result<Vec<Location>, String> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let mounts: Vec<Mount> = Vec::new();
 
-    Ok(classify_mounts(mounts))
+    let mut locations = classify_mounts(mounts);
+    enrich_locations(&mut locations);
+    Ok(locations)
 }
 
 #[cfg(target_os = "linux")]
@@ -274,6 +296,13 @@ fn classify_mounts(mounts: Vec<Mount>) -> Vec<Location> {
             name,
             path: target.clone(),
             kind,
+            unmount_source: (!network && mount.source.starts_with("/dev/"))
+                .then(|| PathBuf::from(&mount.source)),
+            info: (!network && mount.source.starts_with("/dev/")).then(|| LocationInfo {
+                source: mount.source.clone(),
+                fs_type: mount.fs_type.clone(),
+                ..LocationInfo::default()
+            }),
         };
         by_path
             .entry(target.clone())
@@ -285,6 +314,201 @@ fn classify_mounts(mounts: Vec<Mount>) -> Vec<Location> {
             .or_insert(location);
     }
     by_path.into_values().collect()
+}
+
+fn enrich_locations(locations: &mut [Location]) {
+    #[cfg(target_os = "linux")]
+    let devices = if locations
+        .iter()
+        .any(|location| location.unmount_source.is_some())
+    {
+        linux_block_devices()
+    } else {
+        BTreeMap::new()
+    };
+    for location in locations {
+        let Some(info) = &mut location.info else {
+            continue;
+        };
+        if let Some((capacity, available)) = filesystem_space(&location.path) {
+            info.capacity = Some(capacity);
+            info.available = Some(available);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(source) = &location.unmount_source {
+            let resolved = std::fs::canonicalize(source).unwrap_or_else(|_| source.clone());
+            apply_block_info(info, &resolved.to_string_lossy(), &devices);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is NUL-terminated and statvfs writes the output record
+    // only on success. The call runs on the discovery worker.
+    if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: statvfs returned success and initialized the whole record.
+    let stat = unsafe { stat.assume_init() };
+    let block = stat.f_frsize as u64;
+    Some((
+        (stat.f_blocks as u64).saturating_mul(block),
+        (stat.f_bavail as u64).saturating_mul(block),
+    ))
+}
+
+#[cfg(not(unix))]
+fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Default, Deserialize)]
+struct BlockDevice {
+    path: String,
+    pkname: Option<String>,
+    label: Option<String>,
+    uuid: Option<String>,
+    size: Option<u64>,
+    model: Option<String>,
+    serial: Option<String>,
+    tran: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+struct BlockDevices {
+    blockdevices: Vec<BlockDevice>,
+}
+
+#[cfg(target_os = "linux")]
+fn apply_block_info(
+    info: &mut LocationInfo,
+    source: &str,
+    devices: &BTreeMap<String, BlockDevice>,
+) {
+    let Some(device) = devices.get(source) else {
+        return;
+    };
+    let parent = device
+        .pkname
+        .as_ref()
+        .and_then(|name| devices.get(&format!("/dev/{name}")));
+    info.label = device.label.clone();
+    info.uuid = device.uuid.clone();
+    info.model = device
+        .model
+        .clone()
+        .or_else(|| parent.and_then(|d| d.model.clone()));
+    info.serial = device
+        .serial
+        .clone()
+        .or_else(|| parent.and_then(|d| d.serial.clone()));
+    info.transport = device
+        .tran
+        .clone()
+        .or_else(|| parent.and_then(|d| d.tran.clone()));
+    if info.capacity.is_none() {
+        info.capacity = device.size;
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_block_devices(output: &[u8]) -> BTreeMap<String, BlockDevice> {
+    serde_json::from_slice::<BlockDevices>(output)
+        .map(|data| {
+            data.blockdevices
+                .into_iter()
+                .map(|device| (device.path.clone(), device))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_block_devices() -> BTreeMap<String, BlockDevice> {
+    let Ok(output) = std::process::Command::new("lsblk")
+        .args([
+            "--json",
+            "--bytes",
+            "--output",
+            "PATH,PKNAME,LABEL,UUID,SIZE,MODEL,SERIAL,TRAN",
+        ])
+        .output()
+    else {
+        return BTreeMap::new();
+    };
+    if !output.status.success() {
+        return BTreeMap::new();
+    }
+    parse_block_devices(&output.stdout)
+}
+
+/// Unmount only the same local device that Places displayed. A fresh mount
+/// lookup prevents a stale picker from acting on a different drive that has
+/// since reused the mount point.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn unmount_location(path: &Path, source: &Path) -> Result<Vec<Location>, String> {
+    let locations = discover_locations()?;
+    if !locations
+        .iter()
+        .any(|location| location.path == path && location.unmount_source.as_deref() == Some(source))
+    {
+        return Err(format!(
+            "{} is no longer mounted as that device",
+            path.display()
+        ));
+    }
+    if std::env::current_dir().is_ok_and(|cwd| cwd.starts_with(path)) {
+        return Err(format!(
+            "STAR/FOLD was launched inside {}; start it elsewhere before unmounting",
+            path.display()
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    let output = std::process::Command::new("udisksctl")
+        .args(["unmount", "--block-device"])
+        .arg(source)
+        .output()
+        .map_err(|error| format!("starting udisksctl: {error}"))?;
+    #[cfg(target_os = "macos")]
+    let output = std::process::Command::new("/usr/sbin/diskutil")
+        .arg("unmount")
+        .arg(path)
+        .output()
+        .map_err(|error| format!("starting diskutil: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = if detail.trim().is_empty() {
+            String::from_utf8_lossy(&output.stdout)
+        } else {
+            detail
+        };
+        let detail = detail
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("unknown error");
+        return Err(format!("Unmount failed: {detail}"));
+    }
+    let locations = discover_locations()
+        .map_err(|error| format!("Unmounted, but Places could not refresh: {error}"))?;
+    if locations
+        .iter()
+        .any(|location| location.path == path && location.unmount_source.as_deref() == Some(source))
+    {
+        return Err(format!("{} is still mounted", path.display()));
+    }
+    Ok(locations)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn unmount_location(_path: &Path, _source: &Path) -> Result<Vec<Location>, String> {
+    Err("unmounting is unsupported on this platform".into())
 }
 
 #[cfg(test)]
@@ -324,7 +548,90 @@ mod tests {
         );
         assert_eq!(places.len(), 2);
         assert_eq!(places[0].kind, LocationKind::Network);
+        assert_eq!(places[0].unmount_source, None);
         assert_eq!(places[1].name, "My Drive");
+        assert_eq!(places[1].unmount_source, Some(PathBuf::from("/dev/sdb1")));
+        assert_eq!(places[1].info.as_ref().unwrap().fs_type, "vfat");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn partition_identification_inherits_the_usb_drive_model_and_serial() {
+        let data = br#"{"blockdevices":[
+            {"path":"/dev/sdb","pkname":null,"model":"Portable SSD","serial":"XYZ123","tran":"usb","size":1000000000000},
+            {"path":"/dev/sdb1","pkname":"sdb","label":"CAMERA","uuid":"A1B2-C3D4","size":999000000000}
+        ]}"#;
+        let devices = parse_block_devices(data);
+        let mut info = LocationInfo {
+            source: "/dev/sdb1".into(),
+            fs_type: "exfat".into(),
+            capacity: Some(990_000_000_000),
+            ..LocationInfo::default()
+        };
+        apply_block_info(&mut info, "/dev/sdb1", &devices);
+        assert_eq!(info.label.as_deref(), Some("CAMERA"));
+        assert_eq!(info.uuid.as_deref(), Some("A1B2-C3D4"));
+        assert_eq!(info.model.as_deref(), Some("Portable SSD"));
+        assert_eq!(info.serial.as_deref(), Some("XYZ123"));
+        assert_eq!(info.transport.as_deref(), Some("usb"));
+        assert_eq!(info.capacity, Some(990_000_000_000));
+    }
+
+    #[test]
+    fn unmount_completion_rehomes_open_panes_and_clears_the_place() {
+        use crate::fold::handle::Command;
+        use crate::fold::state::{apply, Change, State};
+        use crate::fold::worker::{Done, Job};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mount = dir.path().join("USB");
+        let source = PathBuf::from("/dev/sdb1");
+        let mut state = State::new(
+            &crate::fold::FoldConfig::default(),
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            true,
+        );
+        state.places.locations.push(Location {
+            name: "USB".into(),
+            path: mount.clone(),
+            kind: LocationKind::Device,
+            unmount_source: Some(source.clone()),
+            info: None,
+        });
+        apply(&mut state, Change::Command(Command::Push(mount.clone())));
+        let effects = apply(
+            &mut state,
+            Change::Command(Command::UnmountPlace {
+                path: mount.clone(),
+                source,
+            }),
+        );
+        assert!(matches!(
+            effects.jobs.as_slice(),
+            [Job::UnmountPlace { .. }]
+        ));
+        assert!(state.places.loading);
+        assert_eq!(state.places.unmounting, Some(mount.clone()));
+        apply(
+            &mut state,
+            Change::Done(Done::PlaceUnmounted {
+                path: mount,
+                result: Ok(Vec::new()),
+            }),
+        );
+        assert_eq!(state.tabs.active().active_stack().active().dir, dir.path());
+        assert!(state.places.locations.is_empty());
+        assert!(!state.places.loading);
+        assert_eq!(state.places.unmounting, None);
+    }
+
+    #[test]
+    fn stale_unmount_request_is_rejected_before_invoking_the_os() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(unmount_location(dir.path(), Path::new("/dev/sdb1"))
+            .unwrap_err()
+            .contains("no longer mounted"));
     }
 
     #[test]
@@ -568,6 +875,11 @@ mod tests {
         #[test]
         fn mount_parser_never_panics(input in proptest::collection::vec(any::<u8>(), 0..512)) {
             let _ = parse_linux_mount(&input);
+        }
+
+        #[test]
+        fn block_device_json_never_panics(input in proptest::collection::vec(any::<u8>(), 0..512)) {
+            let _ = parse_block_devices(&input);
         }
     }
 }

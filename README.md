@@ -73,7 +73,8 @@ rest of it.
   See [previews and archives](docs/previews-and-archives.md).
 - **Commander view and Places.** Press `v` for two independently browsable
   panes. `b` opens searchable bookmarks, mounted devices, network locations,
-  Home and Root; `B` bookmarks the current directory.
+  Home and Root; selected drives show capacity and identifying details.
+  `B` bookmarks the current directory.
 - **Sixteen themes.** The same chrome and theme engine as the rest of the STAR
   family, so a theme set in one looks the same in another. The mouse works
   everywhere the keyboard does.
@@ -83,8 +84,8 @@ rest of it.
 
 Tabs, forked stacks, archives and an action palette are on the plan but not in
 this milestone. Commander uses two independent directory panes alongside the
-Fold stack; mounting, ejecting and network login remain jobs for the operating
-system.
+Fold stack; Places can unmount a selected local drive, while mounting, physical
+ejection and network login remain jobs for the operating system.
 
 ## Read more
 

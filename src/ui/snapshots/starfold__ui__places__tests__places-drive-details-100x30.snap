@@ -1,6 +1,6 @@
 ---
 source: src/ui/places.rs
-expression: "drawn(&mut places, 100, 30)"
+expression: "drawn(&mut drive, 100, 30)"
 ---
 
 
@@ -9,17 +9,17 @@ expression: "drawn(&mut places, 100, 30)"
   ║Search:                                                                                       ║
   ║Type to search names and paths                                                                ║
   ║BOOKMARKS                                           │ SELECTED PLACE                          ║
-  ║> Projects        /home/user/projects               │ Projects                                ║
-  ║  Writing         /home/user/documents              │ Mounted at  /home/user/projects         ║
-  ║DEVICES             CAPACITY  DEVICE                │                                         ║
-  ║  Camera            1.0 TB    /dev/sdb1    [unmount]│                                         ║
-  ║VOLUMES                       CAPACITY  DEVICE      │                                         ║
-  ║  Scratch         /mnt/scratch                      │                                         ║
-  ║NETWORK                                             │                                         ║
-  ║  Office          /mnt/office                       │                                         ║
-  ║LOCATIONS                                           │                                         ║
-  ║  Home            /home/user                        │                                         ║
-  ║  Root            /                                 │                                         ║
+  ║  Projects        /home/user/projects               │ Camera                                  ║
+  ║  Writing         /home/user/documents              │ Label       Camera                      ║
+  ║DEVICES             CAPACITY  DEVICE                │ Model       Portable SSD                ║
+  ║> Camera            1.0 TB    /dev/sdb1    [unmount]│ Serial      XYZ123                      ║
+  ║VOLUMES                       CAPACITY  DEVICE      │ UUID        A1B2-C3D4                   ║
+  ║  Scratch         /mnt/scratch                      │ Connection  USB                         ║
+  ║NETWORK                                             │ Device      /dev/sdb1                   ║
+  ║  Office          /mnt/office                       │ Filesystem  exfat                       ║
+  ║LOCATIONS                                           │ Capacity    1.0 TB                      ║
+  ║  Home            /home/user                        │ Available   600.0 GB                    ║
+  ║  Root            /                                 │ Mounted at  /run/media/user/CAMERA      ║
   ║                                                    │                                         ║
   ║                                                    │                                         ║
   ║                                                    │                                         ║

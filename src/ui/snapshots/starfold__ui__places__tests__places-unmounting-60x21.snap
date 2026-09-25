@@ -5,12 +5,12 @@ expression: "drawn(&mut places, 60, 21)"
 
   ╔═ PLACES ═════════════════════════════════════════════╗
   ║Search:                                               ║
-  ║Network mount list unavailable                        ║
+  ║⠙ Unmounting Camera…                                  ║
   ║BOOKMARKS                                             ║
   ║> Projects         /home/user/projects                ║
   ║  Writing          /home/user/documents               ║
   ║DEVICES               CAPACITY  DEVICE                ║
-  ║  Camera              1.0 TB    /dev/sdb1    [unmount]║
+  ║  Camera              1.0 TB    /dev/sdb1    [ busy ] ║
   ║VOLUMES                         CAPACITY  DEVICE      ║
   ║  Scratch          /mnt/scratch                       ║
   ║NETWORK                                               ║

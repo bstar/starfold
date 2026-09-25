@@ -52,12 +52,20 @@ impl Senders {
     pub fn dispatch_checked(&self, job: Job, state: &Arc<RwLock<State>>, events: &EventSink) {
         if !matches!(
             job,
-            Job::SaveBookmarks { .. } | Job::LoadPlaces(_) | Job::RefreshPlaces
+            Job::SaveBookmarks { .. }
+                | Job::LoadPlaces(_)
+                | Job::RefreshPlaces
+                | Job::UnmountPlace { .. }
         ) {
             self.dispatch(job);
             return;
         }
-        if let Err(error) = self.io.try_send(job) {
+        let sender = if matches!(job, Job::UnmountPlace { .. }) {
+            &self.ops
+        } else {
+            &self.io
+        };
+        if let Err(error) = sender.try_send(job) {
             let message = "Places worker is busy or unavailable; retry the action".to_string();
             let done = match error.into_inner() {
                 Job::SaveBookmarks { revision, .. } => Done::BookmarksSaved {
@@ -70,6 +78,10 @@ impl Senders {
                     locations: Err(message),
                 },
                 Job::RefreshPlaces => Done::PlacesRefreshed(Err(message)),
+                Job::UnmountPlace { path, .. } => Done::PlaceUnmounted {
+                    path,
+                    result: Err(message),
+                },
                 _ => unreachable!(),
             };
             finish(done, state, events, self);
@@ -78,7 +90,7 @@ impl Senders {
     /// Send `job` to whichever worker owns its kind of work.
     pub fn dispatch(&self, job: Job) {
         let sender = match &job {
-            Job::Plan { .. } | Job::Run { .. } => &self.ops,
+            Job::Plan { .. } | Job::Run { .. } | Job::UnmountPlace { .. } => &self.ops,
             _ => &self.io,
         };
         if sender.try_send(job).is_err() {
@@ -100,6 +112,10 @@ pub enum Job {
     ClosePreview,
     LoadPlaces(PathBuf),
     RefreshPlaces,
+    UnmountPlace {
+        path: PathBuf,
+        source: PathBuf,
+    },
     SaveBookmarks {
         path: PathBuf,
         bookmarks: Vec<Bookmark>,
@@ -152,6 +168,10 @@ pub enum Done {
         locations: Result<Vec<Location>, String>,
     },
     PlacesRefreshed(Result<Vec<Location>, String>),
+    PlaceUnmounted {
+        path: PathBuf,
+        result: Result<Vec<Location>, String>,
+    },
     BookmarksSaved {
         revision: u64,
         result: Result<(), String>,
@@ -337,7 +357,11 @@ pub fn perform_io(
         // `Plan`/`Run` to the ops queue before this is ever called. Kept
         // here, rather than assumed away, so this match stays exhaustive if
         // `Job` grows another kind.
-        Job::ClosePreview | Job::Shutdown | Job::Plan { .. } | Job::Run { .. } => IoOutcome::None,
+        Job::ClosePreview
+        | Job::Shutdown
+        | Job::Plan { .. }
+        | Job::Run { .. }
+        | Job::UnmountPlace { .. } => IoOutcome::None,
     }
 }
 
@@ -372,6 +396,10 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
             let outcome = ops::exec::run(kind, &plan, policy, &options, &progress);
             Some(Done::Finished { op, outcome })
         }
+        Job::UnmountPlace { path, source } => Some(Done::PlaceUnmounted {
+            result: places::unmount_location(&path, &source),
+            path,
+        }),
         // Not ops work: `spawn_ops`'s loop forwards everything else before
         // this is called.
         Job::LoadPlaces(_)
@@ -456,7 +484,7 @@ pub fn spawn_io(
                             let _ = preview_tx.try_send(job);
                         }
                     }
-                    other @ (Job::Plan { .. } | Job::Run { .. }) => {
+                    other @ (Job::Plan { .. } | Job::Run { .. } | Job::UnmountPlace { .. }) => {
                         // `Senders::dispatch` always routes these to `ops`;
                         // arriving here would mean something upstream sent a
                         // job to the wrong queue. Forward it rather than
@@ -544,7 +572,7 @@ pub fn spawn_ops(
             for job in jobs.iter() {
                 match job {
                     Job::Shutdown => break,
-                    other @ (Job::Plan { .. } | Job::Run { .. }) => {
+                    other @ (Job::Plan { .. } | Job::Run { .. } | Job::UnmountPlace { .. }) => {
                         if let Some(done) = perform_ops(other, &cfg) {
                             finish(done, &state, &events, &senders);
                         }
@@ -727,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn senders_dispatch_routes_plan_and_run_to_ops_and_everything_else_to_io() {
+    fn senders_dispatch_routes_operations_to_ops_and_everything_else_to_io() {
         let (senders, io_rx, ops_rx) = senders();
 
         senders.dispatch(Job::List("/a".into()));
@@ -753,6 +781,44 @@ mod tests {
             policy: ConflictPolicy::Ask,
             progress: Arc::new(Progress::new(0)),
         });
-        assert_eq!(ops_rx.try_iter().count(), 2);
+        senders.dispatch(Job::UnmountPlace {
+            path: "/media/usb".into(),
+            source: "/dev/sdb1".into(),
+        });
+        assert_eq!(ops_rx.try_iter().count(), 3);
+    }
+
+    #[test]
+    fn ops_worker_reports_a_stale_unmount_instead_of_forwarding_it_back_to_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let (io, _io_rx) = crossbeam_channel::unbounded();
+        let (ops, ops_rx) = crossbeam_channel::unbounded();
+        let senders = Senders {
+            io,
+            ops: ops.clone(),
+        };
+        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+        let events = EventSink::new(event_tx, Arc::new(std::sync::atomic::AtomicU64::new(0)));
+        let state = Arc::new(RwLock::new(State::new(
+            &FoldConfig::default(),
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            true,
+        )));
+        let thread = spawn_ops(
+            ops_rx,
+            events,
+            Arc::clone(&state),
+            FoldConfig::default(),
+            senders,
+        );
+        ops.send(Job::UnmountPlace {
+            path: dir.path().join("absent"),
+            source: "/dev/sdb1".into(),
+        })
+        .unwrap();
+        ops.send(Job::Shutdown).unwrap();
+        thread.join().unwrap();
+        assert!(state.read().unwrap().places.locations_error.is_some());
     }
 }

@@ -62,9 +62,17 @@ UI scroll keys are `(stack index, FrameId)` because frame IDs are local.
 Commander copy/move captures the opposite pane's path when enqueued.
 
 Places is a modal picker over worker-discovered mounted locations and
-`bookmarks.toml` beside configuration. All discovery and bookmark writes run
-on the IO worker; malformed bookmark files must never be overwritten.
-Mounting, ejecting, and direct network connections are outside this feature.
+`bookmarks.toml` beside configuration. Initial discovery, manual refresh and
+bookmark writes run on the IO worker; malformed bookmark files must never be
+overwritten. Local-device unmounting and its post-unmount scan run on the
+operations worker, which revalidates the device against the current mount table.
+Places and OPERATIONS show the in-flight unmount as transient activity, not an
+`Op` in the file queue; it must not be selectable or counted as a queued file op.
+The mount scan also gathers local-volume capacity and available space, plus
+Linux `lsblk` identification when available. Places draws cached facts only;
+never query a mounted filesystem or run `lsblk` on the UI thread.
+Mounting, physical ejecting, and direct network connections are outside this
+feature.
 Sessions remember view mode, Fold's directory, both Commander directories,
 and the active pane. A CLI directory overrides the active view's location.
 

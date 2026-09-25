@@ -21,11 +21,11 @@ expression: "render(&mut app, 100, 30)"
 ╚══════════════╚════════════ o overwrite · s skip · r rename new · esc leave queued ╝══════════════╝
 ╔═ PREVIEW — ◇ blob.bin ═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
-║                                                                                     File metadata║
-║Type: application/octet-stream                                                                    ║
-║Size: 256 B                                                                                       ║
-║Permissions: -rw-r--r--                                                                           ║
-║Modified: 2026-09-10T12:00:00Z                                                                    ║
+║                                                                                    File metadata ║
+║ Type: application/octet-stream                                                                   ║
+║ Size: 256 B                                                                                      ║
+║ Permissions: -rw-r--r--                                                                          ║
+║ Modified: 2026-09-10T12:00:00Z                                                                   ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                       run  clear ║

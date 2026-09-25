@@ -2,7 +2,7 @@
 source: src/ui/frames.rs
 expression: floor
 ---
-╔═ S T A R / F O L D — ›LEFT ╗╔═ RIGHT ════════ commander ═╗
+╔═ S T A R / F O L D › LEFT ═╗╔═ RIGHT ════════ commander ═╗
 ║     Bookmark  places  view ║║     Bookmark  places  view ║
 ║─ ~/pictures ───────────────║║─ ~ ────────────────────────║
 ║    ▧ harbour.png           ║║    ▸ empty/                ║
@@ -16,7 +16,7 @@ expression: floor
 ╚════════════════════════════╝╚════════════════════════════╝
 ╔═ PREVIEW — ▧ harbour.png ════════════════════════════════╗
 ║                                                    close ║
-║                                        png · 64 × 48 · 1x║
+║                                       png · 64 × 48 · 1x ║
 ╚══════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════╗
 ║                                               run  clear ║

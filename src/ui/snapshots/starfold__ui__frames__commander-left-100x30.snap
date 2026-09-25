@@ -2,7 +2,7 @@
 source: src/ui/frames.rs
 expression: left
 ---
-╔═ S T A R / F O L D — ›LEFT ════════ commander ═╗╔═ RIGHT ════════════════════════════ commander ═╗
+╔═ S T A R / F O L D — › LEFT ═══════ commander ═╗╔═ RIGHT ════════════════════════════ commander ═╗
 ║   hidden  sort  filter  Bookmark  places  view ║║   hidden  sort  filter  Bookmark  places  view ║
 ║─ ~/pictures ───────────────────────────────────║║─ ~ ────────────────────────────────────────────║
 ║    ▧ harbour.png                          482 B║║    ▸ empty/                                   -║
@@ -25,7 +25,7 @@ expression: left
 ║                                           ▀▀▀▀▀▀▀▀▀▀▀                                            ║
 ║                                           ▀▀▀▀▀▀▀▀▀▀▀                                            ║
 ║                                           ▀▀▀▀▀▀▀▀▀▀▀                                            ║
-║                                                                                png · 64 × 48 · 1x║
+║                                                                               png · 64 × 48 · 1x ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                       run  clear ║

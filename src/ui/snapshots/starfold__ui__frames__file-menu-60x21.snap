@@ -16,7 +16,7 @@ expression: "render(&mut app, w, h)"
 ╚═╚════════════════════════╝═══════════════════════════════╝
 ╔═ PREVIEW — ◇ blob.bin ═══════════════════════════════════╗
 ║                                                    close ║
-║Type: application/octet-stream                            █
+║ Type: application/octet-stream                           █
 ╚══════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════╗
 ║                                               run  clear ║

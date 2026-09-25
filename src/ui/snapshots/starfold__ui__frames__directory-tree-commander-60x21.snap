@@ -2,7 +2,7 @@
 source: src/ui/frames.rs
 expression: "render(&mut app, 60, 21)"
 ---
-╔═ S T A R / F O L D — ›LEFT ╗╔═ RIGHT ════════ commander ═╗
+╔═ S T A R / F O L D › LEFT ═╗╔═ RIGHT ════════ commander ═╗
 ║     Bookmark  places  view ║║     Bookmark  places  view ║
 ║─ ~ ────────────────────────║║─ ~ ────────────────────────║
 ║    ▸ empty/                ║║    ▸ empty/                ║
@@ -16,7 +16,7 @@ expression: "render(&mut app, 60, 21)"
 ╚════════════════════════════╝╚════════════════════════════╝
 ╔═ PREVIEW — ▸ projects ═══════════════════════════════════╗
 ║                                                    close ║
-║└── ▸ starwire/                                           █
+║ └── ▸ starwire/                                          █
 ╚══════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════╗
 ║                                               run  clear ║

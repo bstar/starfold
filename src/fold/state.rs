@@ -282,6 +282,23 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
                 events: vec![Event::Places],
             }
         }
+        Command::UnmountPlace { path, source } => {
+            if state.places.loading
+                || !state.places.locations.iter().any(|location| {
+                    location.path == path && location.unmount_source.as_ref() == Some(&source)
+                })
+            {
+                return Effects::default();
+            }
+            state.places.loading = true;
+            state.places.unmounting = Some(path.clone());
+            state.places.locations_error = None;
+            state.places.sync_error();
+            Effects {
+                jobs: vec![Job::UnmountPlace { path, source }],
+                events: vec![Event::Places],
+            }
+        }
         Command::SaveBookmark { name, path } => cmd_save_bookmark(state, name, path),
         Command::RenameBookmark { path, name } => cmd_rename_bookmark(state, path, name),
         Command::RemoveBookmark(path) => cmd_remove_bookmark(state, path),
@@ -572,6 +589,34 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
                 events,
             }
         }
+        Done::PlaceUnmounted { path, result } => {
+            state.places.loading = false;
+            state.places.unmounting = None;
+            match result {
+                Ok(locations) => {
+                    state.places.locations = locations;
+                    state.places.locations_error = None;
+                    state.places.sync_error();
+                    let jobs = leave_unmounted_place(state, &path);
+                    Effects {
+                        jobs,
+                        events: vec![
+                            Event::Places,
+                            Event::Stack,
+                            Event::Note(Note::info(format!("Unmounted {}", path.display()))),
+                        ],
+                    }
+                }
+                Err(error) => {
+                    state.places.locations_error = Some(error.clone());
+                    state.places.sync_error();
+                    Effects {
+                        jobs: vec![],
+                        events: vec![Event::Places, Event::Note(Note::error("places", error))],
+                    }
+                }
+            }
+        }
         Done::BookmarksSaved { revision, result } => {
             if revision != state.places.revision {
                 return Effects::default();
@@ -853,6 +898,64 @@ fn all_frame_dirs(state: &State) -> BTreeSet<PathBuf> {
 fn evict_unreferenced_listings(state: &mut State) {
     let referenced = all_frame_dirs(state);
     state.listings.retain(|dir, _| referenced.contains(dir));
+}
+
+/// Once a volume is gone, no pane may keep drawing its cached directory or
+/// return to it through an old Fold crumb. Move affected panes to the mount's
+/// parent and list any destination that is not already cached.
+fn leave_unmounted_place(state: &mut State, mount: &Path) -> Vec<Job> {
+    let parent = mount.parent().unwrap_or(Path::new("/")).to_path_buf();
+    let mut destinations = BTreeSet::new();
+    for tab in &mut state.tabs.tabs {
+        for stack in &mut tab.stacks {
+            if stack
+                .frames()
+                .iter()
+                .any(|frame| frame.dir.starts_with(mount))
+            {
+                let active = &stack.active().dir;
+                let destination = if active.starts_with(mount) {
+                    parent.clone()
+                } else {
+                    active.clone()
+                };
+                *stack = Stack::new(destination.clone());
+                destinations.insert(destination);
+            }
+        }
+    }
+    state.listings.retain(|dir, _| !dir.starts_with(mount));
+    state.selection.forget_under(mount);
+    for selection in &mut state.parked_selections {
+        selection.forget_under(mount);
+    }
+    if state
+        .preview
+        .as_ref()
+        .is_some_and(|(path, _)| path.starts_with(mount))
+    {
+        state.preview_generation += 1;
+        state.preview = None;
+    }
+    let sort = state.sort;
+    let hidden = state.show_hidden;
+    let mut jobs = Vec::new();
+    for destination in destinations {
+        if let Some(listing) = state.listings.get(&destination).cloned() {
+            for tab in &mut state.tabs.tabs {
+                for stack in &mut tab.stacks {
+                    if stack.active().dir == destination {
+                        let frame = stack.active_mut();
+                        frame.loading = false;
+                        rebuild_rows(frame, &listing, sort, hidden, Landing::Reset);
+                    }
+                }
+            }
+        } else {
+            jobs.push(Job::List(destination));
+        }
+    }
+    jobs
 }
 
 /// Move the active frame's cursor down one row, clamped to the last one --

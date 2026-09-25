@@ -22,6 +22,9 @@ pub mod places;
 pub mod status;
 pub mod theme;
 
+/// A compact terminal-safe spinner shared by Places and the activity row.
+pub(crate) const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 /// One key per scrollbar the column can draw, shared with STAR/KIT's
 /// `chrome::scrollbar::Scrollbars` so [`app::App`] can keep a single
 /// instance that presses, drags and releases whichever bar the mouse is

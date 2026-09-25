@@ -2,7 +2,7 @@
 source: src/ui/frames.rs
 expression: "render(&mut app, 100, 30)"
 ---
-╔═ S T A R / F O L D — ›LEFT ════════ commander ═╗╔═ RIGHT ════════════════════════════ commander ═╗
+╔═ S T A R / F O L D — › LEFT ═══════ commander ═╗╔═ RIGHT ════════════════════════════ commander ═╗
 ║   hidden  sort  filter  Bookmark  places  view ║║   hidden  sort  filter  Bookmark  places  view ║
 ║─ ~ ────────────────────────────────────────────║║─ ~ ────────────────────────────────────────────║
 ║    ▸ empty/                                   -║║    ▸ empty/                                   -║
@@ -16,14 +16,14 @@ expression: "render(&mut app, 100, 30)"
 ╚════════════════════════════════════════════════╝╚════════════════════════════════════════════════╝
 ╔═ PREVIEW — ▸ projects ═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
-║                                                                     Tree · 4 files · 3 dirs shown║
-║└── ▸ starwire/                                                                                   ║
-║    ├── ▸ src/                                                                                    ║
-║    │   └── λ main.rs                                                                             ║
-║    ├── ▸ target/                                                                                 ║
-║    ├── ◇ .gitignore                                                                              ║
-║    ├── λ Cargo.toml                                                                              ║
-║    └── ≡ README.md                                                                               ║
+║                                                                    Tree · 4 files · 3 dirs shown ║
+║ └── ▸ starwire/                                                                                  ║
+║     ├── ▸ src/                                                                                   ║
+║     │   └── λ main.rs                                                                            ║
+║     ├── ▸ target/                                                                                ║
+║     ├── ◇ .gitignore                                                                             ║
+║     ├── λ Cargo.toml                                                                             ║
+║     └── ≡ README.md                                                                              ║
 ║                                                                                                  ║
 ║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝

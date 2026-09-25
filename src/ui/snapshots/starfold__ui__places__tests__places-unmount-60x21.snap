@@ -4,10 +4,9 @@ expression: "drawn(&mut places, 60, 21)"
 ---
 
   ╔═ PLACES ═════════════════════════════════════════════╗
-  ║Search: office                                        ║
-  ║Type to search names and paths                        ║
-  ║NETWORK                                               ║
-  ║> Office           /mnt/office                        ║
+  ║UNMOUNT VOLUME?                                       ║
+  ║Camera  /run/media/user/CAMERA                        ║
+  ║y unmount   n keep                                    ║
   ║                                                      ║
   ║                                                      ║
   ║                                                      ║
@@ -20,5 +19,6 @@ expression: "drawn(&mut places, 60, 21)"
   ║                                                      ║
   ║                                                      ║
   ║                                                      ║
-  ║F2 edit  del remove  F5 scan  F6 unmount  F3 info     ║
-  ╚═══════ enter open · F3 info · F6 unmount · esc close ╝
+  ║                                                      ║
+  ║                                                      ║
+  ╚══════════════════════════════════ y unmount · n keep ╝

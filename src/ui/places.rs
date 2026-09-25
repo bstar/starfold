@@ -13,6 +13,7 @@ use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::Style;
 
+use crate::fold::places::LocationInfo;
 use crate::ui::panels::{elide_middle, fit, rgb, width_of};
 use crate::ui::theme::Theme;
 
@@ -50,6 +51,8 @@ pub struct PlaceItem {
     pub group: PlaceGroup,
     pub name: String,
     pub path: PathBuf,
+    pub unmount_source: Option<PathBuf>,
+    pub info: Option<LocationInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,12 +64,14 @@ pub enum PlaceAction {
     SaveBookmark { path: PathBuf, name: String },
     RenameBookmark { path: PathBuf, name: String },
     RemoveBookmark(PathBuf),
+    Unmount { path: PathBuf, source: PathBuf },
     Refresh,
 }
 
 #[derive(Debug)]
 enum Mode {
     Browse,
+    Details,
     Edit {
         path: PathBuf,
         input: TextInput,
@@ -75,6 +80,11 @@ enum Mode {
     },
     ConfirmRemove {
         path: PathBuf,
+        name: String,
+    },
+    ConfirmUnmount {
+        path: PathBuf,
+        source: PathBuf,
         name: String,
     },
 }
@@ -87,6 +97,8 @@ pub struct Places {
     scroll: usize,
     mode: Mode,
     loading: bool,
+    unmounting: Option<PathBuf>,
+    spinner: &'static str,
     error: Option<String>,
 }
 
@@ -98,6 +110,7 @@ enum Row {
 
 const REMOVE_YES: &str = "y remove";
 const REMOVE_NO: &str = "n keep";
+const UNMOUNT_YES: &str = "y unmount";
 const REMOVE_GAP: u16 = 3;
 
 impl Places {
@@ -109,7 +122,29 @@ impl Places {
             scroll: 0,
             mode: Mode::Browse,
             loading: false,
+            unmounting: None,
+            spinner: crate::ui::SPINNER[0],
             error: None,
+        }
+    }
+
+    /// Reopening Places while browsing inside a mounted volume should show
+    /// that volume's identity immediately, even several directories down.
+    pub fn select_containing_mount(&mut self, path: &std::path::Path) {
+        let mount = self
+            .items
+            .iter()
+            .filter(|item| item.info.is_some() && path.starts_with(&item.path))
+            .max_by_key(|item| item.path.components().count())
+            .map(|item| item.path.clone());
+        if let Some(mount) = mount {
+            if let Some(index) = self
+                .filtered_items()
+                .iter()
+                .position(|&index| self.items[index].path == mount)
+            {
+                self.selected = index;
+            }
         }
     }
 
@@ -130,9 +165,19 @@ impl Places {
             .unwrap_or(0);
     }
 
-    pub fn set_status(&mut self, loading: bool, error: Option<String>) {
+    pub fn set_status(
+        &mut self,
+        loading: bool,
+        error: Option<String>,
+        unmounting: Option<PathBuf>,
+    ) {
         self.loading = loading;
         self.error = error;
+        self.unmounting = unmounting;
+    }
+
+    pub fn set_spinner(&mut self, spinner: &'static str) {
+        self.spinner = spinner;
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<(u16, u16)> {
@@ -154,6 +199,17 @@ impl Places {
             return PlaceAction::Quit;
         }
         match &mut self.mode {
+            Mode::Details => match key.code {
+                KeyCode::Esc | KeyCode::F(3) => {
+                    self.mode = Mode::Browse;
+                    PlaceAction::Consumed
+                }
+                KeyCode::Enter => self
+                    .selected_item()
+                    .map(|item| PlaceAction::Open(item.path.clone()))
+                    .unwrap_or(PlaceAction::Consumed),
+                _ => PlaceAction::Consumed,
+            },
             Mode::Edit {
                 path,
                 input,
@@ -202,6 +258,21 @@ impl Places {
                 }
                 _ => PlaceAction::Consumed,
             },
+            Mode::ConfirmUnmount { path, source, .. } => match key.code {
+                KeyCode::Char('y') if key.modifiers.is_empty() => {
+                    let action = PlaceAction::Unmount {
+                        path: path.clone(),
+                        source: source.clone(),
+                    };
+                    self.mode = Mode::Browse;
+                    action
+                }
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.mode = Mode::Browse;
+                    PlaceAction::Consumed
+                }
+                _ => PlaceAction::Consumed,
+            },
             Mode::Browse => self.handle_browse(key),
         }
     }
@@ -222,7 +293,12 @@ impl Places {
                     .unwrap_or(PlaceAction::Consumed);
             }
             KeyCode::F(2) => return self.start_rename(),
+            KeyCode::F(3) => {
+                self.mode = Mode::Details;
+                return PlaceAction::Consumed;
+            }
             KeyCode::Delete => return self.start_remove(),
+            KeyCode::F(6) => return self.start_unmount(),
             KeyCode::F(5) => return PlaceAction::Refresh,
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.search.clear();
@@ -281,6 +357,24 @@ impl Places {
         PlaceAction::Consumed
     }
 
+    fn start_unmount(&mut self) -> PlaceAction {
+        if self.loading {
+            return PlaceAction::Consumed;
+        }
+        let Some(item) = self
+            .selected_item()
+            .filter(|item| item.unmount_source.is_some())
+        else {
+            return PlaceAction::Consumed;
+        };
+        self.mode = Mode::ConfirmUnmount {
+            path: item.path.clone(),
+            source: item.unmount_source.clone().expect("checked above"),
+            name: item.name.clone(),
+        };
+        PlaceAction::Consumed
+    }
+
     fn filtered_items(&self) -> Vec<usize> {
         let query = self.search.text().to_lowercase();
         PlaceGroup::ORDER
@@ -320,7 +414,11 @@ impl Places {
         Rect {
             x: inner.x,
             y: inner.y.saturating_add(2),
-            width: inner.width,
+            width: if inner.width >= 82 {
+                inner.width.saturating_sub(43).max(52)
+            } else {
+                inner.width
+            },
             height: inner.height.saturating_sub(4),
         }
     }
@@ -359,6 +457,10 @@ impl Places {
         }
         let inner = overlay::inner(rr);
         match &mut self.mode {
+            Mode::Details => {
+                self.mode = Mode::Browse;
+                return PlaceAction::Consumed;
+            }
             Mode::Edit { .. } => return PlaceAction::Consumed,
             Mode::ConfirmRemove { path, .. } => {
                 if y == inner.y.saturating_add(2) {
@@ -379,6 +481,28 @@ impl Places {
                 }
                 return PlaceAction::Consumed;
             }
+            Mode::ConfirmUnmount { path, source, .. } => {
+                if y == inner.y.saturating_add(2) {
+                    let yes_width = width_of(UNMOUNT_YES).min(inner.width);
+                    let no_start = width_of(UNMOUNT_YES).saturating_add(REMOVE_GAP);
+                    let no_end = no_start
+                        .saturating_add(width_of(REMOVE_NO))
+                        .min(inner.width);
+                    let left = x.saturating_sub(inner.x);
+                    if x >= inner.x && left < yes_width {
+                        let action = PlaceAction::Unmount {
+                            path: path.clone(),
+                            source: source.clone(),
+                        };
+                        self.mode = Mode::Browse;
+                        return action;
+                    }
+                    if left >= no_start && left < no_end {
+                        self.mode = Mode::Browse;
+                    }
+                }
+                return PlaceAction::Consumed;
+            }
             Mode::Browse => {}
         }
         let actions_y = inner.y + inner.height.saturating_sub(1);
@@ -388,6 +512,11 @@ impl Places {
                 0..=6 => self.start_rename(),
                 9..=18 => self.start_remove(),
                 21..=27 => PlaceAction::Refresh,
+                30..=39 => self.start_unmount(),
+                42..=48 => {
+                    self.mode = Mode::Details;
+                    PlaceAction::Consumed
+                }
                 _ => PlaceAction::Consumed,
             };
         }
@@ -405,6 +534,12 @@ impl Places {
             .iter()
             .position(|&i| i == *index)
             .unwrap_or(self.selected);
+        if self.items[*index].unmount_source.is_some()
+            && list.width >= 20
+            && x >= list.x + list.width - width_of("[unmount]")
+        {
+            return self.start_unmount();
+        }
         PlaceAction::Open(path)
     }
 }
@@ -414,7 +549,81 @@ fn contains(r: Rect, x: u16, y: u16) -> bool {
 }
 
 pub fn rect(area: Rect) -> Rect {
-    overlay::rect(area, (38, 78), 24, 9, Anchor::Centre)
+    overlay::rect(area, (38, 108), 24, 9, Anchor::Centre)
+}
+
+fn render_details(area: Rect, buf: &mut Buffer, theme: &Theme, item: Option<&PlaceItem>) {
+    if area.width < 20 || area.height == 0 {
+        return;
+    }
+    let heading = Style::default().fg(rgb(theme.accent));
+    let body = Style::default().fg(rgb(theme.fg));
+    let dim = Style::default().fg(rgb(theme.dim));
+    let mut lines: Vec<(&str, String)> = Vec::new();
+    match item {
+        Some(item) => {
+            lines.push(("SELECTED PLACE", item.name.clone()));
+            if let Some(info) = &item.info {
+                if let Some(label) = &info.label {
+                    lines.push(("Label", label.clone()));
+                }
+                if let Some(model) = &info.model {
+                    lines.push(("Model", model.clone()));
+                }
+                if let Some(serial) = &info.serial {
+                    lines.push(("Serial", serial.clone()));
+                }
+                if let Some(uuid) = &info.uuid {
+                    lines.push(("UUID", uuid.clone()));
+                }
+                if let Some(transport) = &info.transport {
+                    lines.push(("Connection", transport.to_uppercase()));
+                }
+                lines.push(("Device", info.source.clone()));
+                lines.push(("Filesystem", info.fs_type.clone()));
+                if let Some(capacity) = info.capacity {
+                    lines.push(("Capacity", crate::fold::format::size(capacity)));
+                }
+                if let Some(available) = info.available {
+                    lines.push(("Available", crate::fold::format::size(available)));
+                }
+            }
+            lines.push(("Mounted at", item.path.to_string_lossy().into_owned()));
+        }
+        None => lines.push(("SELECTED PLACE", "Choose a drive to inspect".into())),
+    }
+    let mut y = area.y;
+    for (line, (label, value)) in lines.into_iter().enumerate() {
+        if y >= area.bottom() {
+            break;
+        }
+        if line == 0 {
+            buf.set_string(area.x, y, fit(label, area.width), heading);
+            y += 1;
+            if y < area.bottom() {
+                buf.set_string(area.x, y, elide_middle(&value, area.width), body);
+                y += 1;
+            }
+            continue;
+        }
+        let label_width = 11.min(area.width / 3);
+        buf.set_string(area.x, y, fit(label, label_width), dim);
+        let remaining = area.width.saturating_sub(label_width + 1);
+        if width_of(&value) <= remaining {
+            buf.set_string(area.x + label_width + 1, y, &value, body);
+        } else if y + 1 < area.bottom() {
+            y += 1;
+            buf.set_string(area.x, y, elide_middle(&value, area.width), body);
+        } else {
+            buf.set_string(
+                area.x + label_width + 1,
+                y,
+                elide_middle(&value, remaining),
+                body,
+            );
+        }
+        y += 1;
+    }
 }
 
 /// Render the picker and return the terminal cursor for its active text field.
@@ -429,10 +638,14 @@ pub fn render(
         return None;
     }
     let footer = match places.mode {
-        Mode::Browse if rr.width < 70 => "enter open · F2 edit · del remove · esc close",
-        Mode::Browse => "enter open · F2 rename · del remove · F5 refresh · esc close",
+        Mode::Browse if rr.width < 70 => "enter open · F3 info · F6 unmount · esc close",
+        Mode::Browse => {
+            "enter open · F2 rename · F3 info · del remove · F5 refresh · F6 unmount · esc close"
+        }
+        Mode::Details => "enter open · esc back",
         Mode::Edit { .. } => "enter save · esc back",
         Mode::ConfirmRemove { .. } => "y remove · n keep",
+        Mode::ConfirmUnmount { .. } => "y unmount · n keep",
     };
     let inner = overlay::render(
         rr,
@@ -448,6 +661,10 @@ pub fn render(
         return None;
     }
     match &mut places.mode {
+        Mode::Details => {
+            render_details(inner, buf, theme, places.selected_item());
+            None
+        }
         Mode::Edit {
             path,
             input,
@@ -525,6 +742,37 @@ pub fn render(
             }
             None
         }
+        Mode::ConfirmUnmount { name, path, .. } => {
+            buf.set_string(
+                inner.x,
+                inner.y,
+                fit("UNMOUNT VOLUME?", inner.width),
+                Style::default().fg(rgb(theme.fold.error_fg)),
+            );
+            if inner.height > 1 {
+                buf.set_string(
+                    inner.x,
+                    inner.y + 1,
+                    fit(&format!("{name}  {}", path.display()), inner.width),
+                    Style::default().fg(rgb(theme.fg)),
+                );
+            }
+            if inner.height > 2 {
+                buf.set_string(
+                    inner.x,
+                    inner.y + 2,
+                    fit(
+                        &format!(
+                            "{UNMOUNT_YES}{}{REMOVE_NO}",
+                            " ".repeat(usize::from(REMOVE_GAP))
+                        ),
+                        inner.width,
+                    ),
+                    Style::default().fg(rgb(theme.accent)),
+                );
+            }
+            None
+        }
         Mode::Browse => {
             let style = Style::default().fg(rgb(theme.fg));
             buf.set_string(
@@ -543,14 +791,27 @@ pub fn render(
                 None
             };
             if inner.height > 1 {
-                let status = if let Some(error) = &places.error {
+                let activity = places.unmounting.as_ref().map(|path| {
+                    let name = places
+                        .items
+                        .iter()
+                        .find(|item| &item.path == path)
+                        .map(|item| item.name.as_str())
+                        .unwrap_or("volume");
+                    format!("{} Unmounting {name}…", places.spinner)
+                });
+                let status = if let Some(activity) = activity.as_deref() {
+                    activity
+                } else if let Some(error) = &places.error {
                     error.as_str()
                 } else if places.loading {
-                    "Finding mounted locations…"
+                    "Working with mounted locations…"
                 } else {
                     "Type to search names and paths"
                 };
-                let color = if places.error.is_some() {
+                let color = if activity.is_some() {
+                    theme.fold.progress_fg
+                } else if places.error.is_some() {
                     theme.fold.error_fg
                 } else {
                     theme.dim
@@ -564,6 +825,19 @@ pub fn render(
             }
             let rows = places.rows();
             let list = Places::list_rect(inner);
+            if list.width < inner.width {
+                let divider_x = list.x + list.width;
+                for y in inner.y.saturating_add(2)..inner.y + inner.height.saturating_sub(1) {
+                    buf.set_string(divider_x, y, "│", Style::default().fg(rgb(theme.dim)));
+                }
+                let detail = Rect::new(
+                    divider_x + 2,
+                    inner.y + 2,
+                    inner.width.saturating_sub(list.width + 2),
+                    inner.height.saturating_sub(3),
+                );
+                render_details(detail, buf, theme, places.selected_item());
+            }
             places.keep_selected_visible(&rows, usize::from(list.height));
             let selected_index = places.selected_item().and_then(|item| {
                 rows.iter().position(|row| match row {
@@ -596,6 +870,18 @@ pub fn render(
                             fit(group.title(), list.width),
                             Style::default().fg(rgb(theme.accent)),
                         );
+                        if matches!(group, PlaceGroup::Devices | PlaceGroup::Volumes)
+                            && list.width >= 44
+                        {
+                            let heading = Style::default().fg(rgb(theme.dim));
+                            let offset = if *group == PlaceGroup::Devices {
+                                32
+                            } else {
+                                22
+                            };
+                            buf.set_string(list.right() - offset, y, "CAPACITY", heading);
+                            buf.set_string(list.right() - offset + 10, y, "DEVICE", heading);
+                        }
                     }
                     Row::Item(i) => {
                         let item = &places.items[*i];
@@ -614,17 +900,55 @@ pub fn render(
                         buf.set_string(list.x, y, " ".repeat(usize::from(list.width)), row_style);
                         let marker = if selected { "> " } else { "  " };
                         buf.set_string(list.x, y, marker, row_style);
-                        let available = list.width.saturating_sub(2);
-                        let name_width = available.min((available / 3).max(14));
-                        buf.set_string(list.x + 2, y, fit(&item.name, name_width), row_style);
-                        let path_x = list.x + 2 + name_width;
-                        let path_width = list.width.saturating_sub(2 + name_width);
-                        if path_width > 0 {
+                        let has_unmount = item.unmount_source.is_some() && list.width >= 20;
+                        let content_width = list.width - if has_unmount { 10 } else { 0 };
+                        if let Some(info) = &item.info {
+                            let capacity_width = 10;
+                            let source_width = 12;
+                            let name_width =
+                                content_width.saturating_sub(2 + capacity_width + source_width);
+                            buf.set_string(list.x + 2, y, fit(&item.name, name_width), row_style);
+                            let capacity = info
+                                .capacity
+                                .map(crate::fold::format::size)
+                                .unwrap_or_else(|| "—".into());
                             buf.set_string(
-                                path_x,
+                                list.x + 2 + name_width,
                                 y,
-                                elide_middle(&item.path.to_string_lossy(), path_width),
+                                fit(&capacity, capacity_width),
                                 row_style,
+                            );
+                            buf.set_string(
+                                list.x + 2 + name_width + capacity_width,
+                                y,
+                                elide_middle(&info.source, source_width),
+                                row_style,
+                            );
+                        } else {
+                            let available = content_width.saturating_sub(2);
+                            let name_width = available.min((available / 3).max(14));
+                            buf.set_string(list.x + 2, y, fit(&item.name, name_width), row_style);
+                            let path_x = list.x + 2 + name_width;
+                            let path_width = content_width.saturating_sub(2 + name_width);
+                            if path_width > 0 {
+                                buf.set_string(
+                                    path_x,
+                                    y,
+                                    elide_middle(&item.path.to_string_lossy(), path_width),
+                                    row_style,
+                                );
+                            }
+                        }
+                        if has_unmount {
+                            buf.set_string(
+                                list.x + list.width - width_of("[unmount]"),
+                                y,
+                                if places.unmounting.as_ref() == Some(&item.path) {
+                                    "[ busy ]"
+                                } else {
+                                    "[unmount]"
+                                },
+                                Style::default().fg(rgb(theme.accent)).bg(rgb(bg)),
                             );
                         }
                     }
@@ -635,7 +959,10 @@ pub fn render(
                 buf.set_string(
                     inner.x,
                     action_y,
-                    fit("F2 edit  del remove  F5 scan", inner.width),
+                    fit(
+                        "F2 edit  del remove  F5 scan  F6 unmount  F3 info",
+                        inner.width,
+                    ),
                     Style::default().fg(rgb(theme.dim)),
                 );
             }
@@ -660,6 +987,26 @@ mod tests {
             group,
             name: name.into(),
             path: path.into(),
+            unmount_source: None,
+            info: None,
+        }
+    }
+
+    fn device(name: &str, path: &str, source: &str) -> PlaceItem {
+        PlaceItem {
+            unmount_source: Some(source.into()),
+            info: Some(LocationInfo {
+                source: source.into(),
+                fs_type: "exfat".into(),
+                label: Some(name.into()),
+                uuid: Some("A1B2-C3D4".into()),
+                model: Some("Portable SSD".into()),
+                serial: Some("XYZ123".into()),
+                transport: Some("usb".into()),
+                capacity: Some(1_000_000_000_000),
+                available: Some(600_000_000_000),
+            }),
+            ..item(PlaceGroup::Devices, name, path)
         }
     }
 
@@ -667,7 +1014,7 @@ mod tests {
         Places::new(vec![
             item(PlaceGroup::Bookmarks, "Projects", "/home/user/projects"),
             item(PlaceGroup::Bookmarks, "Writing", "/home/user/documents"),
-            item(PlaceGroup::Devices, "Camera", "/run/media/user/CAMERA"),
+            device("Camera", "/run/media/user/CAMERA", "/dev/sdb1"),
             item(PlaceGroup::Volumes, "Scratch", "/mnt/scratch"),
             item(PlaceGroup::Network, "Office", "/mnt/office"),
             item(PlaceGroup::Standard, "Home", "/home/user"),
@@ -790,7 +1137,7 @@ mod tests {
 
     #[test]
     fn mount_entries_cannot_be_renamed_or_removed() {
-        let mut places = Places::new(vec![item(PlaceGroup::Devices, "USB", "/media/usb")]);
+        let mut places = Places::new(vec![device("USB", "/media/usb", "/dev/sdb1")]);
         assert_eq!(places.handle(key(KeyCode::F(2))), PlaceAction::Consumed);
         assert_eq!(places.handle(key(KeyCode::Delete)), PlaceAction::Consumed);
         assert_eq!(
@@ -800,9 +1147,72 @@ mod tests {
     }
 
     #[test]
+    fn unmount_requires_a_local_device_and_confirmation() {
+        let mut network = Places::new(vec![item(PlaceGroup::Network, "Share", "/mnt/share")]);
+        assert_eq!(network.handle(key(KeyCode::F(6))), PlaceAction::Consumed);
+        let mut places = Places::new(vec![device("USB", "/media/usb", "/dev/sdb1")]);
+        places.handle(key(KeyCode::F(6)));
+        assert_eq!(
+            places.handle(key(KeyCode::Char('n'))),
+            PlaceAction::Consumed
+        );
+        assert_eq!(places.handle(key(KeyCode::F(6))), PlaceAction::Consumed);
+        assert_eq!(
+            places.handle(key(KeyCode::Char('y'))),
+            PlaceAction::Unmount {
+                path: "/media/usb".into(),
+                source: "/dev/sdb1".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn unmount_footer_and_confirmation_clicks_match_the_labels() {
+        let mut places = Places::new(vec![device("USB", "/media/usb", "/dev/sdb1")]);
+        let area = Rect::new(0, 0, 60, 21);
+        let inner = overlay::inner(rect(area));
+        let list = Places::list_rect(inner);
+        assert_eq!(
+            places.click(list.x + list.width - 1, list.y + 1, area),
+            PlaceAction::Consumed
+        );
+        assert_eq!(
+            places.click(inner.x + 10, inner.y + 2, area),
+            PlaceAction::Consumed
+        );
+        assert_eq!(
+            places.click(inner.x + 15, inner.y + 2, area),
+            PlaceAction::Consumed
+        );
+        assert_eq!(
+            places.click(inner.x + 39, inner.y + inner.height - 1, area),
+            PlaceAction::Consumed
+        );
+        assert_eq!(
+            places.click(inner.x + 10, inner.y + 2, area),
+            PlaceAction::Consumed
+        );
+        assert_eq!(
+            places.click(inner.x + 8, inner.y + 2, area),
+            PlaceAction::Unmount {
+                path: "/media/usb".into(),
+                source: "/dev/sdb1".into(),
+            }
+        );
+    }
+
+    #[test]
     fn picker_snapshots() {
         let mut places = sample();
         insta::assert_snapshot!("places-100x30", drawn(&mut places, 100, 30));
+
+        let mut drive = sample();
+        drive.handle(key(KeyCode::Down));
+        drive.handle(key(KeyCode::Down));
+        insta::assert_snapshot!("places-drive-details-100x30", drawn(&mut drive, 100, 30));
+        drive.handle(key(KeyCode::F(3)));
+        insta::assert_snapshot!("places-drive-details-60x21", drawn(&mut drive, 60, 21));
+        assert_eq!(drive.handle(key(KeyCode::Esc)), PlaceAction::Consumed);
 
         for c in "office".chars() {
             places.handle(key(KeyCode::Char(c)));
@@ -817,8 +1227,28 @@ mod tests {
         insta::assert_snapshot!("places-remove-60x21", drawn(&mut places, 60, 21));
 
         let mut places = sample();
-        places.set_status(false, Some("Network mount list unavailable".into()));
+        places.handle(key(KeyCode::Down));
+        places.handle(key(KeyCode::Down));
+        places.handle(key(KeyCode::F(6)));
+        insta::assert_snapshot!("places-unmount-60x21", drawn(&mut places, 60, 21));
+
+        let mut places = sample();
+        places.set_status(false, Some("Network mount list unavailable".into()), None);
         insta::assert_snapshot!("places-error-60x21", drawn(&mut places, 60, 21));
+
+        let mut places = sample();
+        places.set_status(true, None, Some("/run/media/user/CAMERA".into()));
+        places.set_spinner(crate::ui::SPINNER[1]);
+        insta::assert_snapshot!("places-unmounting-60x21", drawn(&mut places, 60, 21));
+    }
+
+    #[test]
+    fn opening_from_a_directory_on_a_drive_selects_that_drive() {
+        let mut places = sample();
+        places.select_containing_mount(std::path::Path::new("/run/media/user/CAMERA/DCIM"));
+        assert_eq!(places.selected_item().unwrap().name, "Camera");
+        places.select_containing_mount(std::path::Path::new("/home/user/projects"));
+        assert_eq!(places.selected_item().unwrap().name, "Camera");
     }
 
     proptest! {
@@ -833,6 +1263,8 @@ mod tests {
                 group: PlaceGroup::Bookmarks,
                 name,
                 path: PathBuf::from(format!("/tmp/{path}")),
+                unmount_source: None,
+                info: None,
             }]);
             let area = Rect::new(0, 0, width, height);
             let mut buffer = Buffer::empty(area);

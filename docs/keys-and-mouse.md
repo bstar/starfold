@@ -26,7 +26,9 @@ the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
 current-directory marks or the highlighted file. `v` switches views, `b`
 opens Places, and `B` bookmarks the current directory. In Places, type to
 search, use arrows and `enter` to open a location, `F2` to rename a bookmark,
-`delete` to remove one after confirmation, and `F5` to rescan mounts.
+`F3` to inspect the selected place, `delete` to remove one after confirmation,
+`F5` to rescan mounts, and `F6` to unmount a selected local drive after
+confirmation.
 
 ## navigation
 

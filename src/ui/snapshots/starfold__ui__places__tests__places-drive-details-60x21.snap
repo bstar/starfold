@@ -1,0 +1,24 @@
+---
+source: src/ui/places.rs
+expression: "drawn(&mut drive, 60, 21)"
+---
+
+  ╔═ PLACES ═════════════════════════════════════════════╗
+  ║SELECTED PLACE                                        ║
+  ║Camera                                                ║
+  ║Label       Camera                                    ║
+  ║Model       Portable SSD                              ║
+  ║Serial      XYZ123                                    ║
+  ║UUID        A1B2-C3D4                                 ║
+  ║Connection  USB                                       ║
+  ║Device      /dev/sdb1                                 ║
+  ║Filesystem  exfat                                     ║
+  ║Capacity    1.0 TB                                    ║
+  ║Available   600.0 GB                                  ║
+  ║Mounted at  /run/media/user/CAMERA                    ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ║                                                      ║
+  ╚═══════════════════════════════ enter open · esc back ╝
