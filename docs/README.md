@@ -26,6 +26,8 @@ grouped by what you are trying to do.
 
 ## About the project
 
+- [File manager roadmap](file-manager-roadmap.md): staged feature work and
+  acceptance checks from the comparison with terminal and desktop managers.
 - [Status](status.md): what is done, what is in progress, and what is not
   started.
 - [Contributing](../CONTRIBUTING.md), [Security](../SECURITY.md),
