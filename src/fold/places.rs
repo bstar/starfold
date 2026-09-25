@@ -354,11 +354,16 @@ fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     }
     // SAFETY: statvfs returned success and initialized the whole record.
     let stat = unsafe { stat.assume_init() };
-    let block = stat.f_frsize as u64;
+    let block: u64 = stat.f_frsize;
     Some((
-        (stat.f_blocks as u64).saturating_mul(block),
-        (stat.f_bavail as u64).saturating_mul(block),
+        filesystem_bytes(stat.f_blocks, block),
+        filesystem_bytes(stat.f_bavail, block),
     ))
+}
+
+#[cfg(unix)]
+fn filesystem_bytes(blocks: impl Into<u64>, block_size: u64) -> u64 {
+    blocks.into().saturating_mul(block_size)
 }
 
 #[cfg(not(unix))]
@@ -516,6 +521,13 @@ mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
     use proptest::prelude::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_space_handles_32_bit_block_counts_and_overflow() {
+        assert_eq!(filesystem_bytes(3_u32, 4096), 12_288);
+        assert_eq!(filesystem_bytes(u64::MAX, 4096), u64::MAX);
+    }
 
     #[test]
     fn bookmarks_round_trip_and_bad_file_is_preserved() {

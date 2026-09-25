@@ -43,11 +43,11 @@ checklist. Incorporate findings before starting the next milestone.
 ### 0. Establish the baseline
 
 Record the behavior and test results for navigation, marks, queued operations,
-Commander, Places, and session restore. Bring [status.md](status.md) up to date;
-it currently describes some implemented work as future work. Prepare a small
-disposable fixture covering nested directories, hidden files, links, name
-collisions, and filenames with spaces. This gives later milestone reports a
-known starting point.
+Commander, Places, and session restore. Keep [status.md](status.md) up to date.
+Prepare a small disposable fixture covering nested directories, hidden files,
+links, name collisions, and filenames with spaces. This gives later milestone
+reports a known starting point. The fixture and manual steps live in
+[baseline validation](baseline-validation.md).
 
 **Pass:** Existing tests and release build pass; the fixture and baseline
 manual checklist are documented. No feature behavior changes.

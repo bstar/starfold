@@ -8,10 +8,6 @@ A terminal file manager in the STAR family. The directories you drill through
 stack up behind you, the files you mark stay marked wherever you go, and
 keyboard-queued operations wait until you run the queue.
 
-<!-- The screenshot goes here, as docs/screenshot.png, the way STAR/AMP's
-     README carries one. There is no picture yet: the window is still being
-     built, and one of a half-drawn window would be retaken every week. -->
-
 [Status](docs/status.md) says how much of that is built today, area by area.
 
 Unfold your filesystem.
@@ -82,10 +78,12 @@ rest of it.
 
 ## What it does not do yet
 
-Tabs, forked stacks, archives and an action palette are on the plan but not in
-this milestone. Commander uses two independent directory panes alongside the
-Fold stack; Places can unmount a selected local drive, while mounting, physical
-ejection and network login remain jobs for the operating system.
+Creating files or directories, recursive search, recovery from Trash, bulk
+rename, shell picker output, and durable tabs are on the
+[file manager roadmap](docs/file-manager-roadmap.md). Commander uses two
+independent directory panes alongside the Fold stack; Places can unmount a
+selected local drive, while mounting, physical ejection and network login
+remain jobs for the operating system.
 
 ## Read more
 

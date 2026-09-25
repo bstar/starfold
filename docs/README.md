@@ -5,8 +5,7 @@ grouped by what you are trying to do.
 
 ## Getting started
 
-- [Installing](installing.md): Nix, AppImage, `.deb`, tarball, Arch, macOS, and
-  from source.
+- [Installing](installing.md): Nix, AppImage, macOS, and from source.
 - [The stack](the-stack.md): Fold and Commander views, Places, marks and the
   operations queue.
 - [Keys and mouse](keys-and-mouse.md): every binding and gesture, per module.
@@ -28,6 +27,8 @@ grouped by what you are trying to do.
 
 - [File manager roadmap](file-manager-roadmap.md): staged feature work and
   acceptance checks from the comparison with terminal and desktop managers.
+- [Baseline validation](baseline-validation.md): a disposable fixture and
+  manual checks for the current application.
 - [Status](status.md): what is done, what is in progress, and what is not
   started.
 - [Contributing](../CONTRIBUTING.md), [Security](../SECURITY.md),
