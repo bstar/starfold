@@ -19,7 +19,8 @@ The header highlights each word's keyboard letter. `n` also toggles hidden
 files, `f` also opens the filter, and `e` also opens Places. The existing
 `.`, `/`, and `b` keys still work. Preview's `c` and Operations' `r`/`c` work only
 when that module has focus. The back arrow keeps its `h` navigation key.
-Click `actions` in the stack heading to open the modal file actions menu.
+Press `c` with the Stack focused, or click `actions` in its heading, to open
+the modal file actions menu.
 
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
 the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
@@ -67,6 +68,7 @@ _in the stack_
 | `gr`           | the root |
 | `o`            | open externally |
 | `r`            | rename |
+| `c`            | file actions menu |
 | `F5/ctrl+r`    | reload |
 
 ## selection

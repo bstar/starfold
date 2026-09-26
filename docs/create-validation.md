@@ -42,6 +42,7 @@ STARFOLD_DIR="$lab/state" starfold "$lab/files"
 8. By default a physical right-click should leave the file menu closed. In
    `"$lab/state/config.toml"`, set `right_click = true` under `[ui]`, restart
    STAR/FOLD with the same launch command, and confirm right-click opens it.
+   With the Stack focused, press `c` and check that it opens the same menu.
 9. Select `keep.txt`, open its file menu, and choose Edit. The editor should
    fill the Preview panel while the listing stays visible. Change the text,
    save and quit using the editor's own keys, then check the updated text in

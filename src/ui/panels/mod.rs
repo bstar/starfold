@@ -109,7 +109,8 @@ impl Word {
     /// `Back` stays an arrow: `h` remains the Stack navigation key.
     pub fn mnemonic(self) -> Option<(char, u16)> {
         match self {
-            Word::Back | Word::Actions => None,
+            Word::Back => None,
+            Word::Actions => Some(('c', 1)),
             Word::Hidden => Some(('n', 5)),
             Word::Sort => Some(('s', 0)),
             Word::Filter => Some(('f', 0)),

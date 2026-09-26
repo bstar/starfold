@@ -19,7 +19,7 @@ Run the queue with `X`. Marks in Fold keep their existing across-directory
 behavior; Commander marks belong to each pane and clear when that pane changes
 directory.
 
-Click `actions` in the stack heading to open the file actions menu. Choose
+Press `c` with the Stack focused or click `actions` in its heading to open the file actions menu. Choose
 New file or New directory, type one name, and press Enter. Creation runs immediately through the
 IO worker; it does not enter the operations queue. An existing file, directory,
 or symlink is never overwritten. A successful creation refreshes the listing

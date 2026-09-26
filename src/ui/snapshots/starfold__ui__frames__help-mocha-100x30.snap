@@ -29,6 +29,6 @@ expression: "render(&mut app, 100, 30)"
 ╚═════════║  gr            the root                                                      ║═════════╝
 ╔═ OPERATI║  o             open externally                                               ║═════════╗
 ║         ║  r             rename                                                        ║n  clear ║
-║         ║  F5/ctrl+r     reload                                                        ║         ║
+║         ║  c             file actions menu                                             ║         ║
 ╚═════════╚══════════════════════════════════════════════════════ more below · esc close ╝═════════╝
 ? help  / filter  space mark  enter open  y copy  m move  d delete                            ~  off

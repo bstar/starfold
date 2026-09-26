@@ -64,7 +64,7 @@ rest of it.
   Fold, Commander and previews; no special font is required.
   Open an audio track to play it here using a separately installed,
   embedding-compatible STAR/AMP; without it, the existing opener still works.
-- **File actions menu.** Click `actions` in the stack heading, Ctrl+click a
+- **File actions menu.** Press `c` with the Stack focused, click `actions` in its heading, Ctrl+click a
   file, or press Menu / Shift+F10 for creation, editing, compression, extraction
   and other file actions. Edit runs the terminal editor in Preview. Physical right-click is optional in configuration.
   Archive jobs appear in OPERATIONS.

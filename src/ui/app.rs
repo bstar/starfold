@@ -1403,6 +1403,7 @@ impl App {
 
             Action::Enter => self.activate_entry(),
             Action::Pop => self.core.send(Command::Back),
+            Action::FileActions => self.open_actions_modal(),
             Action::JumpUp => {
                 let target = self.view.crumbs.len().saturating_sub(1);
                 self.core.send(Command::JumpTo(target));
@@ -2738,7 +2739,7 @@ mod tests {
     }
 
     #[test]
-    fn heading_actions_open_a_centered_modal_without_a_new_shortcut() {
+    fn heading_actions_and_c_open_a_centered_modal() {
         let (mut app, fk, _dir) = app();
         fk.pump();
         app.tick();
@@ -2768,7 +2769,22 @@ mod tests {
             assert_eq!(menu.rect(overlay_area).x, overlay_area.x + (width - 26) / 2);
             app.key(code(KeyCode::Esc));
         }
-        assert_eq!(panels::Word::Actions.mnemonic(), None);
+        app.key(key('c'));
+        assert!(matches!(app.overlays.current(), Some(Overlay::Context(_))));
+        app.key(code(KeyCode::Esc));
+        assert_eq!(panels::Word::Actions.mnemonic(), Some(('c', 1)));
+        assert_eq!(
+            keymap::module(keymap::Module::Stack, key('c')),
+            Some(Action::FileActions)
+        );
+        assert_eq!(
+            keymap::module(keymap::Module::Preview, key('c')),
+            Some(Action::TogglePreview)
+        );
+        assert_eq!(
+            keymap::module(keymap::Module::Operations, key('c')),
+            Some(Action::ClearQueue)
+        );
         assert_eq!(keymap::module(keymap::Module::Stack, key('N')), None);
         assert_eq!(
             keymap::module(keymap::Module::Stack, code(KeyCode::F(7))),

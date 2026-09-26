@@ -115,6 +115,7 @@ pub enum Action {
     GoRoot,
     OpenExternal,
     Rename,
+    FileActions,
     Reload,
 
     // -- selection --
@@ -340,6 +341,12 @@ pub const BINDINGS: &[Binding] = &[
         action: Action::Rename,
         keys: "r",
         label: "rename",
+        group: "stack",
+    },
+    Binding {
+        action: Action::FileActions,
+        keys: "c",
+        label: "file actions menu",
         group: "stack",
     },
     Binding {
@@ -782,7 +789,8 @@ The header highlights each word's keyboard letter. `n` also toggles hidden
 files, `f` also opens the filter, and `e` also opens Places. The existing
 `.`, `/`, and `b` keys still work. Preview's `c` and Operations' `r`/`c` work only
 when that module has focus. The back arrow keeps its `h` navigation key.
-Click `actions` in the stack heading to open the modal file actions menu.
+Press `c` with the Stack focused, or click `actions` in its heading, to open
+the modal file actions menu.
 
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
 the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
@@ -1245,7 +1253,8 @@ mod tests {
             module(Module::Preview, plain('c')),
             Some(Action::TogglePreview)
         );
-        assert_eq!(module(Module::Stack, plain('c')), None);
+        assert_eq!(module(Module::Stack, plain('c')), Some(Action::FileActions));
+        assert!(filter_eats(plain('c')), "c must type into a filter");
         assert_eq!(resolve(plain('c')), None);
         assert_eq!(resolve(plain('r')), None);
     }

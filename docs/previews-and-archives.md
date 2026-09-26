@@ -39,7 +39,7 @@ The cache is memory-only and defaults to 32 MiB. See [configuration](configurati
 
 ## Right-click actions
 
-Click `actions` in the stack heading for a centered modal, Ctrl+click a listing
+Press `c` with the Stack focused or click `actions` in its heading for a centered modal. Ctrl+click a listing
 entry, or use Menu / Shift+F10. Physical right-click also opens the menu when
 `[ui] right_click = true`. Up/Down or j/k selects an
 action; Enter activates it. Escape and clicking outside dismiss the menu. Opening
