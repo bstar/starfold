@@ -95,6 +95,9 @@ pub enum Command {
     CursorBy(i32),
     SetFilter(String),
     ClearFilter,
+    StartSearch(String),
+    CancelSearch,
+    CloseSearch,
     SetSort(SortOrder),
     SetHidden(bool),
     /// Mark or unmark the entry under the cursor, and move down.

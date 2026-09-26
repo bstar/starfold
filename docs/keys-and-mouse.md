@@ -21,6 +21,10 @@ files, `f` also opens the filter, and `e` also opens Places. The existing
 when that module has focus. The back arrow keeps its `h` navigation key.
 Press `c` with the Stack focused, or click `actions` in its heading, to open
 the modal file actions menu.
+`F3` or `ctrl+f` searches filenames recursively below the active directory;
+`/` still filters only the current directory. In results, `esc` cancels an
+active scan and then closes results; `h` closes results immediately. The
+original directory and cursor return when results close.
 
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
 the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
@@ -69,6 +73,7 @@ _in the stack_
 | `o`            | open externally |
 | `r`            | rename |
 | `c`            | file actions menu |
+| `F3/ctrl+f`    | search filenames |
 | `F5/ctrl+r`    | reload |
 
 ## selection

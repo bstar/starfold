@@ -27,6 +27,15 @@ and selects the new item, so Enter can open a new directory at once. In
 Commander, creation belongs to the active pane, even if you switch panes while
 the worker runs. The menu offers both creation actions in an empty directory.
 
+F3 or Ctrl+F opens recursive filename search from the active directory. It
+does not follow directory symlinks and shows relative paths so duplicate names
+remain distinct. Search results support preview, marks and the same file
+actions as ordinary rows. Escape cancels a running scan; press it again to
+close the results, or press `h` to leave immediately. Closing restores the
+directory and cursor you had before searching. Hidden paths follow the
+`hidden` setting, which reruns an open search when changed. A capped scan is
+labelled as limited rather than complete.
+
 Press `b` for Places and search by name or path. It groups your bookmarks,
 mounted devices, mounted network locations, Home and Root. `B` saves the
 current directory as a bookmark with an editable name; bookmarks can be

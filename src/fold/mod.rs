@@ -35,6 +35,7 @@ pub mod open;
 pub mod ops;
 pub mod places;
 pub mod preview;
+pub mod search;
 pub mod selection;
 pub mod sort;
 pub mod stack;

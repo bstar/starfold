@@ -84,6 +84,9 @@ before an operation runs.
 predictably; cancel a large search; handle a symlink loop and an unreadable
 subtree without freezing the UI.
 
+Implementation and the [milestone 2a manual checklist](search-validation.md)
+are available for validation before starting milestone 2b.
+
 ### 2b. Content search
 
 Add a text-content mode to the same results view. Stream files with explicit

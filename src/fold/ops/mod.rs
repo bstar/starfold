@@ -174,6 +174,9 @@ pub struct Op {
     pub id: OpId,
     pub kind: OpKind,
     pub sources: Vec<PathBuf>,
+    /// Inode identities captured by a search result when this op was queued.
+    /// Checked immediately before planning and execution.
+    pub expected: Vec<(PathBuf, crate::fold::search::Identity)>,
     pub dest: Option<PathBuf>,
     pub status: OpStatus,
     pub policy: ConflictPolicy,
@@ -252,6 +255,7 @@ impl Queue {
             id,
             kind,
             sources,
+            expected: vec![],
             dest,
             status: OpStatus::Queued,
             policy,
@@ -373,6 +377,7 @@ mod tests {
             id: OpId(id),
             kind: OpKind::Copy,
             sources: vec!["/a".into()],
+            expected: vec![],
             dest: Some("/dest".into()),
             status,
             policy: ConflictPolicy::Ask,

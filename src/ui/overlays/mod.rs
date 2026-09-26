@@ -28,6 +28,7 @@ pub mod conflict;
 pub mod context;
 pub mod create;
 pub mod rename;
+pub mod search;
 
 use std::path::PathBuf;
 
@@ -64,6 +65,7 @@ pub enum Overlay {
     Confirm(confirm::Confirm),
     Create(create::Create),
     Rename(rename::Rename),
+    Search(search::Search),
     Conflict(conflict::Prompt),
 }
 
@@ -98,6 +100,7 @@ pub enum Answer {
         kind: CreateKind,
         name: String,
     },
+    Search(String),
     /// `o`/`s`/`r` on a [`conflict::Prompt`], applied to the whole op.
     Policy {
         op: OpId,
@@ -156,6 +159,19 @@ impl Overlays {
 
     pub fn open_create(&mut self, dir: PathBuf, kind: CreateKind) {
         self.current = Some(Overlay::Create(create::Create::new(dir, kind)));
+    }
+
+    pub fn open_search(&mut self, query: &str) {
+        self.current = Some(Overlay::Search(search::Search::new(query)));
+    }
+
+    pub fn paste(&mut self, text: &str) -> bool {
+        if let Some(Overlay::Search(form)) = self.current.as_mut() {
+            form.input.paste(text);
+            form.error = None;
+            return true;
+        }
+        false
     }
 
     pub fn open_conflict(&mut self, p: conflict::Prompt) {
@@ -253,6 +269,10 @@ impl Overlays {
                     (true, Answer::Created { dir, kind, name })
                 }
             },
+            Overlay::Search(form) => match form.handle(k) {
+                Some(query) => (true, Answer::Search(query)),
+                None => (false, Answer::Consumed),
+            },
             Overlay::Conflict(p) => match p.handle(k) {
                 conflict::Action::Taken => (false, Answer::Consumed),
                 conflict::Action::Close => (true, Answer::Closed),
@@ -338,6 +358,14 @@ impl Overlays {
             }
             Overlay::Create(_) => {
                 let r = create::rect(area);
+                if inside(r, x, y) {
+                    (false, Answer::Consumed)
+                } else {
+                    (true, Answer::Closed)
+                }
+            }
+            Overlay::Search(_) => {
+                let r = search::rect(area);
                 if inside(r, x, y) {
                     (false, Answer::Consumed)
                 } else {
@@ -431,6 +459,7 @@ impl Overlays {
             }
             Overlay::Rename(r) => rename::render(area, buf, theme, r),
             Overlay::Create(form) => create::render(area, buf, theme, form),
+            Overlay::Search(form) => search::render(area, buf, theme, form),
             Overlay::Conflict(p) => {
                 conflict::render(area, buf, theme, p, bars);
                 None

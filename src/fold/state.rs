@@ -28,6 +28,7 @@ use super::listing::Listing;
 use super::ops::{ConflictPolicy, DeleteHow, OpId, OpKind, OpStatus, Queue};
 use super::places::{self, Bookmark};
 use super::preview::Preview;
+use super::search::{self, Search, Status as SearchStatus};
 use super::selection::Selection;
 use super::sort::{self, SortOrder};
 use super::stack::{Frame, ParentMove, Stack};
@@ -49,6 +50,11 @@ pub struct State {
     /// read rather than paying for it twice.
     pub listings: HashMap<PathBuf, Arc<Listing>>,
     pub selection: Selection,
+    /// Search identities retained for marked results after the search view
+    /// closes, until those marks are removed or the operation finishes.
+    marked_search_identities: HashMap<PathBuf, search::Identity>,
+    pub search: Option<Search>,
+    search_generation: u64,
     pub queue: Queue,
     /// What the PREVIEW panel shows, and which path it was built for -- the
     /// panel's title says the name, and a preview that arrived for a file the
@@ -105,6 +111,9 @@ impl State {
             tabs: Tabs::single(Stack::new(start)),
             listings: HashMap::new(),
             selection: Selection::default(),
+            marked_search_identities: HashMap::new(),
+            search: None,
+            search_generation: 0,
             queue: Queue::new(),
             preview: None,
             sort: cfg.list.sort,
@@ -164,6 +173,9 @@ impl State {
     /// for an empty directory, a still-loading frame, or a query that
     /// matched nothing.
     pub fn cursor_entry(&self) -> Option<&Entry> {
+        if let Some(search) = &self.search {
+            return search.results.get(search.cursor);
+        }
         let frame = self.active_frame();
         let listing = self.listings.get(&frame.dir)?;
         let row = *frame.rows.get(frame.cursor)?;
@@ -234,6 +246,9 @@ pub fn apply(state: &mut State, change: Change) -> Effects {
         && old_stack == state.tabs.active().active_stack
         && old_dir != state.active_frame().dir
     {
+        for path in state.selection.paths() {
+            state.marked_search_identities.remove(path);
+        }
         state.selection.forget();
     }
     if !effects.events.is_empty() {
@@ -389,19 +404,40 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::CursorBy(delta) => cmd_cursor_by(state, delta),
         Command::SetFilter(query) => cmd_set_filter(state, query),
         Command::ClearFilter => cmd_clear_filter(state),
+        Command::StartSearch(query) => cmd_start_search(state, query),
+        Command::CancelSearch => {
+            if let Some(search) = &state.search {
+                search
+                    .progress
+                    .cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            Effects {
+                jobs: vec![],
+                events: vec![Event::Stack],
+            }
+        }
+        Command::CloseSearch => close_search(state),
         Command::SetSort(order) => cmd_set_sort(state, order),
         Command::SetHidden(hidden) => cmd_set_hidden(state, hidden),
         Command::ToggleMark => cmd_toggle_mark(state),
         Command::ToggleMarkPath(path) => {
-            let entry = path
-                .parent()
-                .and_then(|dir| state.listing_of(dir))
-                .and_then(|l| l.entries.iter().find(|e| e.path == path))
-                .cloned();
+            let entry = state
+                .search
+                .as_ref()
+                .and_then(|search| search.results.iter().find(|e| e.path == path))
+                .cloned()
+                .or_else(|| {
+                    path.parent()
+                        .and_then(|dir| state.listing_of(dir))
+                        .and_then(|l| l.entries.iter().find(|e| e.path == path))
+                        .cloned()
+                });
             let Some(entry) = entry else {
                 return Effects::default();
             };
             state.selection.toggle(&entry);
+            sync_search_mark_identity(state, &entry);
             let jobs = if entry.kind == EntryKind::Dir && state.selection.is_marked(&path) {
                 vec![Job::Summarize(path)]
             } else {
@@ -423,7 +459,10 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             if sources.is_empty() {
                 return Effects::default();
             }
-            let id = state.queue.enqueue(kind, sources, dest, state.conflicts);
+            let id = state
+                .queue
+                .enqueue(kind, sources.clone(), dest, state.conflicts);
+            record_search_expectations(state, id, &sources);
             Effects {
                 jobs: vec![],
                 events: vec![Event::Queue(id)],
@@ -439,7 +478,8 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             }
             let id = state
                 .queue
-                .enqueue_drop(kind, sources, dest, state.conflicts);
+                .enqueue_drop(kind, sources.clone(), dest, state.conflicts);
+            record_search_expectations(state, id, &sources);
             let mut effects = run_next(state);
             effects.events.insert(0, Event::Queue(id));
             effects
@@ -665,6 +705,31 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
             }
         }
         Done::Listed(listing) => done_listed(state, listing),
+        Done::Searched { generation, found } => {
+            let Some(search) = state.search.as_mut().filter(|s| s.generation == generation) else {
+                return Effects::default();
+            };
+            let indices = sort::order(&found.entries, state.sort, true);
+            search.results = indices
+                .into_iter()
+                .map(|i| found.entries[i].clone())
+                .collect();
+            search.identities = found.identities.clone();
+            search.cursor = 0;
+            search.status = found.status;
+            search.errors = found.errors.clone();
+            let mut events = vec![Event::Stack];
+            if let Some(error) = search.errors.first() {
+                events.push(Event::Note(Note::warning(
+                    "search",
+                    format!("Search skipped unreadable paths: {error}"),
+                )));
+            }
+            Effects {
+                jobs: vec![],
+                events,
+            }
+        }
         Done::Created {
             path,
             kind,
@@ -959,6 +1024,9 @@ fn leave_unmounted_place(state: &mut State, mount: &Path) -> Vec<Job> {
     for selection in &mut state.parked_selections {
         selection.forget_under(mount);
     }
+    state
+        .marked_search_identities
+        .retain(|path, _| !path.starts_with(mount));
     if state
         .preview
         .as_ref()
@@ -992,6 +1060,10 @@ fn leave_unmounted_place(state: &mut State, mount: &Path) -> Vec<Job> {
 /// what `space` does after marking, so the next entry lands under the cursor
 /// without a separate `j`.
 fn bump_cursor_down(state: &mut State) {
+    if let Some(search) = state.search.as_mut() {
+        search.cursor = (search.cursor + 1).min(search.results.len().saturating_sub(1));
+        return;
+    }
     let dir = state.active_frame().dir.clone();
     let listing = state.listings.get(&dir).cloned();
     let frame = state.active_frame_mut();
@@ -1009,6 +1081,9 @@ fn bump_cursor_down(state: &mut State) {
 /// `Vec<&Entry>`: `Selection::mark_all`/`invert` need to outlive the borrow
 /// of `state.listings` this reads from.
 fn visible_entries(state: &State) -> Vec<Entry> {
+    if let Some(search) = &state.search {
+        return search.results.clone();
+    }
     let frame = state.active_frame();
     match state.listings.get(&frame.dir) {
         Some(listing) => frame
@@ -1057,6 +1132,12 @@ fn cmd_enter(state: &mut State) -> Effects {
 /// cache or a fresh `Job::List`. Shared by `Command::Enter` on a directory
 /// and `Command::Push` (`gh`, `gr`, a crumb-adjacent path, a typed path).
 fn push_dir(state: &mut State, dir: PathBuf) -> Effects {
+    if let Some(search) = state.search.take() {
+        search
+            .progress
+            .cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     state.tabs.active_mut().active_stack_mut().push(dir);
     let jobs = populate_active_frame(state);
     Effects {
@@ -1066,6 +1147,9 @@ fn push_dir(state: &mut State, dir: PathBuf) -> Effects {
 }
 
 fn cmd_back(state: &mut State) -> Effects {
+    if state.search.is_some() {
+        return close_search(state);
+    }
     let Some(movement) = state.tabs.active_mut().active_stack_mut().go_parent() else {
         return Effects::default();
     };
@@ -1108,6 +1192,9 @@ fn cmd_forward(state: &mut State) -> Effects {
 }
 
 fn cmd_reload(state: &mut State) -> Effects {
+    if let Some(search) = &state.search {
+        return cmd_start_search(state, search.query.clone());
+    }
     let dir = state.active_frame().dir.clone();
     state.active_frame_mut().loading = true;
     Effects {
@@ -1121,6 +1208,17 @@ fn cmd_reload(state: &mut State) -> Effects {
 /// not actually move -- a `CursorBy` that tries to walk off either end of the
 /// list is a no-op, not a redraw.
 fn set_cursor(state: &mut State, row: usize) -> Effects {
+    if let Some(search) = state.search.as_mut() {
+        let cursor = row.min(search.results.len().saturating_sub(1));
+        if cursor == search.cursor {
+            return Effects::default();
+        }
+        search.cursor = cursor;
+        return Effects {
+            jobs: vec![],
+            events: vec![Event::Stack],
+        };
+    }
     let dir = state.active_frame().dir.clone();
     let listing = state.listings.get(&dir).cloned();
     let frame = state.active_frame_mut();
@@ -1143,9 +1241,81 @@ fn set_cursor(state: &mut State, row: usize) -> Effects {
 }
 
 fn cmd_cursor_by(state: &mut State, delta: i32) -> Effects {
-    let current = state.active_frame().cursor as i64;
+    let current = state
+        .search
+        .as_ref()
+        .map(|search| search.cursor)
+        .unwrap_or(state.active_frame().cursor) as i64;
     let target = (current + delta as i64).max(0) as usize;
     set_cursor(state, target)
+}
+
+fn cmd_start_search(state: &mut State, query: String) -> Effects {
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return Effects {
+            jobs: vec![],
+            events: vec![Event::Note(Note::warning(
+                "search",
+                "enter a filename to search for",
+            ))],
+        };
+    }
+    let root = state
+        .search
+        .as_ref()
+        .map(|search| search.root.clone())
+        .unwrap_or_else(|| state.active_frame().dir.clone());
+    if let Some(search) = state.search.take() {
+        search
+            .progress
+            .cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    state.search_generation = state.search_generation.wrapping_add(1);
+    let generation = state.search_generation;
+    let progress = Arc::new(search::Progress::default());
+    let include_hidden = state.show_hidden;
+    state.search = Some(Search {
+        generation,
+        root: root.clone(),
+        query: query.clone(),
+        include_hidden,
+        results: vec![],
+        identities: HashMap::new(),
+        cursor: 0,
+        status: SearchStatus::Running,
+        errors: vec![],
+        progress: Arc::clone(&progress),
+    });
+    state.preview_generation += 1;
+    state.preview = None;
+    Effects {
+        jobs: vec![Job::Search {
+            generation,
+            root,
+            query,
+            include_hidden,
+            progress,
+        }],
+        events: vec![Event::Stack],
+    }
+}
+
+fn close_search(state: &mut State) -> Effects {
+    let Some(search) = state.search.take() else {
+        return Effects::default();
+    };
+    search
+        .progress
+        .cancel
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    state.preview_generation += 1;
+    state.preview = None;
+    Effects {
+        jobs: vec![],
+        events: vec![Event::Stack],
+    }
 }
 
 fn cmd_set_filter(state: &mut State, query: String) -> Effects {
@@ -1169,6 +1339,21 @@ fn cmd_clear_filter(state: &mut State) -> Effects {
 fn cmd_set_sort(state: &mut State, order: SortOrder) -> Effects {
     state.sort = order;
     rebuild_all_frames(state);
+    if let Some(search) = state.search.as_mut() {
+        let selected = search
+            .results
+            .get(search.cursor)
+            .map(|entry| entry.path.clone());
+        let indices = sort::order(&search.results, order, true);
+        let sorted: Vec<_> = indices
+            .into_iter()
+            .map(|i| search.results[i].clone())
+            .collect();
+        search.cursor = selected
+            .and_then(|path| sorted.iter().position(|entry| entry.path == path))
+            .unwrap_or(0);
+        search.results = sorted;
+    }
     Effects {
         jobs: Vec::new(),
         events: vec![Event::Stack],
@@ -1178,6 +1363,9 @@ fn cmd_set_sort(state: &mut State, order: SortOrder) -> Effects {
 fn cmd_set_hidden(state: &mut State, hidden: bool) -> Effects {
     state.show_hidden = hidden;
     rebuild_all_frames(state);
+    if let Some(search) = &state.search {
+        return cmd_start_search(state, search.query.clone());
+    }
     Effects {
         jobs: Vec::new(),
         events: vec![Event::Stack],
@@ -1189,6 +1377,7 @@ fn cmd_toggle_mark(state: &mut State) -> Effects {
         return Effects::default();
     };
     state.selection.toggle(&entry);
+    sync_search_mark_identity(state, &entry);
     let mut jobs = Vec::new();
     if entry.kind == EntryKind::Dir && state.selection.is_marked(&entry.path) {
         jobs.push(Job::Summarize(entry.path));
@@ -1206,6 +1395,9 @@ fn cmd_mark_all(state: &mut State) -> Effects {
         return Effects::default();
     }
     state.selection.mark_all(&entries);
+    for entry in &entries {
+        sync_search_mark_identity(state, entry);
+    }
     let jobs = summarize_marked_dirs(state, &entries);
     Effects {
         jobs,
@@ -1219,6 +1411,9 @@ fn cmd_invert_marks(state: &mut State) -> Effects {
         return Effects::default();
     }
     state.selection.invert(&entries);
+    for entry in &entries {
+        sync_search_mark_identity(state, entry);
+    }
     let jobs = summarize_marked_dirs(state, &entries);
     Effects {
         jobs,
@@ -1229,6 +1424,9 @@ fn cmd_invert_marks(state: &mut State) -> Effects {
 fn cmd_clear_marks(state: &mut State) -> Effects {
     if state.selection.is_empty() {
         return Effects::default();
+    }
+    for path in state.selection.paths() {
+        state.marked_search_identities.remove(path);
     }
     state.selection.forget();
     Effects {
@@ -1259,7 +1457,8 @@ fn cmd_queue_copy_or_move(state: &mut State, kind: OpKind) -> Effects {
     };
     let id = state
         .queue
-        .enqueue(kind, sources, Some(dest), state.conflicts);
+        .enqueue(kind, sources.clone(), Some(dest), state.conflicts);
+    record_search_expectations(state, id, &sources);
     Effects {
         jobs: Vec::new(),
         events: vec![Event::Queue(id)],
@@ -1296,7 +1495,8 @@ fn queue_delete_sources(state: &mut State, sources: Vec<PathBuf>) -> Effects {
     };
     let id = state
         .queue
-        .enqueue(OpKind::Delete(how), sources, None, state.conflicts);
+        .enqueue(OpKind::Delete(how), sources.clone(), None, state.conflicts);
+    record_search_expectations(state, id, &sources);
     Effects {
         jobs: Vec::new(),
         events: vec![Event::Queue(id)],
@@ -1304,12 +1504,51 @@ fn queue_delete_sources(state: &mut State, sources: Vec<PathBuf>) -> Effects {
 }
 
 fn cmd_queue_rename(state: &mut State, from: PathBuf, to: PathBuf) -> Effects {
-    let id = state
-        .queue
-        .enqueue(OpKind::Rename, vec![from], Some(to), state.conflicts);
+    let id = state.queue.enqueue(
+        OpKind::Rename,
+        vec![from.clone()],
+        Some(to),
+        state.conflicts,
+    );
+    record_search_expectations(state, id, &[from]);
     Effects {
         jobs: Vec::new(),
         events: vec![Event::Queue(id)],
+    }
+}
+
+fn record_search_expectations(state: &mut State, id: OpId, sources: &[PathBuf]) {
+    let expected: Vec<_> = sources
+        .iter()
+        .filter_map(|path| {
+            state
+                .marked_search_identities
+                .get(path)
+                .or_else(|| {
+                    state
+                        .search
+                        .as_ref()
+                        .and_then(|search| search.identities.get(path))
+                })
+                .map(|identity| (path.clone(), *identity))
+        })
+        .collect();
+    if let Some(op) = state.queue.get_mut(id) {
+        op.expected = expected;
+    }
+}
+
+fn sync_search_mark_identity(state: &mut State, entry: &Entry) {
+    if !state.selection.is_marked(&entry.path) {
+        state.marked_search_identities.remove(&entry.path);
+    } else if let Some(identity) = state
+        .search
+        .as_ref()
+        .and_then(|search| search.identities.get(&entry.path))
+    {
+        state
+            .marked_search_identities
+            .insert(entry.path.clone(), *identity);
     }
 }
 
@@ -1395,6 +1634,7 @@ fn run_next(state: &mut State) -> Effects {
                 plan,
                 policy,
                 progress: Arc::clone(&op.progress),
+                expected: op.expected.clone(),
             }],
             events: vec![Event::Queue(id)],
         };
@@ -1406,6 +1646,7 @@ fn run_next(state: &mut State) -> Effects {
         kind: op.kind,
         sources: op.sources.clone(),
         dest: op.dest.clone(),
+        expected: op.expected.clone(),
     };
     Effects {
         jobs: vec![job],
@@ -1676,6 +1917,7 @@ fn done_planned(
                         plan,
                         policy,
                         progress: Arc::clone(&op.progress),
+                        expected: op.expected.clone(),
                     });
                 }
             }
@@ -1744,6 +1986,9 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
         state.selection.forget_paths(&moved_or_deleted);
         for selection in &mut state.parked_selections {
             selection.forget_paths(&moved_or_deleted);
+        }
+        for path in &moved_or_deleted {
+            state.marked_search_identities.remove(path);
         }
         events.push(Event::Selection);
     }

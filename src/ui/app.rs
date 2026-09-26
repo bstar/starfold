@@ -111,6 +111,8 @@ pub struct ViewData {
     /// The path the cursor sits on, for `o`, `r` and for following the
     /// preview -- the stack panel's own `Row` carries no path, only a name.
     pub cursor_path: Option<PathBuf>,
+    pub search_active: bool,
+    pub search_running: bool,
     pub loading: bool,
     pub error: Option<String>,
     pub truncated: bool,
@@ -152,6 +154,8 @@ impl ViewData {
             rows: Vec::new(),
             cursor: 0,
             cursor_path: None,
+            search_active: false,
+            search_running: false,
             loading: true,
             error: None,
             truncated: false,
@@ -283,6 +287,7 @@ pub struct App {
     note: Option<(String, NoteLevel, Instant)>,
     view: ViewData,
     seen_version: u64,
+    seen_search_progress: usize,
     /// Per-frame list scroll, keyed by `FrameId` so a level's scroll survives
     /// backing out and returning to it.
     scroll: HashMap<(usize, FrameId), usize>,
@@ -783,6 +788,7 @@ impl App {
             // first `refresh` always copies a `ViewData` out rather than
             // seeing "nothing changed" and leaving the empty one in place.
             seen_version: u64::MAX,
+            seen_search_progress: usize::MAX,
             scroll: HashMap::new(),
             preview_scroll: 0,
             pdf_requested: None,
@@ -889,6 +895,8 @@ impl App {
                         TermEvent::Paste(text) => {
                             if self.editor.is_some() {
                                 self.editor_paste(&text);
+                            } else if self.overlays.paste(&text) {
+                                self.repaint = true;
                             } else if let Some(input) = self.filter.as_mut() {
                                 input.paste(&text);
                                 let text = input.text().to_string();
@@ -979,10 +987,17 @@ impl App {
     /// see the module doc.
     fn refresh(&mut self) {
         let state = self.core.state();
-        if state.version == self.seen_version {
+        let search_progress = state.search.as_ref().map_or(0, |search| {
+            search
+                .progress
+                .visited
+                .load(std::sync::atomic::Ordering::Relaxed)
+        });
+        if state.version == self.seen_version && search_progress == self.seen_search_progress {
             return;
         }
         self.seen_version = state.version;
+        self.seen_search_progress = search_progress;
 
         let crumbs_all = state.crumbs();
         let active = crumbs_all.last().expect("a stack is never empty");
@@ -997,7 +1012,7 @@ impl App {
             .collect();
 
         let now = self.now_override.unwrap_or_else(std::time::SystemTime::now);
-        self.commander = state.commander;
+        self.commander = state.commander && state.search.is_none();
         self.active_pane = state.commander_pane;
         self.panes = state
             .tabs
@@ -1046,23 +1061,67 @@ impl App {
             places.set_items(place_items(&state));
             places.set_status(state.places.loading, state.places.error.clone(), unmounting);
         }
-        let rows: Vec<panels::stack::Row> = state
-            .rows(active)
-            .into_iter()
-            .map(|entry| build_row(entry, &state.selection, &self.tz, now))
-            .collect();
+        let rows: Vec<panels::stack::Row> = if let Some(search) = &state.search {
+            search
+                .results
+                .iter()
+                .map(|entry| build_row(entry, &state.selection, &self.tz, now))
+                .collect()
+        } else {
+            state
+                .rows(active)
+                .into_iter()
+                .map(|entry| build_row(entry, &state.selection, &self.tz, now))
+                .collect()
+        };
 
         let listing = state.listing_of(&active.dir);
-        let error = listing.and_then(|l| l.error.clone());
-        let truncated = listing.map(|l| l.truncated).unwrap_or(false);
+        let error = if let Some(search) = &state.search {
+            search.errors.first().cloned()
+        } else {
+            listing.and_then(|l| l.error.clone())
+        };
+        let truncated = if let Some(search) = &state.search {
+            search.status == crate::fold::search::Status::Limited
+        } else {
+            listing.is_some_and(|l| l.truncated)
+        };
 
         let name = level_name(&active.dir, &state.home);
-        let rule = match state.dir_stats() {
-            Some((files, dirs, bytes)) => format!(
-                "{name} \u{2500}\u{2500} {files} files \u{b7} {dirs} dirs \u{b7} {}",
-                crate::fold::format::size(bytes)
-            ),
-            None => name.clone(),
+        let rule = if let Some(search) = &state.search {
+            let status = match search.status {
+                crate::fold::search::Status::Running
+                    if search
+                        .progress
+                        .cancel
+                        .load(std::sync::atomic::Ordering::Relaxed) =>
+                {
+                    "cancelling"
+                }
+                crate::fold::search::Status::Running => "searching",
+                crate::fold::search::Status::Complete => "complete",
+                crate::fold::search::Status::Cancelled => "cancelled",
+                crate::fold::search::Status::Limited => "limit reached",
+            };
+            format!(
+                "search: {} · {} matches · {} scanned · {status}{}",
+                search.query,
+                search.results.len(),
+                search_progress,
+                if search.errors.is_empty() {
+                    String::new()
+                } else {
+                    " · unreadable paths".to_string()
+                }
+            )
+        } else {
+            match state.dir_stats() {
+                Some((files, dirs, bytes)) => format!(
+                    "{name} \u{2500}\u{2500} {files} files \u{b7} {dirs} dirs \u{b7} {}",
+                    crate::fold::format::size(bytes)
+                ),
+                None => name.clone(),
+            }
         };
 
         // A preview is for the entry under the cursor. With no cursor -- an
@@ -1123,20 +1182,51 @@ impl App {
             .map(|op| op.progress.line(running_verb_upper(op.kind)));
 
         self.view = ViewData {
-            crumbs,
+            crumbs: if state.search.is_some() {
+                Vec::new()
+            } else {
+                crumbs
+            },
             rule,
             rows,
-            cursor: active.cursor,
+            cursor: state
+                .search
+                .as_ref()
+                .map_or(active.cursor, |search| search.cursor),
             cursor_path: state.cursor_entry().map(|e| e.path.clone()),
-            loading: active.loading,
+            search_active: state.search.is_some(),
+            search_running: state
+                .search
+                .as_ref()
+                .is_some_and(|search| search.status == crate::fold::search::Status::Running),
+            loading: state.search.as_ref().map_or(active.loading, |search| {
+                search.status == crate::fold::search::Status::Running
+            }),
             error,
             truncated,
-            filter: active.filter.clone(),
+            filter: if state.search.is_some() {
+                String::new()
+            } else {
+                active.filter.clone()
+            },
             marked: state.selection.summary(),
-            dir_stats: state.dir_stats(),
-            active_dir: active.dir.clone(),
+            dir_stats: if state.search.is_some() {
+                None
+            } else {
+                state.dir_stats()
+            },
+            active_dir: state
+                .search
+                .as_ref()
+                .map_or_else(|| active.dir.clone(), |search| search.root.clone()),
             home: state.home.clone(),
-            location: home_relative(&active.dir, &state.home),
+            location: home_relative(
+                state
+                    .search
+                    .as_ref()
+                    .map_or(active.dir.as_path(), |search| search.root.as_path()),
+                &state.home,
+            ),
             preview_name,
             preview,
             ops,
@@ -1147,7 +1237,12 @@ impl App {
             trash_available: state.trash_available,
             show_hidden: state.show_hidden,
             sort: state.sort,
-            frame_id: (state.tabs.active().active_stack, active.id),
+            frame_id: state
+                .search
+                .as_ref()
+                .map_or((state.tabs.active().active_stack, active.id), |search| {
+                    (3, FrameId(search.generation))
+                }),
         };
         drop(state);
         if picture_changed {
@@ -1237,6 +1332,14 @@ impl App {
             self.after_overlay_answer(answer);
             return;
         }
+        if self.view.search_active && k.code == KeyCode::Esc {
+            self.core.send(if self.view.search_running {
+                Command::CancelSearch
+            } else {
+                Command::CloseSearch
+            });
+            return;
+        }
 
         if k.code == KeyCode::Menu
             || (k.code == KeyCode::F(10)
@@ -1322,6 +1425,11 @@ impl App {
             Answer::Renamed { from, to } => {
                 self.core.send(Command::QueueRename { from, to });
             }
+            Answer::Search(query) => {
+                self.filter = None;
+                self.core.send(Command::StartSearch(query));
+                self.layout.focus_set(ModuleId::Stack);
+            }
             Answer::Created { dir, kind, name } => {
                 self.filter = None;
                 self.core.send(Command::Create { dir, kind, name });
@@ -1352,6 +1460,9 @@ impl App {
     fn act(&mut self, a: Action) {
         match a {
             Action::ToggleView => {
+                if self.view.search_active {
+                    self.core.send(Command::CloseSearch);
+                }
                 self.filter = None;
                 self.core.send(Command::ToggleView);
                 self.layout.focus_set(ModuleId::Stack);
@@ -1402,13 +1513,37 @@ impl App {
             Action::FocusOperations => self.layout.focus_set(ModuleId::Operations),
 
             Action::Enter => self.activate_entry(),
-            Action::Pop => self.core.send(Command::Back),
+            Action::Pop => self.core.send(if self.view.search_active {
+                Command::CloseSearch
+            } else {
+                Command::Back
+            }),
             Action::FileActions => self.open_actions_modal(),
+            Action::Search => {
+                let query = self
+                    .core
+                    .state()
+                    .search
+                    .as_ref()
+                    .map(|search| search.query.clone())
+                    .unwrap_or_default();
+                self.overlays.open_search(&query);
+                self.repaint = true;
+            }
             Action::JumpUp => {
+                if self.view.search_active {
+                    self.core.send(Command::CloseSearch);
+                    self.refresh();
+                }
                 let target = self.view.crumbs.len().saturating_sub(1);
                 self.core.send(Command::JumpTo(target));
             }
-            Action::JumpDown => self.core.send(Command::Forward),
+            Action::JumpDown => {
+                if self.view.search_active {
+                    self.core.send(Command::CloseSearch);
+                }
+                self.core.send(Command::Forward);
+            }
             Action::GoHome => self.core.send(Command::Push(self.view.home.clone())),
             Action::GoRoot => self.core.send(Command::Push(PathBuf::from("/"))),
             Action::OpenExternal => {
@@ -1480,6 +1615,10 @@ impl App {
                 self.core.send(Command::SetSort(sort));
             }
             Action::Filter => {
+                if self.view.search_active {
+                    self.core.send(Command::CloseSearch);
+                    self.refresh();
+                }
                 self.filter = Some(TextInput::single().with_text(self.view.filter.clone()));
             }
 
@@ -2124,6 +2263,13 @@ impl App {
     fn status_view(&self, now: Instant) -> status::View<'_> {
         let hints: &[(&str, &str)] = if self.editor.is_some() {
             &[("editor", "use its save and quit keys")]
+        } else if self.view.search_active {
+            &[
+                ("esc", "cancel / close search"),
+                ("space", "mark"),
+                ("c", "actions"),
+                ("F3", "search"),
+            ]
         } else {
             match self.layout.focus() {
                 ModuleId::Stack => &[
@@ -2219,7 +2365,19 @@ impl App {
             }
         } else {
             let sv = self.stack_view();
-            panels::stack::render(regions.rect_of(ModuleId::Stack), buf, &sv, &mut bars);
+            if self.view.search_active {
+                panels::stack::render_named(
+                    regions.rect_of(ModuleId::Stack),
+                    buf,
+                    &sv,
+                    &mut bars,
+                    "SEARCH",
+                    Some(&self.view.location),
+                    Bar::Stack,
+                );
+            } else {
+                panels::stack::render(regions.rect_of(ModuleId::Stack), buf, &sv, &mut bars);
+            }
         }
 
         if let Some((x, y)) = self.dnd.hover_coords {
@@ -2712,6 +2870,152 @@ mod tests {
         let cfg_path = dir.path().join("config.toml");
         let app = App::new(core, cfg, cfg_path, None, Graphics::disabled());
         (app, fk, dir)
+    }
+
+    #[test]
+    fn recursive_search_results_mark_and_restore_the_original_cursor() {
+        let (mut app, fake, _dir) = app();
+        fake.pump();
+        app.tick();
+        let original_dir = app.view.active_dir.clone();
+        let original_cursor = app.view.cursor_path.clone();
+        app.key(code(KeyCode::F(3)));
+        assert!(matches!(app.overlays.current(), Some(Overlay::Search(_))));
+        for area in [Rect::new(0, 0, 100, 30), Rect::new(0, 0, 60, 21)] {
+            let mut buf = Buffer::empty(area);
+            app.draw(area, &mut buf);
+            assert!(dump(&buf, area).to_lowercase().contains("search filenames"));
+        }
+        for ch in "README".chars() {
+            app.key(key(ch));
+        }
+        app.key(code(KeyCode::Enter));
+        assert!(app.core.state().search.is_some());
+        fake.pump();
+        app.tick();
+        assert!(app.view.search_active);
+        assert_eq!(app.view.rows.len(), 1);
+        assert_eq!(
+            app.view.cursor_path,
+            Some(fake.fixture.path("projects/starwire/README.md"))
+        );
+        for area in [Rect::new(0, 0, 100, 30), Rect::new(0, 0, 60, 21)] {
+            let mut buf = Buffer::empty(area);
+            app.draw(area, &mut buf);
+            let frame = dump(&buf, area);
+            assert!(frame.contains("SEARCH"));
+            assert!(frame.contains("starwire/README.md"));
+        }
+        app.key(key(' '));
+        assert!(app
+            .core
+            .state()
+            .selection
+            .is_marked(&fake.fixture.path("projects/starwire/README.md")));
+        app.key(key('c'));
+        let Some(Overlay::Context(menu)) = app.overlays.current() else {
+            panic!("search result should have file actions")
+        };
+        assert_eq!(
+            menu.target.clicked,
+            fake.fixture.path("projects/starwire/README.md")
+        );
+        app.key(code(KeyCode::Esc));
+        app.key(key('d'));
+        assert_eq!(
+            app.core.state().queue.iter().next().unwrap().expected.len(),
+            1
+        );
+        app.key(key('h'));
+        app.tick();
+        assert!(!app.view.search_active);
+        assert_eq!(app.view.active_dir, original_dir);
+        assert_eq!(app.view.cursor_path, original_cursor);
+        app.key(key('d'));
+        assert_eq!(
+            app.core.state().queue.iter().nth(1).unwrap().expected.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn commander_search_restores_both_panes() {
+        let (mut app, fake, _dir) = app();
+        fake.pump();
+        app.key(key('v'));
+        app.tick();
+        let before: Vec<_> = app.panes.iter().map(|pane| pane.dir.clone()).collect();
+        let active = app.active_pane;
+        app.key(code(KeyCode::F(3)));
+        for ch in "README".chars() {
+            app.key(key(ch));
+        }
+        app.key(code(KeyCode::Enter));
+        fake.pump();
+        app.tick();
+        assert!(app.view.search_active);
+        assert!(!app.commander);
+        app.key(key('h'));
+        app.tick();
+        assert!(app.commander);
+        assert_eq!(app.active_pane, active);
+        assert_eq!(
+            app.panes
+                .iter()
+                .map(|pane| pane.dir.clone())
+                .collect::<Vec<_>>(),
+            before
+        );
+    }
+
+    #[test]
+    fn hidden_toggle_reruns_an_open_search() {
+        let (mut app, fake, _dir) = app();
+        fake.pump();
+        app.key(code(KeyCode::F(3)));
+        for ch in "gitignore".chars() {
+            app.key(key(ch));
+        }
+        app.key(code(KeyCode::Enter));
+        fake.pump();
+        app.tick();
+        assert!(app.view.rows.is_empty());
+        app.key(key('n'));
+        fake.pump();
+        app.tick();
+        assert_eq!(app.view.rows.len(), 1);
+        assert_eq!(
+            app.view.cursor_path,
+            Some(fake.fixture.path("projects/starwire/.gitignore"))
+        );
+    }
+
+    #[test]
+    fn escape_cancels_a_search_then_closes_results() {
+        let (mut app, fake, _dir) = app();
+        fake.pump();
+        app.key(code(KeyCode::F(3)));
+        app.key(key('x'));
+        app.key(code(KeyCode::Enter));
+        app.key(code(KeyCode::Esc));
+        assert!(app
+            .core
+            .state()
+            .search
+            .as_ref()
+            .unwrap()
+            .progress
+            .cancel
+            .load(std::sync::atomic::Ordering::Relaxed));
+        fake.pump();
+        app.tick();
+        assert_eq!(
+            app.core.state().search.as_ref().unwrap().status,
+            crate::fold::search::Status::Cancelled
+        );
+        app.key(code(KeyCode::Esc));
+        app.tick();
+        assert!(!app.view.search_active);
     }
 
     fn dump(buf: &Buffer, area: Rect) -> String {

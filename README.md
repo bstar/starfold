@@ -69,6 +69,10 @@ rest of it.
   and other file actions. Edit runs the terminal editor in Preview. Physical right-click is optional in configuration.
   Archive jobs appear in OPERATIONS.
   See [previews and archives](docs/previews-and-archives.md).
+- **Recursive filename search.** Press F3 or Ctrl+F to search below the active
+  directory without changing `/`'s current-directory filter. Results support
+  preview, marks and file actions. Escape cancels a scan or closes results;
+  closing restores the original directory and cursor.
 - **Commander view and Places.** Press `v` for two independently browsable
   panes. `b` opens searchable bookmarks, mounted devices, network locations,
   Home and Root; selected drives show capacity and identifying details.

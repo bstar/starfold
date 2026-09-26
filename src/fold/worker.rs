@@ -21,6 +21,7 @@ use super::ops::progress::Progress;
 use super::ops::{self, ConflictPolicy, OpId, OpKind, Outcome, Plan};
 use super::places::{self, Bookmark, Location};
 use super::preview::{self, Preview};
+use super::search;
 use super::state::{self, Change, State};
 use super::summary::{self, Budget, DirSummary};
 use super::watch::Watch;
@@ -135,6 +136,13 @@ pub enum Job {
         revision: u64,
     },
     List(PathBuf),
+    Search {
+        generation: u64,
+        root: PathBuf,
+        query: String,
+        include_hidden: bool,
+        progress: Arc<search::Progress>,
+    },
     Create {
         dir: PathBuf,
         name: String,
@@ -159,6 +167,7 @@ pub enum Job {
         kind: OpKind,
         sources: Vec<PathBuf>,
         dest: Option<PathBuf>,
+        expected: Vec<(PathBuf, search::Identity)>,
     },
     /// Execute a planned op. `progress` is the same `Arc` the `Op` in
     /// `State` holds, which is how the status row sees the bytes move.
@@ -168,6 +177,7 @@ pub enum Job {
         plan: Plan,
         policy: ConflictPolicy,
         progress: Arc<Progress>,
+        expected: Vec<(PathBuf, search::Identity)>,
     },
     Shutdown,
 }
@@ -196,6 +206,10 @@ pub enum Done {
         result: Result<(), String>,
     },
     Listed(Listing),
+    Searched {
+        generation: u64,
+        found: Arc<search::Found>,
+    },
     Created {
         path: PathBuf,
         kind: CreateKind,
@@ -325,6 +339,16 @@ pub fn perform_io(
             let listing = listing::read(&dir, &cfg.list);
             IoOutcome::Done(Done::Listed(listing))
         }
+        Job::Search {
+            generation,
+            root,
+            query,
+            include_hidden,
+            progress,
+        } => IoOutcome::Done(Done::Searched {
+            generation,
+            found: Arc::new(search::scan(&root, &query, include_hidden, &progress)),
+        }),
         Job::Create {
             dir,
             name,
@@ -406,6 +430,23 @@ pub fn perform_io(
 ///
 /// Pulled out of [`spawn_ops`]'s loop for the same reason as [`perform_io`].
 /// `cfg.preserve_times` is the one setting a run needs that a plan does not.
+fn validate_search_sources_for_run(
+    expected: &[(PathBuf, search::Identity)],
+) -> Result<(), (PathBuf, String)> {
+    for (path, identity) in expected {
+        if search::Identity::of(path).ok() != Some(*identity) {
+            return Err((
+                path.clone(),
+                format!(
+                    "search result changed since it was found: {}",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
     match job {
         Job::Plan {
@@ -413,9 +454,13 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
             kind,
             sources,
             dest,
+            expected,
         } => {
-            let result =
-                ops::plan::plan(kind, &sources, dest.as_deref()).map_err(|e| e.to_string());
+            let result = validate_search_sources_for_run(&expected)
+                .map_err(|(_, e)| e)
+                .and_then(|_| {
+                    ops::plan::plan(kind, &sources, dest.as_deref()).map_err(|e| e.to_string())
+                });
             Some(Done::Planned { op, result })
         }
         Job::Run {
@@ -424,7 +469,17 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
             plan,
             policy,
             progress,
+            expected,
         } => {
+            if let Err((path, message)) = validate_search_sources_for_run(&expected) {
+                return Some(Done::Finished {
+                    op,
+                    outcome: Outcome {
+                        failed: vec![(path, message)],
+                        ..Outcome::default()
+                    },
+                });
+            }
             let options = ops::exec::RunOptions {
                 preserve_times: cfg.preserve_times,
                 force_copy: false,
@@ -442,6 +497,7 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
         | Job::RefreshPlaces
         | Job::SaveBookmarks { .. }
         | Job::List(_)
+        | Job::Search { .. }
         | Job::Create { .. }
         | Job::Summarize(_)
         | Job::Preview { .. }
@@ -628,6 +684,47 @@ pub fn spawn_ops(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_search_result_is_rechecked_before_plan_and_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("found.txt");
+        std::fs::write(&path, b"old").unwrap();
+        let identity = search::Identity::of(&path).unwrap();
+        let replacement = dir.path().join("replacement.tmp");
+        std::fs::write(&replacement, b"replacement").unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let expected = vec![(path.clone(), identity)];
+        let planned = perform_ops(
+            Job::Plan {
+                op: OpId(1),
+                kind: OpKind::Delete(ops::DeleteHow::Permanent),
+                sources: vec![path.clone()],
+                dest: None,
+                expected: expected.clone(),
+            },
+            &FoldConfig::default(),
+        );
+        assert!(matches!(
+            planned,
+            Some(Done::Planned { result: Err(_), .. })
+        ));
+        let finished = perform_ops(
+            Job::Run {
+                op: OpId(1),
+                kind: OpKind::Delete(ops::DeleteHow::Permanent),
+                plan: Plan::default(),
+                policy: ConflictPolicy::Ask,
+                progress: Arc::new(Progress::new(0)),
+                expected,
+            },
+            &FoldConfig::default(),
+        );
+        assert!(
+            matches!(finished, Some(Done::Finished { outcome, .. }) if outcome.done == 0 && outcome.failed.len() == 1)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+    }
     use crate::fold::handle::EventSink;
     use std::sync::atomic::AtomicU64;
 
@@ -810,6 +907,7 @@ mod tests {
             kind: OpKind::Copy,
             sources: vec!["/a".into()],
             dest: Some("/b".into()),
+            expected: vec![],
         });
         senders.dispatch(Job::Run {
             op: OpId(0),
@@ -817,6 +915,7 @@ mod tests {
             plan: Plan::default(),
             policy: ConflictPolicy::Ask,
             progress: Arc::new(Progress::new(0)),
+            expected: vec![],
         });
         senders.dispatch(Job::UnmountPlace {
             path: "/media/usb".into(),
