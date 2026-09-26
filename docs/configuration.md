@@ -19,6 +19,7 @@ defaults. Editing one key never means writing the other six.
 | `[ui] theme` | a theme id, or `"system"` to follow the desktop. Default `"catppuccin-mocha"`. See [Theming](#theming) |
 | `[ui] graphics` | how the preview draws a picture: `auto` asks the terminal, `kitty` insists on the kitty protocol, `blocks` (also spelled `halfblocks`) draws two pixels to a cell in any terminal at all, `off` draws no picture and leaves a name instead. Default `auto` |
 | `[ui] padding_x` / `padding_y` | blank columns and rows around the whole layout, for a terminal whose window has none. Default `0` |
+| `[ui] right_click` | accept physical right-click mouse actions. Default `false`; Ctrl+click works without this setting |
 | `[ui] show_hidden` | show dotfiles by default. Default `false`. `.` toggles it for the running session |
 | `[ui] sort` | the starting sort key: `name`, `size`, `time` or `ext`. Default `"name"`. `time` sorts newest first; `ext` groups by extension, then by name |
 | `[ui] sort_reverse` | reverse the starting sort. Default `false` |
@@ -74,6 +75,11 @@ fall back to fitting the panel.
 rather than a shell line: a file name with a space or a semicolon in it is
 somebody else's file name, and it reaches the program as one argument without
 ever passing through a shell to be reinterpreted.
+
+The file menu's Edit action runs a terminal editor inside Preview. It uses
+`$VISUAL`, then `$EDITOR`, then `vi`. Quoted arguments in those environment
+variables are parsed, and the file path is passed as one separate argument.
+`[open] command` still controls external Open only.
 
 ## Theming
 
@@ -202,7 +208,7 @@ and text-only terminals keep the text controls. This setting is independent
 of `[ui] graphics` for file previews and does not change STAR/AMP's configuration.
 
 With Preview focused, `w` / `Shift+W` cycles STAR/AMP's visualizers and `d`
-cycles seek-bar styles. Clicking a visualizer cycles forward; right-clicking
+cycles seek-bar styles. Clicking a visualizer cycles forward; Ctrl+clicking
 the visualizer or seek bar cycles seek styles, and the wheel over a visualizer
 cycles forward/back. These controls require a STAR/AMP version advertising
 `player_styles`; older helpers show an update hint for the keys and keep their

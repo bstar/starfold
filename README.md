@@ -64,9 +64,10 @@ rest of it.
   Fold, Commander and previews; no special font is required.
   Open an audio track to play it here using a separately installed,
   embedding-compatible STAR/AMP; without it, the existing opener still works.
-- **File actions menus.** Right-click a file or press Menu / Shift+F10 to open
-  actions including creation, compression and extraction. `N` creates an empty
-  file and `F7` creates a directory in the active location. Archive jobs appear in OPERATIONS.
+- **File actions menu.** Click `actions` in the stack heading, Ctrl+click a
+  file, or press Menu / Shift+F10 for creation, editing, compression, extraction
+  and other file actions. Edit runs the terminal editor in Preview. Physical right-click is optional in configuration.
+  Archive jobs appear in OPERATIONS.
   See [previews and archives](docs/previews-and-archives.md).
 - **Commander view and Places.** Press `v` for two independently browsable
   panes. `b` opens searchable bookmarks, mounted devices, network locations,

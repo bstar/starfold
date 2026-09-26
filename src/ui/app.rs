@@ -39,6 +39,7 @@
 //! [`App::run`], before [`starkit::term::init`], never inside [`App::new`].
 
 mod dnd;
+mod editing;
 mod file_actions;
 
 use std::collections::HashMap;
@@ -64,6 +65,7 @@ use starkit::ratatui_image::Image;
 use starkit::term::{self, Tui};
 
 use super::dnd as wire_dnd;
+use super::editor::Editor;
 use super::keymap::{self, Action};
 use super::layout::{self, pane_rect, LayoutState, Regions};
 use super::overlays::confirm::Confirm;
@@ -74,7 +76,6 @@ use super::theme::{self, Theme};
 use super::{Bar, Bars};
 use crate::audio_embed::{self, Client as AudioClient, Presentation};
 use crate::config::{AudioButtons, Config, Scale};
-use crate::fold::create::Kind as CreateKind;
 use crate::fold::entry::{Entry, EntryKind};
 use crate::fold::handle::{Command, Event, Handle, NoteLevel};
 use crate::fold::ops::{Op, OpId, OpKind, OpStatus};
@@ -257,6 +258,8 @@ pub struct App {
     audio_focus_origin: Option<(PathBuf, usize, bool)>,
     audio_graphics: super::audio_graphics::AudioGraphics,
     audio_cell_size: Option<(u16, u16)>,
+    editor: Option<Editor>,
+    editor_return_focus: Option<ModuleId>,
     commander: bool,
     active_pane: usize,
     panes: Vec<PaneView>,
@@ -757,6 +760,8 @@ impl App {
             audio_focus_origin: None,
             audio_graphics: super::audio_graphics::AudioGraphics::default(),
             audio_cell_size,
+            editor: None,
+            editor_return_focus: None,
             commander: false,
             active_pane: 0,
             panes: Vec::new(),
@@ -821,6 +826,7 @@ impl App {
         let mut term = term::init()?;
         app.dnd_query();
         let result = app.event_loop(&mut term);
+        app.editor = None;
         app.stop_audio();
         app.dnd_stop();
         term::restore()?;
@@ -881,7 +887,9 @@ impl App {
                             self.repaint = true;
                         }
                         TermEvent::Paste(text) => {
-                            if let Some(input) = self.filter.as_mut() {
+                            if self.editor.is_some() {
+                                self.editor_paste(&text);
+                            } else if let Some(input) = self.filter.as_mut() {
                                 input.paste(&text);
                                 let text = input.text().to_string();
                                 self.core.send(Command::SetFilter(text));
@@ -917,6 +925,8 @@ impl App {
         }
         self.refresh();
 
+        self.poll_editor();
+
         self.poll_audio();
 
         // The preview follows the cursor: a change of entry (or the panel
@@ -927,7 +937,8 @@ impl App {
             .state()
             .cursor_entry()
             .map(|e| (e.len, e.modified));
-        if self.audio_path.is_none()
+        if self.editor.is_none()
+            && self.audio_path.is_none()
             && self.layout.is_open(ModuleId::Preview)
             && (self.view.cursor_path != self.last_preview_for || stamp != self.last_preview_stamp)
         {
@@ -1199,6 +1210,10 @@ impl App {
 
     pub fn key(&mut self, k: KeyEvent) {
         self.refresh();
+        if self.editor.is_some() {
+            self.editor_key(k);
+            return;
+        }
         if self.dnd.choice.is_some() && k.code == KeyCode::Esc && !self.overlays.is_open() {
             self.dnd_cancel_choice();
             return;
@@ -1412,16 +1427,6 @@ impl App {
                     self.overlays.open_rename(path);
                     self.repaint = true;
                 }
-            }
-            Action::CreateFile => {
-                self.overlays
-                    .open_create(self.view.active_dir.clone(), CreateKind::File);
-                self.repaint = true;
-            }
-            Action::CreateDirectory => {
-                self.overlays
-                    .open_create(self.view.active_dir.clone(), CreateKind::Directory);
-                self.repaint = true;
             }
             Action::Reload => self.core.send(Command::Reload),
 
@@ -1723,8 +1728,24 @@ impl App {
         let Some(regions) = self.layout.last.clone() else {
             return;
         };
+        if m.kind == MouseEventKind::Down(MouseButton::Right) && !self.cfg.ui.right_click {
+            return;
+        }
+        // Some terminals reserve the physical right button. Treat Ctrl+left
+        // as the same action before scrollbar, pane, and preview dispatch.
+        let kind = if m.kind == MouseEventKind::Down(MouseButton::Left)
+            && m.modifiers
+                .contains(starkit::crossterm::event::KeyModifiers::CONTROL)
+        {
+            MouseEventKind::Down(MouseButton::Right)
+        } else {
+            m.kind
+        };
+        if self.editor.is_some() {
+            return;
+        }
         if let Some(places) = &mut self.places {
-            let action = match m.kind {
+            let action = match kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     places.click(m.column, m.row, regions.area)
                 }
@@ -1747,7 +1768,7 @@ impl App {
         // never anything else's to answer, overlay open or not, because only
         // the bars actually recorded this frame (see `draw`'s two
         // `begin_frame`s) are ones `press` can find.
-        match m.kind {
+        match kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some((bar, above)) = self.bars.press(m.column, m.row) {
                     self.scroll_bar_to(bar, above);
@@ -1767,7 +1788,7 @@ impl App {
         }
 
         if self.overlays.is_open() {
-            match m.kind {
+            match kind {
                 MouseEventKind::ScrollDown => self.overlays.scroll(false),
                 MouseEventKind::ScrollUp => self.overlays.scroll(true),
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -1787,7 +1808,7 @@ impl App {
                 && m.row >= body.y
                 && m.row < body.bottom()
             {
-                let button = match m.kind {
+                let button = match kind {
                     MouseEventKind::Down(MouseButton::Left) => Some("left"),
                     MouseEventKind::Down(MouseButton::Right)
                         if self.audio.player_styles_available() =>
@@ -1816,7 +1837,7 @@ impl App {
             let area = regions.rect_of(ModuleId::Stack);
             let pane = usize::from(m.column >= area.x + area.width / 2);
             let rect = pane_rect(area, pane);
-            match m.kind {
+            match kind {
                 MouseEventKind::Down(button) => {
                     self.focus_pane(pane);
                     if button == MouseButton::Left {
@@ -1827,22 +1848,27 @@ impl App {
                             return;
                         }
                     }
-                    if let Some(panels::stack::Hit::Row(row)) =
-                        panels::stack::hit(rect, &self.pane_view(pane), m.column, m.row)
-                    {
-                        self.core.send(Command::CursorTo(row));
-                        if button == MouseButton::Right {
-                            self.open_file_menu(m.column, m.row);
-                        } else if button == MouseButton::Left && self.clicks.click(m.column, m.row)
-                        {
-                            self.activate_entry();
+                    match panels::stack::hit(rect, &self.pane_view(pane), m.column, m.row) {
+                        Some(panels::stack::Hit::Row(row)) => {
+                            self.core.send(Command::CursorTo(row));
+                            if button == MouseButton::Right {
+                                self.open_file_menu(m.column, m.row);
+                            } else if button == MouseButton::Left
+                                && self.clicks.click(m.column, m.row)
+                            {
+                                self.activate_entry();
+                            }
                         }
+                        None if button == MouseButton::Right => {
+                            self.open_directory_menu(m.column, m.row);
+                        }
+                        _ => {}
                     }
                 }
                 MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                     self.focus_pane(pane);
                     self.core
-                        .send(Command::CursorBy(if m.kind == MouseEventKind::ScrollDown {
+                        .send(Command::CursorBy(if kind == MouseEventKind::ScrollDown {
                             3
                         } else {
                             -3
@@ -1853,7 +1879,7 @@ impl App {
             return;
         }
 
-        match m.kind {
+        match kind {
             MouseEventKind::Down(MouseButton::Left) => self.click(&regions, m.column, m.row),
             MouseEventKind::Down(MouseButton::Right) => self.right_click(&regions, m.column, m.row),
             MouseEventKind::ScrollDown => self.scroll_at(&regions, m.column, m.row, 3),
@@ -2045,6 +2071,7 @@ impl App {
                 self.core.send(Command::SetSort(sort));
             }
             panels::Word::Filter => self.act(Action::Filter),
+            panels::Word::Actions => self.open_actions_modal(),
             panels::Word::Run => self.try_run(),
             panels::Word::Clear => self.act(Action::ClearQueue),
             panels::Word::Close => self.act(Action::TogglePreview),
@@ -2094,28 +2121,32 @@ impl App {
     }
 
     fn status_view(&self, now: Instant) -> status::View<'_> {
-        let hints: &[(&str, &str)] = match self.layout.focus() {
-            ModuleId::Stack => &[
-                ("/", "filter"),
-                ("space", "mark"),
-                ("enter", "open"),
-                ("y", "copy"),
-                ("m", "move"),
-                ("d", "delete"),
-            ],
-            ModuleId::Operations => &[("enter", "run"), ("x", "drop"), ("esc", "clear")],
-            ModuleId::Preview if self.audio_path.is_some() => &[
-                ("space", "pause"),
-                ("[/]", "track"),
-                ("←/→", "seek"),
-                ("+/-", "volume"),
-                ("x", "stop"),
-                ("o", "buttons"),
-                ("w/W", "visualizer"),
-                ("d", "seek style"),
-                ("O", "external"),
-            ],
-            ModuleId::Preview => &[("j/k", "scroll"), ("i", "fold"), ("z", "scale")],
+        let hints: &[(&str, &str)] = if self.editor.is_some() {
+            &[("editor", "use its save and quit keys")]
+        } else {
+            match self.layout.focus() {
+                ModuleId::Stack => &[
+                    ("/", "filter"),
+                    ("space", "mark"),
+                    ("enter", "open"),
+                    ("y", "copy"),
+                    ("m", "move"),
+                    ("d", "delete"),
+                ],
+                ModuleId::Operations => &[("enter", "run"), ("x", "drop"), ("esc", "clear")],
+                ModuleId::Preview if self.audio_path.is_some() => &[
+                    ("space", "pause"),
+                    ("[/]", "track"),
+                    ("←/→", "seek"),
+                    ("+/-", "volume"),
+                    ("x", "stop"),
+                    ("o", "buttons"),
+                    ("w/W", "visualizer"),
+                    ("d", "seek style"),
+                    ("O", "external"),
+                ],
+                ModuleId::Preview => &[("j/k", "scroll"), ("i", "fold"), ("z", "scale")],
+            }
         };
         status::View {
             theme: &self.theme,
@@ -2205,7 +2236,17 @@ impl App {
             }
         }
 
-        let placement = if self.audio_path.is_some() {
+        let placement = if let Some(editor) = self.editor.as_mut() {
+            if let Err(error) = editor.render(regions.rect_of(ModuleId::Preview), buf, &self.theme)
+            {
+                self.note = Some((
+                    format!("Editor display failed: {error:#}"),
+                    NoteLevel::Error,
+                    Instant::now(),
+                ));
+            }
+            None
+        } else if self.audio_path.is_some() {
             self.draw_audio(regions.rect_of(ModuleId::Preview), buf);
             None
         } else {
@@ -2230,7 +2271,8 @@ impl App {
         let hotkeys_enabled = self.filter.is_none()
             && self.places.is_none()
             && !self.overlays.is_open()
-            && !self.g_pending;
+            && !self.g_pending
+            && self.editor.is_none();
         if self.commander {
             for pane in 0..self.panes.len() {
                 panels::highlight_header_hotkeys(
@@ -2641,6 +2683,7 @@ fn running_verb_upper(kind: OpKind) -> &'static str {
 mod tests {
     use super::*;
     use crate::ui::fake;
+    use crate::ui::overlays;
     use starkit::crossterm::event::KeyModifiers;
     use starkit::ratatui::style::Color;
 
@@ -2692,6 +2735,129 @@ mod tests {
             .expect("header word is visible");
         let (_, offset) = word.mnemonic().expect("header word has a key");
         buf[(slot.x + offset, slot.y)].fg
+    }
+
+    #[test]
+    fn heading_actions_open_a_centered_modal_without_a_new_shortcut() {
+        let (mut app, fk, _dir) = app();
+        fk.pump();
+        app.tick();
+        for width in [100, 60] {
+            let area = Rect::new(0, 0, width, 30);
+            app.draw(area, &mut Buffer::empty(area));
+            let regions = app.layout.last.as_ref().unwrap();
+            let stack = regions.rect_of(ModuleId::Stack);
+            let overlay_area = regions.area;
+            let (_, slot) = header::slots(stack, &panels::words(ModuleId::Stack))
+                .into_iter()
+                .find(|(word, _)| *word == panels::Word::Actions)
+                .expect("actions is visible in the stack heading");
+            app.mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                slot.x,
+                slot.y,
+            ));
+            let Some(Overlay::Context(menu)) = app.overlays.current() else {
+                panic!("expected file actions modal")
+            };
+            assert_eq!(menu.target.clicked, app.view.cursor_path.clone().unwrap());
+            assert!(menu
+                .actions
+                .contains(&overlays::context::Action::CreateFile));
+            assert!(menu.actions.contains(&overlays::context::Action::Delete));
+            assert_eq!(menu.rect(overlay_area).x, overlay_area.x + (width - 26) / 2);
+            app.key(code(KeyCode::Esc));
+        }
+        assert_eq!(panels::Word::Actions.mnemonic(), None);
+        assert_eq!(keymap::module(keymap::Module::Stack, key('N')), None);
+        assert_eq!(
+            keymap::module(keymap::Module::Stack, code(KeyCode::F(7))),
+            None
+        );
+    }
+
+    #[test]
+    fn heading_actions_use_the_clicked_commander_pane() {
+        let (mut app, fk, _dir) = app();
+        fk.pump();
+        app.key(key('v'));
+        app.focus_pane(1);
+        let empty = fk.fixture.path("empty");
+        app.core.send(Command::Push(empty.clone()));
+        fk.pump();
+        app.tick();
+        app.focus_pane(0);
+
+        let area = Rect::new(0, 0, 60, 21);
+        app.draw(area, &mut Buffer::empty(area));
+        let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
+        let right = pane_rect(stack, 1);
+        let (_, slot) = header::slots(right, &panels::words(ModuleId::Stack))
+            .into_iter()
+            .find(|(word, _)| *word == panels::Word::Actions)
+            .expect("actions is visible in a narrow commander pane");
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            slot.x,
+            slot.y,
+        ));
+        assert_eq!(app.active_pane, 1);
+        let Some(Overlay::Context(menu)) = app.overlays.current() else {
+            panic!("expected directory actions modal")
+        };
+        assert_eq!(menu.target.create_dir, empty);
+        assert_eq!(
+            menu.actions,
+            vec![
+                overlays::context::Action::CreateFile,
+                overlays::context::Action::CreateDirectory,
+            ]
+        );
+    }
+
+    #[test]
+    fn control_click_opens_actions_and_physical_right_click_is_opt_in() {
+        let (mut app, fk, _dir) = app();
+        fk.pump();
+        app.tick();
+        let area = Rect::new(0, 0, 100, 30);
+        app.draw(area, &mut Buffer::empty(area));
+        let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
+        let list = panels::stack::split(
+            header::body(stack),
+            app.view.crumbs.len(),
+            app.layout.fold_rows,
+        )
+        .list;
+        let x = list.x + 2;
+        let y = list.y;
+
+        app.mouse(mouse(MouseEventKind::Down(MouseButton::Right), x, y));
+        assert!(!app.overlays.is_open());
+
+        let mut control = mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+        control.modifiers = KeyModifiers::CONTROL;
+        app.mouse(control);
+        assert!(matches!(app.overlays.current(), Some(Overlay::Context(_))));
+        app.key(code(KeyCode::Esc));
+
+        control.row = list.y + app.view.rows.len() as u16 + 1;
+        app.mouse(control);
+        let Some(Overlay::Context(menu)) = app.overlays.current() else {
+            panic!("expected actions for the current directory")
+        };
+        assert_eq!(
+            menu.actions,
+            vec![
+                overlays::context::Action::CreateFile,
+                overlays::context::Action::CreateDirectory,
+            ]
+        );
+        app.key(code(KeyCode::Esc));
+
+        app.cfg.ui.right_click = true;
+        app.mouse(mouse(MouseEventKind::Down(MouseButton::Right), x, y));
+        assert!(matches!(app.overlays.current(), Some(Overlay::Context(_))));
     }
 
     #[test]
@@ -2821,16 +2987,15 @@ mod tests {
             0,
         );
         let list = panels::stack::split(header::body(left), 0, 0).list;
-        app.mouse(mouse(
-            MouseEventKind::Down(MouseButton::Right),
-            list.x + 4,
-            list.y,
-        ));
+        let mut context_click = mouse(MouseEventKind::Down(MouseButton::Left), list.x + 4, list.y);
+        context_click.modifiers = KeyModifiers::CONTROL;
+        app.mouse(context_click);
         app.tick();
         assert_eq!(app.active_pane, 0);
         assert_eq!(fk.state().selection.len(), 0);
         assert!(matches!(app.overlays.current(), Some(Overlay::Context(_))));
         // Mark/unmark is now an explicit menu action.
+        app.key(code(KeyCode::Down));
         app.key(code(KeyCode::Down));
         app.key(code(KeyCode::Down));
         app.key(code(KeyCode::Enter));

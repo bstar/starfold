@@ -28,11 +28,14 @@ pub struct Target {
     /// The directory receiving a newly created item, independent of the
     /// opposite-pane destination used for copy and move.
     pub create_dir: PathBuf,
+    /// Edit appears only for regular, text-like files.
+    pub editable: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Open,
     Preview,
+    Edit,
     Mark,
     Copy,
     Move,
@@ -48,6 +51,7 @@ impl Action {
         match self {
             Self::Open => "Open",
             Self::Preview => "Preview",
+            Self::Edit => "Edit",
             Self::Mark => "Mark / unmark",
             Self::Copy => "Copy…",
             Self::Move => "Move…",
@@ -87,6 +91,9 @@ impl Menu {
                 Action::Compress,
             ]
         };
+        if target.editable {
+            actions.insert(2, Action::Edit);
+        }
         if !target.sources.is_empty()
             && target
                 .sources
@@ -115,6 +122,7 @@ impl Menu {
                 sources: Vec::new(),
                 destination: PathBuf::new(),
                 create_dir: PathBuf::new(),
+                editable: false,
             },
             actions: vec![Action::Copy, Action::Move],
             cursor: 0,
@@ -131,6 +139,14 @@ impl Menu {
             w,
             h,
         )
+    }
+    pub fn center_in(&mut self, area: Rect) {
+        let width = 26.min(area.width);
+        let height = (self.actions.len() as u16 + 2).min(area.height);
+        self.anchor = (
+            area.x + area.width.saturating_sub(width) / 2,
+            area.y + area.height.saturating_sub(height) / 2,
+        );
     }
     pub fn key(&mut self, k: KeyEvent) -> Option<Action> {
         match k.code {
@@ -301,6 +317,7 @@ mod tests {
             sources: vec!["/tmp/book.zip".into()],
             destination: "/tmp".into(),
             create_dir: "/tmp".into(),
+            editable: false,
         }
     }
     #[test]
@@ -308,6 +325,14 @@ mod tests {
         let m = Menu::new(target(), (98, 29));
         assert!(m.actions.contains(&Action::Extract));
         assert_eq!(m.target.sources.len(), 1);
+    }
+    #[test]
+    fn edit_appears_only_for_an_editable_target() {
+        let mut text = target();
+        text.editable = true;
+        let menu = Menu::new(text, (0, 0));
+        assert_eq!(menu.actions[2], Action::Edit);
+        assert!(!Menu::new(target(), (0, 0)).actions.contains(&Action::Edit));
     }
     #[test]
     fn format_cycle_changes_suffix_and_queued_format() {

@@ -10,6 +10,7 @@ mod audio_graphics;
 #[cfg(test)]
 mod commander_tests;
 pub mod dnd;
+pub mod editor;
 #[cfg(test)]
 pub mod fake;
 #[cfg(test)]

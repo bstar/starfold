@@ -19,7 +19,7 @@ The header highlights each word's keyboard letter. `n` also toggles hidden
 files, `f` also opens the filter, and `e` also opens Places. The existing
 `.`, `/`, and `b` keys still work. Preview's `c` and Operations' `r`/`c` work only
 when that module has focus. The back arrow keeps its `h` navigation key.
-`N` creates an empty file and `F7` creates a directory in the active location.
+Click `actions` in the stack heading to open the modal file actions menu.
 
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
 the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
@@ -67,8 +67,6 @@ _in the stack_
 | `gr`           | the root |
 | `o`            | open externally |
 | `r`            | rename |
-| `N`            | new file |
-| `F7`           | new directory |
 | `F5/ctrl+r`    | reload |
 
 ## selection
@@ -159,14 +157,16 @@ and `d` cycles seek-bar styles; these choices persist separately for STAR/FOLD.
 These controls are scoped to Preview;
 browser navigation, marking, global focus shortcuts, and quit keep their
 normal meanings. The player's transport, seek, and volume controls are also
-clickable. Left-click a visualizer to cycle it; right-click a visualizer or
-seek bar to cycle the seek style; wheel over a visualizer cycles it.
+clickable. Left-click a visualizer to cycle it; Ctrl+click a visualizer or
+seek bar to cycle the seek style; wheel over a visualizer cycles it. Physical
+right-click does the same when `[ui] right_click = true`.
 
 | where | gesture | what it does |
 |---|---|---|
 | stack    | click                 | move the cursor |
 | stack    | double-click          | open it |
-| stack    | right-click           | actions menu |
+| stack    | ctrl+click            | actions menu |
+| stack    | right-click           | actions if enabled |
 | stack    | click a crumb         | jump there |
 | stack    | wheel                 | scroll three rows |
 | modules  | click a fold          | open it |

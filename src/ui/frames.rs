@@ -406,11 +406,19 @@ fn the_rename_overlay_opens_on_the_cursor_entry() {
 fn create_dialogs_at_both_terminal_sizes() {
     for (w, h) in [(100, 30), (60, 21)] {
         let (mut app, fk) = build("terminal");
-        settle(&mut app, &fk);
-        app.key(key('N'));
+        cursor_to(&mut app, &fk, "blob.bin");
+        app.key(code(KeyCode::Menu));
+        for _ in 0..6 {
+            app.key(code(KeyCode::Down));
+        }
+        app.key(code(KeyCode::Enter));
         insta::assert_snapshot!(format!("create-file-{w}x{h}"), render(&mut app, w, h));
         app.key(code(KeyCode::Esc));
-        app.key(code(KeyCode::F(7)));
+        app.key(code(KeyCode::Menu));
+        for _ in 0..7 {
+            app.key(code(KeyCode::Down));
+        }
+        app.key(code(KeyCode::Enter));
         insta::assert_snapshot!(format!("create-directory-{w}x{h}"), render(&mut app, w, h));
     }
 }

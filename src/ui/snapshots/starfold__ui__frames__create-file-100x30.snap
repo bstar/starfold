@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: "render(&mut app, w, h)"
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
-║                                                  ‹  hidden  sort  filter  Bookmark  places  view ║
+║                                         ‹  hidden  sort  filter  Bookmark  places  view  actions ║
 ║─ ~ ── 3 files · 3 dirs · 290 B ──────────────────────────────────────────────────────────────────║
 ║    ▸ empty/                                                       dir             -  Sep 10      ║
 ║    ▸ pictures/                                                    dir             -  Sep 10      ║
@@ -19,13 +19,13 @@ expression: "render(&mut app, w, h)"
 ║                   ║                                                          ║                   ║
 ║                   ║                                                          ║                   ║
 ╚═══════════════════╚═══════════════════════════════ enter create · esc cancel ╝═══════════════════╝
-╔═ PREVIEW — ▸ empty ══════════════════════════════════════════════════════════════════════════════╗
+╔═ PREVIEW — ◇ blob.bin ═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
-║                                                                    Tree · 0 files · 0 dirs shown ║
-║ Empty directory                                                                                  ║
-║                                                                                                  ║
-║                                                                                                  ║
-║                                                                                                  ║
+║                                                                                    File metadata ║
+║ Type: application/octet-stream                                                                   ║
+║ Size: 256 B                                                                                      ║
+║ Permissions: -rw-r--r--                                                                          ║
+║ Modified: 2026-09-10T12:00:00Z                                                                   ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                       run  clear ║

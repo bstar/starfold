@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: "render(&mut app, 60, 21)"
 ---
 ╔═ S T A R / F O L D › LEFT ═╗╔═ RIGHT ════════ commander ═╗
-║     Bookmark  places  view ║║     Bookmark  places  view ║
+║      places  view  actions ║║      places  view  actions ║
 ║─ ~ ────────────────────────║║─ ~ ────────────────────────║
 ║    ▸ empty/                ║║    ▸ empty/                ║
 ║    ▸ pictures/             ║║    ▸ pictures/             ║

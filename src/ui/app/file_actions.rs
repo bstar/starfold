@@ -1,8 +1,18 @@
 //! Semantic file actions and incremental preview navigation.
 use super::*;
+use crate::fold::create::Kind as CreateKind;
 use crate::ui::overlays;
 use std::path::Path;
 impl App {
+    pub(super) fn open_actions_modal(&mut self) {
+        self.open_file_menu(0, 0);
+        if let (Some(regions), Some(Overlay::Context(menu))) =
+            (self.layout.last.as_ref(), self.overlays.current_mut())
+        {
+            menu.center_in(regions.area);
+        }
+    }
+
     pub(super) fn open_directory_menu(&mut self, x: u16, y: u16) {
         let dir = self.view.active_dir.clone();
         self.overlays.open_context(
@@ -12,6 +22,7 @@ impl App {
                 sources: vec![],
                 destination: dir.clone(),
                 create_dir: dir,
+                editable: false,
             },
             (x, y),
         );
@@ -85,6 +96,7 @@ impl App {
                 sources,
                 destination,
                 create_dir,
+                editable: crate::ui::editor::is_editable(entry),
             }
         } else {
             drop(state);
@@ -120,6 +132,7 @@ impl App {
                 self.layout.focus_set(ModuleId::Preview);
                 self.core.send(Command::Preview(target.clicked));
             }
+            A::Edit => self.start_editor(target.clicked),
             A::Mark => self.core.send(Command::ToggleMarkPath(target.clicked)),
             A::Rename => self.overlays.open_rename(target.clicked),
             A::CreateFile => self
@@ -196,6 +209,23 @@ mod tests {
         app.key(key(KeyCode::Enter));
     }
 
+    fn choose_create(app: &mut App, action: overlays::context::Action) {
+        app.open_actions_modal();
+        let Some(Overlay::Context(menu)) = app.overlays.current() else {
+            panic!("expected the file actions menu")
+        };
+        let index = menu
+            .actions
+            .iter()
+            .position(|item| *item == action)
+            .unwrap();
+        for _ in 0..index {
+            app.key(key(KeyCode::Down));
+        }
+        app.key(key(KeyCode::Enter));
+        assert!(matches!(app.overlays.current(), Some(Overlay::Create(_))));
+    }
+
     fn app() -> (App, crate::ui::fake::Fake) {
         let cfg = crate::config::Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
@@ -225,8 +255,7 @@ mod tests {
     #[test]
     fn new_file_is_created_by_worker_and_selected_in_fold() {
         let (mut app, fake) = app();
-        app.key(key(KeyCode::Char('N')));
-        assert!(matches!(app.overlays.current(), Some(Overlay::Create(_))));
+        choose_create(&mut app, overlays::context::Action::CreateFile);
         type_name(&mut app, "new note.txt");
         let path = fake.fixture.path("new note.txt");
         assert!(!path.exists(), "creation should wait for the IO worker");
@@ -236,7 +265,7 @@ mod tests {
         assert_eq!(app.view.cursor_path.as_ref(), Some(&path));
         assert!(app.view.rows.iter().any(|row| row.name == "new note.txt"));
 
-        app.key(key(KeyCode::Char('N')));
+        choose_create(&mut app, overlays::context::Action::CreateFile);
         type_name(&mut app, "new note.txt");
         fake.pump();
         app.tick();
@@ -247,7 +276,7 @@ mod tests {
     #[test]
     fn new_hidden_file_becomes_visible_and_selected() {
         let (mut app, fake) = app();
-        app.key(key(KeyCode::Char('N')));
+        choose_create(&mut app, overlays::context::Action::CreateFile);
         type_name(&mut app, ".new-hidden");
         fake.pump();
         app.tick();
@@ -283,7 +312,7 @@ mod tests {
         fake.pump();
         app.tick();
         assert!(fake.fixture.path("empty/inside.txt").is_file());
-        app.key(key(KeyCode::F(7)));
+        choose_create(&mut app, overlays::context::Action::CreateDirectory);
         type_name(&mut app, "nested");
         let path = fake.fixture.path("empty/nested");
         assert!(!path.exists());
@@ -303,7 +332,7 @@ mod tests {
         app.key(key(KeyCode::Char('v')));
         app.refresh();
         let source_dir = app.view.active_dir.clone();
-        app.key(key(KeyCode::F(7)));
+        choose_create(&mut app, overlays::context::Action::CreateDirectory);
         type_name(&mut app, "from left");
         app.key(key(KeyCode::Tab));
         let right_dir = app.view.active_dir.clone();
@@ -330,6 +359,24 @@ mod tests {
             .state()
             .selection
             .is_marked(&fake.fixture.path("blob.bin")));
+    }
+    #[test]
+    fn edit_is_available_for_text_but_not_binary() {
+        let (mut app, _fake) = app();
+        cursor(&mut app, "notes.txt");
+        app.open_actions_modal();
+        let Some(Overlay::Context(menu)) = app.overlays.current() else {
+            panic!("expected actions menu")
+        };
+        assert!(menu.actions.contains(&overlays::context::Action::Edit));
+        app.key(key(KeyCode::Esc));
+
+        cursor(&mut app, "blob.bin");
+        app.open_actions_modal();
+        let Some(Overlay::Context(menu)) = app.overlays.current() else {
+            panic!("expected actions menu")
+        };
+        assert!(!menu.actions.contains(&overlays::context::Action::Edit));
     }
     #[test]
     fn compression_is_visible_in_operations_before_it_runs() {

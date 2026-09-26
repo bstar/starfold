@@ -59,6 +59,12 @@ toml = "0.9"
 # this program, because nothing in it waits on a socket.
 crossbeam-channel = "0.5"
 
+# A terminal editor lives inside PREVIEW: a PTY runs the user's editor and
+# a bounded terminal parser turns its output into panel cells.
+portable-pty = "0.9"
+vt100 = "0.16"
+shell-words = "1.1"
+
 # Timestamps. `jiff` rather than `chrono` or `time`, as in STAR/CORD: a file's
 # modification time is shown in the reader's local zone, and it is the one
 # crate that carries a tzdb and gets local time right without a separate

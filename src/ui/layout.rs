@@ -128,6 +128,9 @@ pub struct LayoutState {
     /// An embedded player reserves ten body rows when possible, five at
     /// the terminal floor, temporarily borrowing rows from the file list.
     pub audio_active: bool,
+    /// An embedded terminal editor takes the available vertical room in
+    /// Preview while it owns keyboard focus.
+    pub editor_active: bool,
     /// `[ui] preview_rows`: how far PREVIEW grows when it is open but not
     /// focused.
     pub preview_rows: u16,
@@ -149,6 +152,7 @@ impl LayoutState {
             focus: ModuleId::Stack,
             preview_open: true,
             audio_active: false,
+            editor_active: false,
             preview_rows,
             ops_rows,
             fold_rows,
@@ -186,7 +190,11 @@ impl LayoutState {
         // Everyone at their floor is the baseline; `room` is how much taller
         // than that the body is. The `MIN_ROWS` check above guarantees this
         // does not underflow.
-        let stack_min = if self.audio_active { 8 } else { STACK_MIN_ROWS };
+        let stack_min = if self.audio_active || self.editor_active {
+            8
+        } else {
+            STACK_MIN_ROWS
+        };
         let room = body.height - stack_min - 2 * COLLAPSED_ROWS;
 
         // OPERATIONS only grows while focused, and then it is served first:
@@ -206,7 +214,9 @@ impl LayoutState {
         // while the stack has focus: at thirty rows the room is nine, and a
         // preview of ten pinned the listing to its seven-row floor, which
         // made a roomy terminal feel like the smallest one allowed.
-        let preview_desired = if self.audio_active {
+        let preview_desired = if self.editor_active {
+            room
+        } else if self.audio_active {
             9 // 13 outer rows: border + header + ten-row player body.
         } else if !self.preview_open {
             0

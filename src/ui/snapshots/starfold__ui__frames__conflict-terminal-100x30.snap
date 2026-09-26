@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: "render(&mut app, 100, 30)"
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
-║                                                  ‹  hidden  sort  filter  Bookmark  places  view ║
+║                                         ‹  hidden  sort  filter  Bookmark  places  view  actions ║
 ║▸ ~                                                                                        6 items║
 ║─ empty/ ── 1 files · 0 dirs · 256 B ─────────────────────────────────────────────────────────────║
 ║○   ◇ blob.bin                                                     bin         256 B  Sep 10      ║

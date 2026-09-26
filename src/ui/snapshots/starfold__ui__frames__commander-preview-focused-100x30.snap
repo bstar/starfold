@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: preview_focused
 ---
 ╔═ S T A R / F O L D — LEFT ═════════ commander ═╗╔═ › RIGHT ══════════════════════════ commander ═╗
-║   hidden  sort  filter  Bookmark  places  view ║║   hidden  sort  filter  Bookmark  places  view ║
+║  sort  filter  Bookmark  places  view  actions ║║  sort  filter  Bookmark  places  view  actions ║
 ║─ ~/pictures ───────────────────────────────────║║─ ~/empty ──────────────────────────────────────║
 ║    ▧ harbour.png                          482 B║║                                                ║
 ║                                                ║║                                                ║

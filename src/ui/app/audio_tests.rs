@@ -160,12 +160,12 @@ fn left_click(x: u16, y: u16) -> MouseEvent {
 }
 
 #[cfg(unix)]
-fn right_click(x: u16, y: u16) -> MouseEvent {
+fn ctrl_click(x: u16, y: u16) -> MouseEvent {
     MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Right),
+        kind: MouseEventKind::Down(MouseButton::Left),
         column: x,
         row: y,
-        modifiers: KeyModifiers::NONE,
+        modifiers: KeyModifiers::CONTROL,
     }
 }
 
@@ -473,7 +473,7 @@ fn player_styles_are_scoped_to_preview_and_profile_is_capability_gated() {
     );
 
     let body = audio_body(app.layout.last.as_ref().unwrap().rect_of(ModuleId::Preview));
-    app.mouse(right_click(body.x + 1, body.y + 1));
+    app.mouse(ctrl_click(body.x + 1, body.y + 1));
     wait_for(|| {
         messages(&log)
             .iter()
@@ -507,7 +507,7 @@ fn player_styles_are_scoped_to_preview_and_profile_is_capability_gated() {
             .unwrap()
             .rect_of(ModuleId::Preview),
     );
-    old_app.mouse(right_click(body.x + 1, body.y + 1));
+    old_app.mouse(ctrl_click(body.x + 1, body.y + 1));
     assert!(old_fake.state().queue.is_empty());
     assert!(old_app.audio_error.is_none());
     assert!(old_app

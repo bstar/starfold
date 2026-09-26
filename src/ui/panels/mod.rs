@@ -93,6 +93,7 @@ pub enum Word {
     View,
     Places,
     Bookmark,
+    Actions,
     /// `‹`: back one level, on the STACK module -- where a browser keeps it.
     Back,
     Hidden,
@@ -108,7 +109,7 @@ impl Word {
     /// `Back` stays an arrow: `h` remains the Stack navigation key.
     pub fn mnemonic(self) -> Option<(char, u16)> {
         match self {
-            Word::Back => None,
+            Word::Back | Word::Actions => None,
             Word::Hidden => Some(('n', 5)),
             Word::Sort => Some(('s', 0)),
             Word::Filter => Some(('f', 0)),
@@ -127,6 +128,7 @@ impl header::Word for Word {
             Word::View => "view".into(),
             Word::Places => "places".into(),
             Word::Bookmark => "Bookmark".into(),
+            Word::Actions => "actions".into(),
             Word::Back => "\u{2039}".into(),
             Word::Hidden => "hidden".into(),
             Word::Sort => "sort".into(),
@@ -180,6 +182,7 @@ pub fn words(module: ModuleId) -> Vec<Word> {
             Word::Bookmark,
             Word::Places,
             Word::View,
+            Word::Actions,
         ],
         ModuleId::Preview => vec![Word::Close],
         ModuleId::Operations => vec![Word::Run, Word::Clear],
@@ -377,6 +380,7 @@ mod tests {
                                 | Word::View
                                 | Word::Places
                                 | Word::Bookmark
+                                | Word::Actions
                         )
                     }
                     ModuleId::Preview => matches!(w, Word::Close),

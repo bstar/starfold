@@ -35,6 +35,9 @@ pub struct Ui {
     /// whose window has no padding of its own.
     pub padding_x: u16,
     pub padding_y: u16,
+    /// Let physical right-click events reach mouse actions. Ctrl+click is
+    /// always the portable alternative.
+    pub right_click: bool,
     pub show_hidden: bool,
     pub sort: fold::sort::SortKey,
     pub sort_reverse: bool,
@@ -58,6 +61,7 @@ impl Default for Ui {
             graphics: "auto".into(),
             padding_x: 0,
             padding_y: 0,
+            right_click: false,
             show_hidden: false,
             sort: fold::sort::SortKey::Name,
             sort_reverse: false,
@@ -329,6 +333,8 @@ graphics = "auto"
 # Blank cells around the whole layout, for a terminal whose window has none.
 padding_x = 0
 padding_y = 0
+# Enable physical right-click mouse actions; Ctrl+click always works.
+right_click = false
 show_hidden = false
 # name, size, time, or ext.
 sort = "name"
@@ -435,6 +441,15 @@ mod tests {
         assert_eq!(c.ui.padding_x, 2);
         assert_eq!(c.ui.theme, Config::default().ui.theme);
         assert_eq!(c.ops, Ops::default());
+    }
+
+    #[test]
+    fn right_click_is_opt_in_and_round_trips() {
+        assert!(!Config::default().ui.right_click);
+        let enabled: Config = toml::from_str("[ui]\nright_click = true\n").unwrap();
+        assert!(enabled.ui.right_click);
+        let restored: Config = toml::from_str(&toml::to_string(&enabled).unwrap()).unwrap();
+        assert!(restored.ui.right_click);
     }
 
     #[test]

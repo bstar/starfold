@@ -39,14 +39,20 @@ The cache is memory-only and defaults to 32 MiB. See [configuration](configurati
 
 ## Right-click actions
 
-Right-click a listing entry, or use Menu / Shift+F10. Up/Down or j/k selects an
+Click `actions` in the stack heading for a centered modal, Ctrl+click a listing
+entry, or use Menu / Shift+F10. Physical right-click also opens the menu when
+`[ui] right_click = true`. Up/Down or j/k selects an
 action; Enter activates it. Escape and clicking outside dismiss the menu. Opening
 the menu does not toggle marks. Mark/unmark remains in the menu and on Space.
-Right-click empty listing space, or open the menu in an empty directory, for
+Ctrl+click empty listing space, or open the menu in an empty directory, for
 New file and New directory. Both create in the active directory immediately;
 they never overwrite an existing name.
 
-Open, Preview and Rename apply to the clicked entry. Copy, Move, Delete,
+Open, Preview, Edit and Rename apply to the clicked entry. Edit appears for
+regular text-like files and links to them; it runs `$VISUAL`, then `$EDITOR`,
+or `vi` when neither is set, inside the Preview panel. Save and quit with that
+editor's own keys. When it exits, STAR/FOLD refreshes the listing and preview.
+Copy, Move, Delete,
 Compress and Extract apply to the marked set if the clicked entry is marked;
 otherwise they apply only to that entry, preserving unrelated marks.
 

@@ -3,7 +3,7 @@ source: src/ui/frames.rs
 expression: floor
 ---
 ╔═ S T A R / F O L D › LEFT ═╗╔═ RIGHT ════════ commander ═╗
-║     Bookmark  places  view ║║     Bookmark  places  view ║
+║      places  view  actions ║║      places  view  actions ║
 ║─ ~/pictures ───────────────║║─ ~ ────────────────────────║
 ║    ▧ harbour.png           ║║    ▸ empty/                ║
 ║                            ║║    ▸ pictures/             ║
