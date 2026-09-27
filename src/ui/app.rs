@@ -296,10 +296,16 @@ pub struct App {
     ops_cursor: usize,
     ops_scroll: usize,
     unmount_started: Option<(PathBuf, Instant)>,
+    animation_started: Instant,
     /// Every scrollbar the column drew last frame, and the one a press is
     /// holding -- see `starkit::chrome::scrollbar::Scrollbars`'s own doc for
     /// the contract [`App::scroll_bar_to`] keeps with it.
     bars: Bars,
+    /// A late OSC 72 offer still belongs to the last scrollbar gesture
+    /// until a new left press begins elsewhere.
+    suppress_dnd_offer_until_press: bool,
+    /// Destination edge currently driving an OSC 72 hover scroll.
+    dnd_edge: Option<(Bar, i8, Instant)>,
     clicks: ClickTracker,
     /// Throw away what the diff believes is on the screen next frame -- see
     /// STAR/CORD's own `repaint` field, copied here for the same reason: an
@@ -729,6 +735,7 @@ impl App {
             scroll: self.scroll.get(&p.key).copied().unwrap_or(0),
             fold_rows: 0,
             loading: p.loading,
+            loading_spinner: self.reading_spinner(),
             filter: if p.filter.is_empty() {
                 None
             } else {
@@ -795,7 +802,10 @@ impl App {
             ops_cursor: 0,
             ops_scroll: 0,
             unmount_started: None,
+            animation_started: Instant::now(),
             bars: Bars::new(),
+            suppress_dnd_offer_until_press: false,
+            dnd_edge: None,
             clicks: ClickTracker::new(),
             repaint: true,
             quit: false,
@@ -933,6 +943,8 @@ impl App {
         }
         self.refresh();
 
+        self.dnd_autoscroll();
+
         self.poll_editor();
 
         self.poll_audio();
@@ -1065,7 +1077,19 @@ impl App {
             search
                 .results
                 .iter()
-                .map(|entry| build_row(entry, &state.selection, &self.tz, now))
+                .map(|entry| {
+                    let mut row = build_row(entry, &state.selection, &self.tz, now);
+                    if let Some(excerpt) = search.excerpts.get(&entry.path) {
+                        let basename = entry
+                            .path
+                            .file_name()
+                            .map(|name| name.to_string_lossy())
+                            .unwrap_or_default();
+                        let line = excerpt.strip_prefix("line ").unwrap_or(excerpt);
+                        row.name = format!("{basename}:{line} · {}", entry.display);
+                    }
+                    row
+                })
                 .collect()
         } else {
             state
@@ -1102,18 +1126,35 @@ impl App {
                 crate::fold::search::Status::Complete => "complete",
                 crate::fold::search::Status::Cancelled => "cancelled",
                 crate::fold::search::Status::Limited => "limit reached",
+                crate::fold::search::Status::Partial => "partial",
             };
-            format!(
-                "search: {} · {} matches · {} scanned · {status}{}",
-                search.query,
-                search.results.len(),
-                search_progress,
-                if search.errors.is_empty() {
-                    String::new()
-                } else {
-                    " · unreadable paths".to_string()
-                }
-            )
+            if search.mode == crate::fold::search::Mode::Contents {
+                format!(
+                    "content: {} · {status} · {} matches · {} binary · {} large · {} scanned{}",
+                    search.query,
+                    search.results.len(),
+                    search.skipped_binary,
+                    search.skipped_large,
+                    search_progress,
+                    if search.errors.is_empty() {
+                        ""
+                    } else {
+                        " · unreadable"
+                    }
+                )
+            } else {
+                format!(
+                    "search: {} · {} matches · {} scanned · {status}{}",
+                    search.query,
+                    search.results.len(),
+                    search_progress,
+                    if search.errors.is_empty() {
+                        ""
+                    } else {
+                        " · unreadable paths"
+                    }
+                )
+            }
         } else {
             match state.dir_stats() {
                 Some((files, dirs, bytes)) => format!(
@@ -1309,6 +1350,7 @@ impl App {
             self.editor_key(k);
             return;
         }
+
         if self.dnd.choice.is_some() && k.code == KeyCode::Esc && !self.overlays.is_open() {
             self.dnd_cancel_choice();
             return;
@@ -1425,11 +1467,15 @@ impl App {
             Answer::Renamed { from, to } => {
                 self.core.send(Command::QueueRename { from, to });
             }
-            Answer::Search(query) => {
+            Answer::Search(query, mode) => {
                 self.filter = None;
-                self.core.send(Command::StartSearch(query));
+                self.core.send(match mode {
+                    crate::fold::search::Mode::Names => Command::StartSearch(query),
+                    crate::fold::search::Mode::Contents => Command::StartContentSearch(query),
+                });
                 self.layout.focus_set(ModuleId::Stack);
             }
+            Answer::Sort(order) => self.core.send(Command::SetSort(order)),
             Answer::Created { dir, kind, name } => {
                 self.filter = None;
                 self.core.send(Command::Create { dir, kind, name });
@@ -1520,14 +1566,18 @@ impl App {
             }),
             Action::FileActions => self.open_actions_modal(),
             Action::Search => {
-                let query = self
-                    .core
-                    .state()
+                let current = self.core.state();
+                let query = current
                     .search
                     .as_ref()
-                    .map(|search| search.query.clone())
-                    .unwrap_or_default();
-                self.overlays.open_search(&query);
+                    .map(|search| search.query.as_str())
+                    .unwrap_or("");
+                let mode = current
+                    .search
+                    .as_ref()
+                    .map(|search| search.mode)
+                    .unwrap_or(crate::fold::search::Mode::Names);
+                self.overlays.open_search(query, mode);
                 self.repaint = true;
             }
             Action::JumpUp => {
@@ -1571,7 +1621,8 @@ impl App {
             Action::InvertMarks => self.core.send(Command::InvertMarks),
             Action::ClearMarks => self.core.send(Command::ClearMarks),
 
-            Action::QueueCopy => self.core.send(Command::QueueCopyHere),
+            Action::Yank => self.core.send(Command::Yank),
+            Action::Paste => self.core.send(Command::PasteHere),
             Action::QueueMove => self.core.send(Command::QueueMoveHere),
             Action::QueueDelete => self.core.send(Command::QueueDelete),
             Action::RunQueue | Action::RunOp => self.try_run(),
@@ -1604,11 +1655,7 @@ impl App {
                 self.layout.toggle_preview();
             }
             Action::ToggleHidden => self.core.send(Command::SetHidden(!self.view.show_hidden)),
-            Action::NextSortKey => {
-                let mut sort = self.view.sort;
-                sort.key = sort.key.next();
-                self.core.send(Command::SetSort(sort));
-            }
+            Action::NextSortKey => self.overlays.open_sort(self.view.sort),
             Action::ReverseSort => {
                 let mut sort = self.view.sort;
                 sort.reverse = !sort.reverse;
@@ -1903,28 +1950,48 @@ impl App {
             return;
         }
 
-        // Every scrollbar's own drag, ahead of both the overlay dispatch and
-        // the module one below -- a press or a drag that lands on a bar is
-        // never anything else's to answer, overlay open or not, because only
-        // the bars actually recorded this frame (see `draw`'s two
-        // `begin_frame`s) are ones `press` can find.
-        match kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                if let Some((bar, above)) = self.bars.press(m.column, m.row) {
-                    self.scroll_bar_to(bar, above);
-                    return;
+        // The press that grabbed a scrollbar owns every mouse event until
+        // release, even after the pointer leaves the track.
+        if self.bars.held().is_some() {
+            match kind {
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some((bar, above)) = self.bars.drag(m.row) {
+                        self.scroll_bar_to(bar, above);
+                    }
                 }
-            }
-            MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some((bar, above)) = self.bars.drag(m.row) {
-                    self.scroll_bar_to(bar, above);
-                    return;
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.bars.release();
                 }
+                _ => {}
             }
-            MouseEventKind::Up(MouseButton::Left) => {
-                self.bars.release();
+            return;
+        }
+
+        // While OSC 72 owns a file drag, mouse reports must not turn a pass
+        // over a scrollbar into a new grab or wheel-scroll the source pane.
+        if (self.dnd.drag_active || self.dnd.hover_coords.is_some())
+            && matches!(
+                kind,
+                MouseEventKind::Down(MouseButton::Left)
+                    | MouseEventKind::Drag(MouseButton::Left)
+                    | MouseEventKind::Up(MouseButton::Left)
+                    | MouseEventKind::ScrollDown
+                    | MouseEventKind::ScrollUp
+            )
+        {
+            return;
+        }
+
+        // A new scrollbar grab begins only with a press on a recorded track.
+        if kind == MouseEventKind::Down(MouseButton::Left) {
+            if let Some((bar, above)) = self.bars.press(m.column, m.row) {
+                self.suppress_dnd_offer_until_press = true;
+                self.scroll_bar_to(bar, above);
+                return;
             }
-            _ => {}
+            self.suppress_dnd_offer_until_press = false;
+        } else if kind == MouseEventKind::Up(MouseButton::Left) {
+            return;
         }
 
         if self.overlays.is_open() {
@@ -2205,11 +2272,7 @@ impl App {
             panels::Word::Bookmark => self.act(Action::Bookmark),
             panels::Word::Back => self.core.send(Command::Back),
             panels::Word::Hidden => self.core.send(Command::SetHidden(!self.view.show_hidden)),
-            panels::Word::Sort => {
-                let mut sort = self.view.sort;
-                sort.key = sort.key.next();
-                self.core.send(Command::SetSort(sort));
-            }
+            panels::Word::Sort => self.overlays.open_sort(self.view.sort),
             panels::Word::Filter => self.act(Action::Filter),
             panels::Word::Actions => self.open_actions_modal(),
             panels::Word::Run => self.try_run(),
@@ -2231,6 +2294,7 @@ impl App {
             scroll: self.scroll.get(&self.view.frame_id).copied().unwrap_or(0),
             fold_rows: self.layout.fold_rows,
             loading: self.view.loading,
+            loading_spinner: self.reading_spinner(),
             filter: (!self.view.filter.is_empty()).then_some(self.view.filter.as_str()),
             error: self.view.error.as_deref(),
             truncated: self.view.truncated,
@@ -2260,6 +2324,11 @@ impl App {
         super::SPINNER[phase % super::SPINNER.len()]
     }
 
+    fn reading_spinner(&self) -> &'static str {
+        let phase = (self.animation_started.elapsed().as_millis() / 120) as usize;
+        super::SPINNER[phase % super::SPINNER.len()]
+    }
+
     fn status_view(&self, now: Instant) -> status::View<'_> {
         let hints: &[(&str, &str)] = if self.editor.is_some() {
             &[("editor", "use its save and quit keys")]
@@ -2276,7 +2345,8 @@ impl App {
                     ("/", "filter"),
                     ("space", "mark"),
                     ("enter", "open"),
-                    ("y", "copy"),
+                    ("y", "yank"),
+                    ("p", "paste"),
                     ("m", "move"),
                     ("d", "delete"),
                 ],
@@ -3129,6 +3199,7 @@ mod tests {
         assert_eq!(
             menu.actions,
             vec![
+                overlays::context::Action::CopyCurrentPath,
                 overlays::context::Action::CreateFile,
                 overlays::context::Action::CreateDirectory,
             ]
@@ -3169,6 +3240,7 @@ mod tests {
         assert_eq!(
             menu.actions,
             vec![
+                overlays::context::Action::CopyCurrentPath,
                 overlays::context::Action::CreateFile,
                 overlays::context::Action::CreateDirectory,
             ]
@@ -3471,7 +3543,7 @@ mod tests {
     }
 
     #[test]
-    fn y_then_shift_x_copies_the_marked_file_to_the_destination() {
+    fn yank_then_paste_and_run_copies_the_marked_file_to_the_destination() {
         let (mut app, fk, _dir) = app();
         let idx = row_index(&app, "blob.bin");
         for _ in 0..idx {
@@ -3483,10 +3555,12 @@ mod tests {
         fk.pump();
         app.tick();
 
+        app.key(key('y'));
+        fk.pump();
+        app.tick();
         fake::open(&app.core, &fk, "empty");
         app.tick();
-
-        app.key(key('y'));
+        app.key(key('p'));
         fk.pump();
         app.tick();
         app.key(key('X'));
@@ -3570,6 +3644,236 @@ mod tests {
             bottom,
         ));
         assert_eq!(app.bars.held(), None, "releasing lets go of the grab");
+    }
+
+    #[test]
+    fn scrollbar_gesture_cannot_offer_a_file_drag() {
+        let (mut app, fk, _dir) = app();
+        many_files(&fk, 40);
+        fake::open(&app.core, &fk, "many");
+        app.tick();
+        app.dnd.enabled = true;
+
+        let area = Rect::new(0, 0, 60, 21);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        let track = app.bars.track_of(Bar::Stack).unwrap();
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            track.x,
+            track.y,
+        ));
+        assert_eq!(app.bars.held(), Some(Bar::Stack));
+
+        // A terminal may report its OSC offer after the ordinary press.
+        app.dnd_message(&format!("t=o:x={}:y={};", track.x, track.y));
+        assert!(app.dnd.offer.is_none());
+        app.dnd_message(&format!(
+            "t=m:x={}:y={}:o=1:i=1;text/uri-list",
+            track.x.saturating_sub(4),
+            track.y
+        ));
+        assert!(app.dnd.hover_coords.is_none());
+        app.mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            track.x.saturating_sub(4),
+            track.bottom() - 1,
+        ));
+        assert_eq!(app.bars.held(), Some(Bar::Stack));
+        app.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            track.x.saturating_sub(4),
+            track.bottom() - 1,
+        ));
+        assert_eq!(app.bars.held(), None);
+
+        // Even if no ordinary press was seen, the track is not a file row.
+        app.dnd_message(&format!("t=o:x={}:y={};", track.x, track.y));
+        assert!(app.dnd.offer.is_none());
+        let file_x = track.x.saturating_sub(4);
+        app.dnd_message(&format!("t=o:x={file_x}:y={};", track.y));
+        assert!(
+            app.dnd.offer.is_none(),
+            "a late offer still belongs to the bar"
+        );
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            file_x,
+            track.y,
+        ));
+        app.dnd_message(&format!("t=o:x={}:y={};", file_x, track.y));
+        assert!(app.dnd.offer.is_some(), "file rows still start drags");
+    }
+
+    #[test]
+    fn drag_hover_updates_without_forcing_a_full_terminal_repaint() {
+        let (mut app, fk, _dir) = app();
+        fk.pump();
+        app.tick();
+        let area = Rect::new(0, 0, 60, 21);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
+        let x = stack.x + 4;
+        let y = stack.y + 3;
+        app.dnd.enabled = true;
+        app.repaint = false;
+
+        app.dnd_message(&format!("t=m:x={x}:y={y}:o=1:i=1;text/uri-list"));
+        assert!(app.dnd.hover.is_some());
+        assert!(!app.repaint);
+        app.dnd_message(&format!("t=m:x={x}:y={}:o=1:i=1;text/uri-list", y + 1));
+        assert!(!app.repaint);
+    }
+
+    #[test]
+    fn dropping_back_into_the_source_pane_is_rejected() {
+        let (mut app, fk, _dir) = app();
+        let source = fk.home().join("self-copy.txt");
+        std::fs::write(&source, b"source").unwrap();
+        app.core.send(Command::Reload);
+        fk.pump();
+        app.key(key('v'));
+        app.tick();
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
+        let left = pane_rect(stack, 0);
+        let x = left.x + 4;
+        let y = left.bottom() - 2;
+        app.dnd.offer = Some(wire_dnd::Offer {
+            sources: vec![source],
+            uri_text: String::new(),
+            source_stack: 1,
+        });
+        app.dnd.enabled = true;
+        app.dnd.drag_active = true;
+
+        assert!(app.dnd_target(i32::from(x), i32::from(y)).is_none());
+        app.dnd_message(&format!("t=m:x={x}:y={y}:o=1:i=1;text/uri-list"));
+        assert!(app.dnd.hover.is_none());
+        app.dnd_message(&format!("t=M:x={x}:y={y}:o=1:i=1;text/uri-list"));
+        assert!(app.dnd.choice.is_none());
+    }
+
+    #[test]
+    fn a_file_drag_freezes_its_source_and_scrolls_only_the_destination_edge() {
+        let (mut app, fk, _dir) = app();
+        let left_dir = fk.home().join("drag-source");
+        let right_dir = fk.home().join("drag-destination");
+        std::fs::create_dir(&left_dir).unwrap();
+        std::fs::create_dir(&right_dir).unwrap();
+        for i in 0..60 {
+            std::fs::write(left_dir.join(format!("file-{i:02}")), b"x").unwrap();
+            std::fs::write(right_dir.join(format!("file-{i:02}")), b"x").unwrap();
+        }
+        app.core.send(Command::RestoreCommander {
+            dirs: [left_dir.clone(), right_dir],
+            active: 0,
+            enabled: true,
+        });
+        fk.pump();
+        app.tick();
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
+        let left = pane_rect(stack, 0);
+        let right = pane_rect(stack, 1);
+        let source_track = app.bars.track_of(Bar::Commander(0)).unwrap();
+        let destination_track = app.bars.track_of(Bar::Commander(1)).unwrap();
+        let source_key = app.panes[0].key;
+        let destination_key = app.panes[1].key;
+        let source_scroll = app.scroll.get(&source_key).copied().unwrap_or(0);
+        let destination_scroll = app.scroll.get(&destination_key).copied().unwrap_or(0);
+        app.dnd.offer = Some(wire_dnd::Offer {
+            sources: vec![left_dir.join("file-00")],
+            uri_text: String::new(),
+            source_stack: 1,
+        });
+        app.dnd.enabled = true;
+        app.dnd.drag_active = true;
+
+        let x = right.x + 4;
+        let y = destination_track.bottom() - 1;
+        app.dnd.hover_coords = Some((x, y));
+        app.dnd.hover = app.dnd_target(i32::from(x), i32::from(y));
+        assert!(app.dnd.hover.is_some());
+        app.tick();
+        assert_eq!(app.scroll[&destination_key], destination_scroll + 1);
+        assert_eq!(app.scroll[&source_key], source_scroll);
+        assert_eq!(app.dnd.hover, app.dnd_target(i32::from(x), i32::from(y)));
+
+        // Continued edge hover advances on its timer, without new motion.
+        app.dnd_edge = Some((
+            Bar::Commander(1),
+            1,
+            Instant::now() - Duration::from_millis(121),
+        ));
+        fk.pump();
+        app.tick();
+        assert!(app.scroll[&destination_key] >= destination_scroll + 2);
+
+        let after_down = app.scroll[&destination_key];
+        app.dnd.hover_coords = Some((x, destination_track.y));
+        app.tick();
+        assert_eq!(app.scroll[&destination_key], after_down - 1);
+        app.dnd.hover_coords = Some((x, destination_track.y + destination_track.height / 2));
+        app.tick();
+        assert!(app.dnd_edge.is_none());
+        assert_eq!(app.scroll[&destination_key], after_down - 1);
+
+        app.mouse(mouse(
+            MouseEventKind::ScrollDown,
+            left.x + 4,
+            source_track.y + 2,
+        ));
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            destination_track.x,
+            destination_track.y,
+        ));
+        assert_eq!(app.scroll[&source_key], source_scroll);
+        assert_eq!(app.bars.held(), None);
+
+        let source_y = source_track.bottom() - 1;
+        app.dnd.hover_coords = Some((left.x + 4, source_y));
+        app.tick();
+        assert_eq!(app.scroll[&source_key], source_scroll);
+        app.dnd.hover_coords = None;
+        app.tick();
+        assert!(app.dnd_edge.is_none());
+        app.dnd_message("t=e:x=4:y=1:i=1;");
+        assert!(!app.dnd.drag_active);
+        assert!(app.dnd.hover_coords.is_none());
+    }
+
+    #[test]
+    fn an_incoming_file_drag_can_edge_scroll_the_fold_destination() {
+        let (mut app, fk, _dir) = app();
+        many_files(&fk, 40);
+        fake::open(&app.core, &fk, "many");
+        app.tick();
+        let area = Rect::new(0, 0, 60, 21);
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        let track = app.bars.track_of(Bar::Stack).unwrap();
+        let x = track.x - 4;
+        let y = track.bottom() - 1;
+        app.dnd.hover_coords = Some((x, y));
+        app.dnd.hover = app.dnd_target(i32::from(x), i32::from(y));
+        assert!(app.dnd.hover.is_some());
+        app.tick();
+        assert_eq!(app.scroll[&app.view.frame_id], 1);
+
+        let max = app.view.rows.len() - usize::from(track.height);
+        app.scroll_bar_to(Bar::Stack, max as u32);
+        fk.pump();
+        app.tick();
+        assert_eq!(app.scroll[&app.view.frame_id], max);
     }
 
     #[test]

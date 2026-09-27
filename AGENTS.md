@@ -59,7 +59,8 @@ on first use or session restore. The active stack's marks live in
 `State::selection`; inactive marks are parked per stack. Commander clears
 marks when that pane changes directory. Fold keeps its persistent marks.
 UI scroll keys are `(stack index, FrameId)` because frame IDs are local.
-Commander copy/move captures the opposite pane's path when enqueued.
+Commander moves capture the opposite pane's path when enqueued. Pastes copy
+the yanked paths into the active pane's directory.
 
 Places is a modal picker over worker-discovered mounted locations and
 `bookmarks.toml` beside configuration. Initial discovery, manual refresh and
@@ -167,8 +168,9 @@ for a worker to do it.
 
 ## Operations are transactional
 
-Nothing is copied, moved or deleted until the operations queue is run. `y`,
-`m` and `d` add to the queue; `enter` or `X` runs it; `esc` clears whatever
+Nothing is copied, moved or deleted until the operations queue is run. `y`
+saves paths for later pastes; `p`, `m` and `d` add to the queue; `enter` or `X`
+runs it; `esc` clears whatever
 has not started (a running op is left to finish, or is stopped with
 `ctrl+x`). A delete goes to the trash where the platform has one, and a
 permanent delete asks first. `plan` never follows a symlink, and a conflict
@@ -226,8 +228,8 @@ Build one, read `f.home()` or `f.path("relative/thing")`, and let the
 `TempDir` drop clean it up.
 
 `src/ui/fake.rs`'s `fake::handle(cfg) -> (Handle, Fake)` is how a UI test gets
-a `Handle` with no worker threads behind it: same `State::new`, same
-synchronous first listing as `Handle::spawn`, but the two job queues are
+a `Handle` with no worker threads behind it: same `State::new`, with a
+deterministic first listing for frame tests, but the two job queues are
 handed to a `Fake` instead of two spawned threads. Send a `Command` through
 the `Handle` exactly as the real UI would, then call `Fake::pump()` to drain
 both queues through `worker::perform_io`, `worker::perform_ops` and

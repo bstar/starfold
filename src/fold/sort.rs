@@ -17,29 +17,26 @@ pub enum SortKey {
     #[default]
     Name,
     Size,
+    #[serde(alias = "modified")]
     Time,
+    Created,
+    Accessed,
+    Type,
     /// The extension, then the name -- what a directory of mixed source files
     /// groups by when nothing else is asked for.
     Ext,
 }
 
 impl SortKey {
-    /// The next one round, for the key that cycles them.
-    pub fn next(self) -> Self {
-        match self {
-            SortKey::Name => SortKey::Size,
-            SortKey::Size => SortKey::Time,
-            SortKey::Time => SortKey::Ext,
-            SortKey::Ext => SortKey::Name,
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             SortKey::Name => "name",
             SortKey::Size => "size",
-            SortKey::Time => "time",
+            SortKey::Time => "modified",
             SortKey::Ext => "ext",
+            SortKey::Created => "created",
+            SortKey::Accessed => "accessed",
+            SortKey::Type => "type",
         }
     }
 }
@@ -161,13 +158,18 @@ pub fn order(entries: &[Entry], o: SortOrder, hidden: bool) -> Vec<usize> {
         let ordering = match o.key {
             SortKey::Name => natural_cmp(&lower_name(ea), &lower_name(eb)),
             SortKey::Size => ea.len.cmp(&eb.len),
-            SortKey::Time => eb.modified.cmp(&ea.modified),
+            SortKey::Time => date_cmp(ea.modified, eb.modified, o.reverse),
+            SortKey::Created => date_cmp(ea.created, eb.created, o.reverse),
+            SortKey::Accessed => date_cmp(ea.accessed, eb.accessed, o.reverse),
+            SortKey::Type => kind_rank(ea)
+                .cmp(&kind_rank(eb))
+                .then_with(|| natural_cmp(&lower_name(ea), &lower_name(eb))),
             SortKey::Ext => ea
                 .ext()
                 .cmp(&eb.ext())
                 .then_with(|| natural_cmp(&lower_name(ea), &lower_name(eb))),
         };
-        if o.reverse {
+        if o.reverse && !matches!(o.key, SortKey::Time | SortKey::Created | SortKey::Accessed) {
             ordering.reverse()
         } else {
             ordering
@@ -175,6 +177,27 @@ pub fn order(entries: &[Entry], o: SortOrder, hidden: bool) -> Vec<usize> {
     });
 
     indices
+}
+
+fn date_cmp(
+    a: Option<std::time::SystemTime>,
+    b: Option<std::time::SystemTime>,
+    reverse: bool,
+) -> std::cmp::Ordering {
+    // Missing timestamps stay last in both directions.
+    b.is_some()
+        .cmp(&a.is_some())
+        .then_with(|| if reverse { a.cmp(&b) } else { b.cmp(&a) })
+}
+
+fn kind_rank(entry: &Entry) -> u8 {
+    use super::entry::EntryKind;
+    match entry.kind {
+        EntryKind::Dir => 0,
+        EntryKind::File => 1,
+        EntryKind::Symlink => 2,
+        EntryKind::Other => 3,
+    }
 }
 
 #[cfg(test)]
@@ -201,6 +224,8 @@ mod tests {
             link_kind,
             len,
             modified,
+            created: None,
+            accessed: None,
             mode: 0,
             executable: false,
             hidden: name.starts_with('.'),
@@ -366,9 +391,44 @@ mod tests {
     }
 
     #[test]
-    fn the_key_cycles_round() {
-        assert_eq!(SortKey::Name.next(), SortKey::Size);
-        assert_eq!(SortKey::Ext.next(), SortKey::Name);
+    fn created_and_accessed_sort_independently_and_leave_unknown_dates_last() {
+        let now = crate::fold::testing::now();
+        let day = std::time::Duration::from_secs(86_400);
+        let mut older = entry("older", EntryKind::File, 0);
+        older.created = Some(now - day);
+        older.accessed = Some(now);
+        let mut newer = entry("newer", EntryKind::File, 0);
+        newer.created = Some(now);
+        newer.accessed = Some(now - day);
+        let entries = vec![entry("unknown", EntryKind::File, 0), older, newer];
+
+        let mut sort = SortOrder {
+            dirs_first: false,
+            ..SortOrder::default()
+        };
+        sort.key = SortKey::Created;
+        assert_eq!(order(&entries, sort, true), vec![2, 1, 0]);
+        sort.reverse = true;
+        assert_eq!(order(&entries, sort, true), vec![1, 2, 0]);
+        sort.key = SortKey::Accessed;
+        sort.reverse = false;
+        assert_eq!(order(&entries, sort, true), vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn type_groups_kinds_then_sorts_names_within_each_kind() {
+        let entries = vec![
+            entry("z-file", EntryKind::File, 0),
+            entry("link", EntryKind::Symlink, 0),
+            entry("a-file", EntryKind::File, 0),
+            entry("directory", EntryKind::Dir, 0),
+        ];
+        let sort = SortOrder {
+            key: SortKey::Type,
+            dirs_first: false,
+            reverse: false,
+        };
+        assert_eq!(order(&entries, sort, true), vec![3, 2, 0, 1]);
     }
 
     proptest! {
@@ -378,7 +438,7 @@ mod tests {
         #[test]
         fn the_result_is_a_permutation_of_the_visible_indices(
             names in proptest::collection::vec("[a-zA-Z0-9._]{1,8}", 0..20),
-            key in 0u8..4,
+            key in 0u8..7,
             reverse: bool,
             dirs_first: bool,
             hidden: bool,
@@ -392,7 +452,10 @@ mod tests {
                 0 => SortKey::Name,
                 1 => SortKey::Size,
                 2 => SortKey::Time,
-                _ => SortKey::Ext,
+                3 => SortKey::Ext,
+                4 => SortKey::Created,
+                5 => SortKey::Accessed,
+                _ => SortKey::Type,
             };
             let o = SortOrder { key, reverse, dirs_first };
             let got = order(&entries, o, hidden);

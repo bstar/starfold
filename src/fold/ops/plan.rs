@@ -29,12 +29,9 @@ const MAX_DEPTH: u32 = 64;
 pub enum PlanError {
     #[error("{0} is inside itself")]
     IntoItself(PathBuf),
-    /// A move whose source is already a direct child of `dest`: there is
-    /// nothing to do, and doing it anyway (reading it out, writing it back)
-    /// would be a needless -- and on a source made unreadable in between,
-    /// destructive -- round trip. Distinguished from [`Self::IntoItself`]
-    /// because the fix reads differently: "it's already there" rather than
-    /// "that would put it inside itself".
+    /// A source already in `dest` cannot be copied or moved there. Doing so
+    /// would read from and write to the same path. Distinguished from
+    /// [`Self::IntoItself`] because the fix is "it's already there".
     #[error("{0} is already at the destination")]
     AlreadyAtDestination(PathBuf),
     #[error("{0} is gone")]
@@ -247,12 +244,10 @@ fn plan_copy_move(
             }
         }
 
-        if matches!(kind, OpKind::Move) {
-            if let Some(parent) = src.parent() {
-                if let Ok(parent_id) = identity(parent) {
-                    if parent_id.1 == dest_id.1 {
-                        return Err(PlanError::AlreadyAtDestination(src.clone()));
-                    }
+        if let Some(parent) = src.parent() {
+            if let Ok(parent_id) = identity(parent) {
+                if parent_id.1 == dest_id.1 {
+                    return Err(PlanError::AlreadyAtDestination(src.clone()));
                 }
             }
         }
@@ -463,6 +458,26 @@ mod tests {
         let dest = fx.path("projects");
         let src = fx.path("projects/starwire");
         let err = plan(OpKind::Move, std::slice::from_ref(&src), Some(&dest)).unwrap_err();
+        assert!(matches!(err, PlanError::AlreadyAtDestination(p) if p == src));
+    }
+
+    #[test]
+    fn copying_a_source_into_its_own_directory_is_refused() {
+        let fx = Fixture::tree();
+        let dest = fx.path("projects/starwire");
+        let src = dest.join("Cargo.toml");
+        let err = plan(OpKind::Copy, std::slice::from_ref(&src), Some(&dest)).unwrap_err();
+        assert!(matches!(err, PlanError::AlreadyAtDestination(p) if p == src));
+    }
+
+    #[test]
+    fn copying_into_an_alias_of_the_source_directory_is_refused() {
+        let fx = Fixture::tree();
+        let dest = fx.path("projects/starwire");
+        let src = dest.join("Cargo.toml");
+        let alias = fx.path("starwire-alias");
+        std::os::unix::fs::symlink(&dest, &alias).unwrap();
+        let err = plan(OpKind::Copy, std::slice::from_ref(&src), Some(&alias)).unwrap_err();
         assert!(matches!(err, PlanError::AlreadyAtDestination(p) if p == src));
     }
 

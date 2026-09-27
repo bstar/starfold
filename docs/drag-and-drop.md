@@ -17,6 +17,11 @@ directory. Dragging a marked row carries the marked set. You can also drag
 files to or from desktop applications that provide file URIs. If Copy and Move
 are both available, STAR/FOLD asks which one to perform after the drop.
 
+During a file drag, the source pane stays still. Hover over the top or bottom
+two rows of another pane to scroll it; incoming desktop drops can scroll a
+destination pane the same way. The mouse wheel is inactive during the drag.
+Dragging a scrollbar moves only that scrollbar and does not start a file drag.
+
 Dropped files enter OPERATIONS and start when the worker is free. Existing
 keyboard-queued entries remain paused. Conflicts still use the usual
 overwrite, skip, or rename decision. Cancelling a drop stops the transfer and

@@ -21,15 +21,23 @@ files, `f` also opens the filter, and `e` also opens Places. The existing
 when that module has focus. The back arrow keeps its `h` navigation key.
 Press `c` with the Stack focused, or click `actions` in its heading, to open
 the modal file actions menu.
-`F3` or `ctrl+f` searches filenames recursively below the active directory;
+`F3` or `ctrl+f` opens recursive search below the active directory. In its
+prompt, Tab switches between filenames and file contents; content results
+show the first matching line and identify skipped binary or oversized files.
 `/` still filters only the current directory. In results, `esc` cancels an
 active scan and then closes results; `h` closes results immediately. The
 original directory and cursor return when results close.
 
+`s` or the `sort` heading opens the sort picker. Choose name, extension,
+type, size, modified, created, or accessed time. The picker also toggles
+reverse order and directories first; `S` reverses the current order directly.
+Timestamp sorts show newest first by default, with unavailable dates last.
+
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
-the active pane; `alt+2` and `alt+3` reach preview and operations. `y/p` and
-`m` queue files from the active pane into the opposite directory, using
-current-directory marks or the highlighted file. `v` switches views, `b`
+the active pane; `alt+2` and `alt+3` reach preview and operations. `y` (or
+`yy`) saves the marked entries or highlighted file; `p` queues a copy into
+the active pane's directory. `m` queues a move into the opposite pane's
+directory. `v` switches views, `b`
 opens Places, and `B` bookmarks the current directory. In Places, type to
 search, use arrows and `enter` to open a location, `F2` to rename a bookmark,
 `F3` to inspect the selected place, `delete` to remove one after confirmation,
@@ -73,7 +81,7 @@ _in the stack_
 | `o`            | open externally |
 | `r`            | rename |
 | `c`            | file actions menu |
-| `F3/ctrl+f`    | search filenames |
+| `F3/ctrl+f`    | search names/text |
 | `F5/ctrl+r`    | reload |
 
 ## selection
@@ -93,7 +101,8 @@ _everywhere_
 
 | key | what it does |
 |---|---|
-| `y/p`          | copy marked here |
+| `y`            | yank marked/cursor |
+| `p`            | paste yanked here |
 | `m`            | move marked here |
 | `d`            | delete marked |
 | `X`            | run the queue |
@@ -128,7 +137,7 @@ _everywhere_
 | `B`            | bookmark directory |
 | `i`            | show, fold preview |
 | `./n`          | hidden files |
-| `s`            | next sort key |
+| `s`            | choose sort order |
 | `S`            | reverse the sort |
 | `f, /`         | filter this level |
 | `z`            | picture scale |

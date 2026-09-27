@@ -134,6 +134,25 @@ impl App {
             }
             A::Edit => self.start_editor(target.clicked),
             A::Mark => self.core.send(Command::ToggleMarkPath(target.clicked)),
+            A::CopyCurrentPath => {
+                let path = target.create_dir.to_string_lossy().into_owned();
+                match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(path)) {
+                    Ok(()) => {
+                        self.note = Some((
+                            "current path copied".into(),
+                            NoteLevel::Info,
+                            Instant::now(),
+                        ));
+                    }
+                    Err(error) => {
+                        self.note = Some((
+                            format!("could not copy path: {error}"),
+                            NoteLevel::Warning,
+                            Instant::now(),
+                        ));
+                    }
+                }
+            }
             A::Rename => self.overlays.open_rename(target.clicked),
             A::CreateFile => self
                 .overlays
@@ -302,10 +321,12 @@ mod tests {
         assert_eq!(
             menu.actions,
             vec![
+                overlays::context::Action::CopyCurrentPath,
                 overlays::context::Action::CreateFile,
                 overlays::context::Action::CreateDirectory
             ]
         );
+        app.key(key(KeyCode::Down));
         app.key(key(KeyCode::Enter));
         assert!(matches!(app.overlays.current(), Some(Overlay::Create(_))));
         type_name(&mut app, "inside.txt");
@@ -377,6 +398,21 @@ mod tests {
             panic!("expected actions menu")
         };
         assert!(!menu.actions.contains(&overlays::context::Action::Edit));
+    }
+
+    #[test]
+    fn copy_current_path_is_available_with_a_file_highlighted() {
+        let (mut app, fake) = app();
+        cursor(&mut app, "blob.bin");
+        app.open_actions_modal();
+        let Some(Overlay::Context(menu)) = app.overlays.current() else {
+            panic!("expected actions menu")
+        };
+        assert!(menu
+            .actions
+            .contains(&overlays::context::Action::CopyCurrentPath));
+        assert_eq!(menu.target.clicked, fake.fixture.path("blob.bin"));
+        assert_eq!(menu.target.create_dir, fake.home());
     }
     #[test]
     fn compression_is_visible_in_operations_before_it_runs() {

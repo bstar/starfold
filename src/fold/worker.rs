@@ -15,8 +15,8 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use super::create::{self, Kind as CreateKind, Origin as CreateOrigin};
-use super::handle::{Event, EventSink, Note};
-use super::listing::{self, Listing};
+use super::handle::{Event, EventSink, Note, StartupLocation};
+use super::listing::{self, ListConfig, Listing};
 use super::ops::progress::Progress;
 use super::ops::{self, ConflictPolicy, OpId, OpKind, Outcome, Plan};
 use super::places::{self, Bookmark, Location};
@@ -140,6 +140,7 @@ pub enum Job {
         generation: u64,
         root: PathBuf,
         query: String,
+        mode: search::Mode,
         include_hidden: bool,
         progress: Arc<search::Progress>,
     },
@@ -191,6 +192,11 @@ pub enum Job {
 /// notification would be a second writer.
 #[derive(Debug, Clone)]
 pub enum Done {
+    StartupListed {
+        requested: PathBuf,
+        listing: Listing,
+        notice: Option<String>,
+    },
     PlacesLoaded {
         path: PathBuf,
         bookmarks: Result<Vec<Bookmark>, String>,
@@ -236,6 +242,44 @@ pub enum Done {
     /// Something on disk changed under one of these paths, other than
     /// through this program's own operations -- the mtime poll's finding.
     Changed(Vec<PathBuf>),
+}
+
+/// Validate and read one startup location without delaying the first frame.
+/// Saved paths may disappear while STAR/FOLD is closed; explicit paths retain
+/// their ordinary listing error instead of silently changing destination.
+pub fn read_startup(location: StartupLocation, cfg: &ListConfig) -> Done {
+    let requested = location.path;
+    let (actual, notice) = if let Some(fallback) = location.fallback {
+        if requested.is_dir() {
+            (
+                requested
+                    .canonicalize()
+                    .unwrap_or_else(|_| requested.clone()),
+                None,
+            )
+        } else {
+            let notice = format!(
+                "saved {} location {} is unavailable; opened {}",
+                location.label,
+                requested.display(),
+                fallback.display()
+            );
+            (fallback, Some(notice))
+        }
+    } else {
+        (
+            requested
+                .canonicalize()
+                .unwrap_or_else(|_| requested.clone()),
+            None,
+        )
+    };
+    let listing = listing::read(&actual, cfg);
+    Done::StartupListed {
+        requested,
+        listing,
+        notice,
+    }
 }
 
 /// Every directory currently open in any frame of any stack of any tab, with
@@ -343,11 +387,18 @@ pub fn perform_io(
             generation,
             root,
             query,
+            mode,
             include_hidden,
             progress,
         } => IoOutcome::Done(Done::Searched {
             generation,
-            found: Arc::new(search::scan(&root, &query, include_hidden, &progress)),
+            found: Arc::new(search::scan_mode(
+                &root,
+                &query,
+                mode,
+                include_hidden,
+                &progress,
+            )),
         }),
         Job::Create {
             dir,

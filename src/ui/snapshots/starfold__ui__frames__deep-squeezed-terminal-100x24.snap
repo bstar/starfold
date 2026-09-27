@@ -25,4 +25,4 @@ expression: "render(&mut app, 100, 24)"
 ║                                                                                       run  clear ║
 ║                                          nothing queued                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  / filter  space mark  enter open  y copy  m move  d delete          ~/projects/starwire  off
+? help  / filter  space mark  enter open  y yank  p paste  m move  d delet  ~/projects/starwire  off

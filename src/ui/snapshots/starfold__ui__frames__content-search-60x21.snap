@@ -1,25 +1,25 @@
 ---
 source: src/ui/frames.rs
-expression: "render(&mut app,w,h)"
+expression: floor
 ---
-╔═ S T A R / F O L D ══════════════════════════════ stack ═╗
+╔═ SEARCH — ~ ═════════════════════════════════════ stack ═╗
 ║ ‹  hidden  sort  filter  Bookmark  places  view  actions ║
-║─ ~ ── 3 files · 3 dirs · 290 B ──────────────────────────║
-║    ▸ empty/                               -  Sep 10      ║
-║    ▸ pictures/                            -  Sep 10      ║
-║    ▸ projects/                            -  Sep 10      ║
-║    ◇ blob.bin                         256 B  Sep 10      ║
-║    ↗ dangling                           7 B  Sep 10      ║
-║    ↗ notes.txt                         27 B  Sep 10      ║
+║─ content: STAR/WIRE · complete · 1 matches · 2 binary · 0║
+║    ≡ README.md:1: # STAR/WIRE ·       244 B  Sep 10      ║
+║                                                          ║
+║                                                          ║
+║                                                          ║
+║                                                          ║
+║                                                          ║
 ║                                                          ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
-╔═ PREVIEW — ◇ blob.bin ═══════════════════════════════════╗
+╔═ PREVIEW — ≡ README.md ══════════════════════════════════╗
 ║                                                    close ║
-║ Title: Evening light                                     █
+║ # STAR/WIRE                                              █
 ╚══════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════╗
 ║                                               run  clear ║
 ║                      nothing queued                      ║
 ╚══════════════════════════════════════════════════════════╝
-? help  / filter  space mark  enter open  y yank  p   ~  off
+? help  esc cancel / close search  space mark  c act  ~  off

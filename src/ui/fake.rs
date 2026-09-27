@@ -1,7 +1,7 @@
 //! A core with no threads behind it, for deterministic frames.
 //!
 //! [`handle`] wires up a real [`Handle`] the way [`Handle::spawn`] does --
-//! same `State::new`, same synchronous first listing -- but hands the two
+//! same `State::new`, with a deterministic first listing -- but hands the two
 //! job queues to a [`Fake`] instead of spawning `starfold-io` and
 //! `starfold-ops`. A test calls [`Handle::send`] exactly as the real UI
 //! would, then calls [`Fake::pump`] to run whatever that produced: `pump`
@@ -84,6 +84,8 @@ pub fn handle(cfg: FoldConfig) -> (Handle, Fake) {
         state: Arc::clone(&state),
         sink: events.clone(),
         threads: (None, None),
+        startup_threads: Vec::new(),
+        startup_cancel: Arc::new(AtomicBool::new(false)),
         dropped,
     });
 
@@ -287,8 +289,9 @@ mod tests {
             .selection
             .is_marked(&fake.home().join("blob.bin")));
 
+        handle.send(Command::Yank);
         open(&handle, &fake, "empty");
-        handle.send(Command::QueueCopyHere);
+        handle.send(Command::PasteHere);
         handle.send(Command::Run);
 
         let planned = fake.pump();
@@ -300,6 +303,88 @@ mod tests {
         let state = fake.state();
         let op = state.queue.iter().next().expect("one queued op");
         assert_eq!(op.status, OpStatus::Done, "got {:?}", op.status);
+    }
+
+    #[test]
+    fn yanking_a_highlighted_directory_can_paste_it_into_two_destinations() {
+        let (handle, fake) = handle(FoldConfig::default());
+        open(&handle, &fake, "projects");
+        handle.send(Command::CursorTo(row_index(&fake, "starwire")));
+        handle.send(Command::Yank);
+        assert!(fake.state().queue.is_empty());
+
+        open(&handle, &fake, "empty");
+        handle.send(Command::PasteHere);
+        open(&handle, &fake, "pictures");
+        handle.send(Command::PasteHere);
+        assert_eq!(fake.state().queue.len(), 2);
+        handle.send(Command::Run);
+        fake.pump();
+
+        for destination in ["empty", "pictures"] {
+            assert!(fake
+                .fixture
+                .path(&format!("{destination}/starwire/README.md"))
+                .is_file());
+        }
+        assert!(fake
+            .state()
+            .queue
+            .iter()
+            .all(|op| op.status == OpStatus::Done));
+    }
+
+    #[test]
+    fn pasting_a_search_result_rejects_a_replacement_after_search_closes() {
+        let (handle, fake) = handle(FoldConfig::default());
+        handle.send(Command::StartSearch("README.md".into()));
+        fake.pump();
+        let source = fake.fixture.path("projects/starwire/README.md");
+        assert_eq!(fake.state().cursor_entry().unwrap().path, source);
+        handle.send(Command::Yank);
+        handle.send(Command::CloseSearch);
+        open(&handle, &fake, "empty");
+        handle.send(Command::PasteHere);
+        assert_eq!(fake.state().queue.iter().next().unwrap().expected.len(), 1);
+
+        std::fs::remove_file(&source).unwrap();
+        std::fs::write(&source, "replacement").unwrap();
+        handle.send(Command::Run);
+        fake.pump();
+
+        let state = fake.state();
+        let op = state.queue.iter().next().unwrap();
+        assert!(matches!(op.status, OpStatus::Failed), "got {:?}", op.status);
+        assert!(!fake.fixture.path("empty/README.md").exists());
+    }
+
+    #[test]
+    fn content_result_uses_real_path_for_preview_and_queued_copy() {
+        let (handle, fake) = handle(FoldConfig::default());
+        let source = fake.fixture.path("projects/starwire/README.md");
+        handle.send(Command::StartContentSearch("STAR/WIRE".into()));
+        fake.pump();
+        {
+            let state = fake.state();
+            let search = state.search.as_ref().unwrap();
+            assert_eq!(search.results.len(), 1);
+            assert_eq!(search.results[0].path, source);
+            assert_eq!(search.excerpts[&source], "line 1: # STAR/WIRE");
+        }
+        handle.send(Command::Preview(source.clone()));
+        fake.pump();
+        assert_eq!(fake.state().preview.as_ref().unwrap().0, source);
+        handle.send(Command::Yank);
+        handle.send(Command::CloseSearch);
+        open(&handle, &fake, "empty");
+        handle.send(Command::PasteHere);
+        assert_eq!(fake.state().queue.iter().next().unwrap().expected.len(), 1);
+        handle.send(Command::Run);
+        fake.pump();
+        assert_eq!(
+            std::fs::read(fake.fixture.path("empty/README.md")).unwrap(),
+            std::fs::read(source).unwrap()
+        );
     }
 
     #[test]

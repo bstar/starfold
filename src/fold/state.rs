@@ -50,6 +50,10 @@ pub struct State {
     /// read rather than paying for it twice.
     pub listings: HashMap<PathBuf, Arc<Listing>>,
     pub selection: Selection,
+    /// Paths saved by `y` for repeated `p` copies across navigation.
+    pub yanked: Vec<PathBuf>,
+    /// Search identities travel with a yank even after results and marks close.
+    yanked_search_identities: HashMap<PathBuf, search::Identity>,
     /// Search identities retained for marked results after the search view
     /// closes, until those marks are removed or the operation finishes.
     marked_search_identities: HashMap<PathBuf, search::Identity>,
@@ -111,6 +115,8 @@ impl State {
             tabs: Tabs::single(Stack::new(start)),
             listings: HashMap::new(),
             selection: Selection::default(),
+            yanked: Vec::new(),
+            yanked_search_identities: HashMap::new(),
             marked_search_identities: HashMap::new(),
             search: None,
             search_generation: 0,
@@ -213,7 +219,7 @@ impl State {
 /// One enum for both rather than two entry points, because a command and a
 /// `Done` are handled the same way from here down: both are folded into
 /// `State` under the one write lock and both can produce more `Job`s: a
-/// `QueueCopyHere` command plans a copy, and the `Done::Planned` that
+/// `PasteHere` command queues a copy, and the `Done::Planned` that
 /// eventually comes back from planning it is what actually enqueues the
 /// files to run.
 pub enum Change {
@@ -404,7 +410,10 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::CursorBy(delta) => cmd_cursor_by(state, delta),
         Command::SetFilter(query) => cmd_set_filter(state, query),
         Command::ClearFilter => cmd_clear_filter(state),
-        Command::StartSearch(query) => cmd_start_search(state, query),
+        Command::StartSearch(query) => cmd_start_search(state, query, search::Mode::Names),
+        Command::StartContentSearch(query) => {
+            cmd_start_search(state, query, search::Mode::Contents)
+        }
         Command::CancelSearch => {
             if let Some(search) = &state.search {
                 search
@@ -552,8 +561,9 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
                 events: vec![Event::Preview],
             }
         }
-        Command::QueueCopyHere => cmd_queue_copy_or_move(state, OpKind::Copy),
-        Command::QueueMoveHere => cmd_queue_copy_or_move(state, OpKind::Move),
+        Command::Yank => cmd_yank(state),
+        Command::PasteHere => cmd_paste_here(state),
+        Command::QueueMoveHere => cmd_queue_move(state),
         Command::QueueDelete => cmd_queue_delete(state),
         Command::QueueDeleteSources(sources) => queue_delete_sources(state, sources),
         Command::QueueRename { from, to } => cmd_queue_rename(state, from, to),
@@ -704,6 +714,31 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
                 }
             }
         }
+        Done::StartupListed {
+            requested,
+            listing,
+            notice,
+        } => {
+            let actual = listing.dir.clone();
+            if requested != actual {
+                for tab in &mut state.tabs.tabs {
+                    for stack in &mut tab.stacks {
+                        // A user may have navigated away while a drive woke
+                        // up. Only replace an untouched startup location.
+                        if stack.len() == 1 && stack.active().dir == requested {
+                            *stack = Stack::new(actual.clone());
+                        }
+                    }
+                }
+            }
+            let mut effects = done_listed(state, listing);
+            if let Some(notice) = notice {
+                effects
+                    .events
+                    .push(Event::Note(Note::warning("startup", notice)));
+            }
+            effects
+        }
         Done::Listed(listing) => done_listed(state, listing),
         Done::Searched { generation, found } => {
             let Some(search) = state.search.as_mut().filter(|s| s.generation == generation) else {
@@ -715,6 +750,9 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
                 .map(|i| found.entries[i].clone())
                 .collect();
             search.identities = found.identities.clone();
+            search.excerpts = found.excerpts.clone();
+            search.skipped_binary = found.skipped_binary;
+            search.skipped_large = found.skipped_large;
             search.cursor = 0;
             search.status = found.status;
             search.errors = found.errors.clone();
@@ -1193,7 +1231,7 @@ fn cmd_forward(state: &mut State) -> Effects {
 
 fn cmd_reload(state: &mut State) -> Effects {
     if let Some(search) = &state.search {
-        return cmd_start_search(state, search.query.clone());
+        return cmd_start_search(state, search.query.clone(), search.mode);
     }
     let dir = state.active_frame().dir.clone();
     state.active_frame_mut().loading = true;
@@ -1250,15 +1288,12 @@ fn cmd_cursor_by(state: &mut State, delta: i32) -> Effects {
     set_cursor(state, target)
 }
 
-fn cmd_start_search(state: &mut State, query: String) -> Effects {
+fn cmd_start_search(state: &mut State, query: String, mode: search::Mode) -> Effects {
     let query = query.trim().to_string();
     if query.is_empty() {
         return Effects {
             jobs: vec![],
-            events: vec![Event::Note(Note::warning(
-                "search",
-                "enter a filename to search for",
-            ))],
+            events: vec![Event::Note(Note::warning("search", "enter a search term"))],
         };
     }
     let root = state
@@ -1280,9 +1315,13 @@ fn cmd_start_search(state: &mut State, query: String) -> Effects {
         generation,
         root: root.clone(),
         query: query.clone(),
+        mode,
         include_hidden,
         results: vec![],
         identities: HashMap::new(),
+        excerpts: HashMap::new(),
+        skipped_binary: 0,
+        skipped_large: 0,
         cursor: 0,
         status: SearchStatus::Running,
         errors: vec![],
@@ -1295,6 +1334,7 @@ fn cmd_start_search(state: &mut State, query: String) -> Effects {
             generation,
             root,
             query,
+            mode,
             include_hidden,
             progress,
         }],
@@ -1364,7 +1404,7 @@ fn cmd_set_hidden(state: &mut State, hidden: bool) -> Effects {
     state.show_hidden = hidden;
     rebuild_all_frames(state);
     if let Some(search) = &state.search {
-        return cmd_start_search(state, search.query.clone());
+        return cmd_start_search(state, search.query.clone(), search.mode);
     }
     Effects {
         jobs: Vec::new(),
@@ -1435,11 +1475,82 @@ fn cmd_clear_marks(state: &mut State) -> Effects {
     }
 }
 
-/// `QueueCopyHere`/`QueueMoveHere`: everything marked, into the active
-/// frame's directory. A queue entry is never built with an empty source
+fn cmd_yank(state: &mut State) -> Effects {
+    let mut sources: Vec<PathBuf> = state.selection.paths().map(Path::to_path_buf).collect();
+    if sources.is_empty() {
+        sources.extend(state.cursor_entry().map(|entry| entry.path.clone()));
+    }
+    if sources.is_empty() {
+        return Effects {
+            jobs: Vec::new(),
+            events: vec![Event::Note(Note::warning(
+                "nothing-to-yank",
+                "nothing to yank",
+            ))],
+        };
+    }
+    let count = sources.len();
+    state.yanked_search_identities = sources
+        .iter()
+        .filter_map(|path| {
+            state
+                .marked_search_identities
+                .get(path)
+                .or_else(|| {
+                    state
+                        .search
+                        .as_ref()
+                        .and_then(|search| search.identities.get(path))
+                })
+                .map(|identity| (path.clone(), *identity))
+        })
+        .collect();
+    state.yanked = sources;
+    Effects {
+        jobs: Vec::new(),
+        events: vec![Event::Note(Note::info(format!(
+            "yanked {count} {}",
+            if count == 1 { "item" } else { "items" }
+        )))],
+    }
+}
+
+fn cmd_paste_here(state: &mut State) -> Effects {
+    if state.yanked.is_empty() {
+        return Effects {
+            jobs: Vec::new(),
+            events: vec![Event::Note(Note::warning(
+                "nothing-yanked",
+                "nothing yanked yet",
+            ))],
+        };
+    }
+    let sources = state.yanked.clone();
+    let dest = state.active_frame().dir.clone();
+    let id = state
+        .queue
+        .enqueue(OpKind::Copy, sources.clone(), Some(dest), state.conflicts);
+    record_search_expectations(state, id, &sources);
+    if let Some(op) = state.queue.get_mut(id) {
+        for path in &sources {
+            if let Some(identity) = state.yanked_search_identities.get(path) {
+                op.expected
+                    .retain(|(expected_path, _)| expected_path != path);
+                op.expected.push((path.clone(), *identity));
+            }
+        }
+    }
+    Effects {
+        jobs: Vec::new(),
+        events: vec![Event::Queue(id)],
+    }
+}
+
+/// `QueueMoveHere`: everything marked, into the opposite Commander pane or
+/// the active Fold directory. A queue entry is never built with an empty source
 /// list -- an empty selection is a note, not a no-op `Op` sitting in the
 /// panel.
-fn cmd_queue_copy_or_move(state: &mut State, kind: OpKind) -> Effects {
+fn cmd_queue_move(state: &mut State) -> Effects {
     let mut sources: Vec<PathBuf> = state.selection.paths().map(Path::to_path_buf).collect();
     if state.commander && sources.is_empty() {
         sources.extend(state.cursor_entry().map(|entry| entry.path.clone()));
@@ -1457,7 +1568,7 @@ fn cmd_queue_copy_or_move(state: &mut State, kind: OpKind) -> Effects {
     };
     let id = state
         .queue
-        .enqueue(kind, sources.clone(), Some(dest), state.conflicts);
+        .enqueue(OpKind::Move, sources.clone(), Some(dest), state.conflicts);
     record_search_expectations(state, id, &sources);
     Effects {
         jobs: Vec::new(),
@@ -2042,6 +2153,8 @@ mod tests {
             link_kind: None,
             len: 0,
             modified: None,
+            created: None,
+            accessed: None,
             mode: 0,
             executable: false,
             hidden: name.starts_with('.'),
@@ -2343,28 +2456,58 @@ mod tests {
     }
 
     #[test]
-    fn queuecopyhere_with_nothing_marked_notes_and_queues_nothing() {
+    fn yank_with_no_entry_notes_and_paste_with_empty_register_queues_nothing() {
         let mut s = state_at("/home");
-        let effects = apply(&mut s, Change::Command(Command::QueueCopyHere));
+        let effects = apply(&mut s, Change::Command(Command::Yank));
         assert!(s.queue.is_empty());
         assert!(matches!(
             effects.events.as_slice(),
-            [Event::Note(n)] if n.key == Some("nothing-marked")
+            [Event::Note(n)] if n.key == Some("nothing-to-yank")
+        ));
+        let effects = apply(&mut s, Change::Command(Command::PasteHere));
+        assert!(s.queue.is_empty());
+        assert!(matches!(
+            effects.events.as_slice(),
+            [Event::Note(n)] if n.key == Some("nothing-yanked")
         ));
     }
 
     #[test]
-    fn queuecopyhere_with_marks_enqueues_a_copy_to_the_active_directory() {
+    fn yank_with_marks_pastes_a_copy_to_the_active_directory() {
         let mut s = state_at("/dest");
         s.selection
             .toggle(&entry_named("/src", "a.txt", EntryKind::File));
 
-        let effects = apply(&mut s, Change::Command(Command::QueueCopyHere));
+        apply(&mut s, Change::Command(Command::Yank));
+        assert!(s.queue.is_empty());
+        s.selection.forget();
+        let effects = apply(&mut s, Change::Command(Command::PasteHere));
         assert_eq!(s.queue.len(), 1);
         let op = s.queue.iter().next().unwrap();
         assert_eq!(op.dest.as_deref(), Some(Path::new("/dest")));
         assert_eq!(op.sources, vec![PathBuf::from("/src/a.txt")]);
         assert!(matches!(effects.events.as_slice(), [Event::Queue(_)]));
+    }
+
+    #[test]
+    fn yank_without_marks_uses_cursor_and_second_yank_replaces_register() {
+        let mut s = state_at("/src");
+        apply(
+            &mut s,
+            Change::Done(Done::Listed(listing_at(
+                "/src",
+                vec![
+                    entry_named("/src", "a", EntryKind::Dir),
+                    entry_named("/src", "b", EntryKind::File),
+                ],
+            ))),
+        );
+        apply(&mut s, Change::Command(Command::Yank));
+        apply(&mut s, Change::Command(Command::Yank)); // yy
+        assert_eq!(s.yanked, vec![PathBuf::from("/src/a")]);
+        apply(&mut s, Change::Command(Command::CursorTo(1)));
+        apply(&mut s, Change::Command(Command::Yank));
+        assert_eq!(s.yanked, vec![PathBuf::from("/src/b")]);
     }
 
     #[test]
@@ -2397,7 +2540,8 @@ mod tests {
         let mut s = state_at("/home");
         s.selection
             .toggle(&entry_named("/home", "a.txt", EntryKind::File));
-        apply(&mut s, Change::Command(Command::QueueCopyHere));
+        apply(&mut s, Change::Command(Command::Yank));
+        apply(&mut s, Change::Command(Command::PasteHere));
 
         let effects = apply(&mut s, Change::Command(Command::Run));
         assert!(matches!(effects.jobs.as_slice(), [Job::Plan { .. }]));
@@ -2410,7 +2554,8 @@ mod tests {
     fn queued_copy_with_a_conflict(s: &mut State) -> OpId {
         s.selection
             .toggle(&entry_named("/home", "a.txt", EntryKind::File));
-        apply(s, Change::Command(Command::QueueCopyHere));
+        apply(s, Change::Command(Command::Yank));
+        apply(s, Change::Command(Command::PasteHere));
         let id = s.queue.iter().next().unwrap().id;
         apply(s, Change::Command(Command::Run));
 

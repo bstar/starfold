@@ -1,7 +1,7 @@
 //! The contract between the fold core and the terminal.
 //!
-//! The core runs on two OS threads -- `starfold-io` and `starfold-ops`,
-//! spawned by [`Handle::spawn`] -- with no async runtime. The UI loop is
+//! The core runs on two long-lived OS threads -- `starfold-io` and
+//! `starfold-ops` -- plus short-lived startup listing threads. The UI loop is
 //! synchronous: it sends [`Command`]s through [`Handle::send`], drains
 //! [`Event`]s once a frame through [`Handle::drain`], and reads the truth out
 //! of [`State`] behind an `RwLock`.
@@ -23,11 +23,30 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
 use super::create::Kind as CreateKind;
+use super::listing::ListConfig;
 use super::ops::{ConflictPolicy, OpId};
 use super::sort::SortOrder;
 use super::state::{self, Change, State};
 use super::worker::{self, Job};
 use super::FoldConfig;
+
+/// One location to restore without touching its filesystem on the UI thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartupLocation {
+    pub path: PathBuf,
+    /// A saved location that disappeared falls back to the launch directory.
+    /// Explicit CLI paths have no fallback.
+    pub fallback: Option<PathBuf>,
+    pub label: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Startup {
+    pub fold: StartupLocation,
+    pub commander: Option<([StartupLocation; 2], usize, bool)>,
+}
+
+type StartupReader = Arc<dyn Fn(StartupLocation, &ListConfig) -> worker::Done + Send + Sync>;
 
 /// How many commands may be in flight before the UI is told to slow down.
 const COMMAND_CAPACITY: usize = 256;
@@ -40,9 +59,8 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
 /// Everything the terminal can ask the core to do.
 ///
-/// Named for what it means rather than for the key that reaches it -- `y` and
-/// `p` both send [`Command::QueueCopyHere`] -- so the dispatcher in
-/// `ui/app.rs` (Phase 3a) is a `match` on meaning, not on input.
+/// Named for what it means rather than for the key that reaches it, so the
+/// dispatcher in `ui/app.rs` is a `match` on meaning, not on input.
 #[derive(Debug, Clone)]
 pub enum Command {
     LoadPlaces(PathBuf),
@@ -96,6 +114,7 @@ pub enum Command {
     SetFilter(String),
     ClearFilter,
     StartSearch(String),
+    StartContentSearch(String),
     CancelSearch,
     CloseSearch,
     SetSort(SortOrder),
@@ -135,7 +154,10 @@ pub enum Command {
         generation: u64,
         page: u32,
     },
-    QueueCopyHere,
+    /// Save the marked entries, or the highlighted entry, for later pastes.
+    Yank,
+    /// Queue a copy of the last yanked paths into the active directory.
+    PasteHere,
     QueueMoveHere,
     /// Queue a delete of the marked entries, or the one under the cursor when
     /// nothing is marked.
@@ -269,6 +291,8 @@ pub struct Handle {
         Option<std::thread::JoinHandle<()>>,
         Option<std::thread::JoinHandle<()>>,
     ),
+    startup_threads: Vec<std::thread::JoinHandle<()>>,
+    startup_cancel: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
 }
 
@@ -290,16 +314,52 @@ pub struct HandleParts {
         Option<std::thread::JoinHandle<()>>,
         Option<std::thread::JoinHandle<()>>,
     ),
+    pub startup_threads: Vec<std::thread::JoinHandle<()>>,
+    pub startup_cancel: Arc<AtomicBool>,
     pub dropped: Arc<AtomicU64>,
 }
 
 impl Handle {
-    /// Start the two worker threads.
-    ///
-    /// `start` is listed synchronously, before either thread is spawned, so
-    /// the first frame the UI draws already has content instead of an empty
-    /// panel for however long it takes `starfold-io` to pick the job up.
+    /// Start with a loading frame while the initial directory is read away
+    /// from the UI thread.
     pub fn spawn(cfg: FoldConfig, start: PathBuf, home: PathBuf, trash_available: bool) -> Handle {
+        Self::spawn_startup(
+            cfg,
+            Startup {
+                fold: StartupLocation {
+                    path: start,
+                    fallback: None,
+                    label: "Fold",
+                },
+                commander: None,
+            },
+            home,
+            trash_available,
+        )
+    }
+
+    pub fn spawn_startup(
+        cfg: FoldConfig,
+        startup: Startup,
+        home: PathBuf,
+        trash_available: bool,
+    ) -> Handle {
+        Self::spawn_with_reader(
+            cfg,
+            startup,
+            home,
+            trash_available,
+            Arc::new(worker::read_startup),
+        )
+    }
+
+    fn spawn_with_reader(
+        cfg: FoldConfig,
+        startup: Startup,
+        home: PathBuf,
+        trash_available: bool,
+        reader: StartupReader,
+    ) -> Handle {
         let (io_tx, io_rx) = crossbeam_channel::bounded(JOB_CAPACITY);
         let (ops_tx, ops_rx) = crossbeam_channel::bounded(JOB_CAPACITY);
         let (event_tx, event_rx) = crossbeam_channel::bounded(EVENT_CAPACITY);
@@ -312,25 +372,44 @@ impl Handle {
 
         let state = Arc::new(RwLock::new(State::new(
             &cfg,
-            start.clone(),
+            startup.fold.path.clone(),
             home,
             trash_available,
         )));
 
-        {
-            let listing = super::listing::read(&start, &cfg.list);
+        let mut locations = vec![startup.fold];
+        if let Some((dirs, active, enabled)) = startup.commander {
+            // The transition creates the panes without doing IO. Its ordinary
+            // listing jobs are replaced by independent startup reads below.
             let effects = {
                 let mut s = state.write().unwrap_or_else(|e| e.into_inner());
-                state::apply(&mut s, Change::Done(worker::Done::Listed(listing)))
+                state::apply(
+                    &mut s,
+                    Change::Command(Command::RestoreCommander {
+                        dirs: [dirs[0].path.clone(), dirs[1].path.clone()],
+                        active,
+                        enabled,
+                    }),
+                )
             };
-            for job in effects.jobs {
-                senders.dispatch(job);
-            }
-            for event in effects.events {
-                sink.send(event);
-            }
+            debug_assert!(effects.jobs.iter().all(|job| matches!(job, Job::List(_))));
+            locations.extend(dirs);
         }
 
+        let active_dir = state
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .active_frame()
+            .dir
+            .clone();
+        // An explicit CLI location wins if it happens to name the same path
+        // as a saved location: it must keep its no-fallback semantics.
+        locations
+            .sort_by_key(|location| (location.path != active_dir, location.fallback.is_some()));
+        let mut seen = std::collections::HashSet::new();
+        locations.retain(|location| seen.insert(location.path.clone()));
+
+        let list_cfg = cfg.list.clone();
         let io_thread = worker::spawn_io(
             io_rx,
             sink.clone(),
@@ -346,12 +425,36 @@ impl Handle {
             senders.clone(),
         );
 
+        let startup_cancel = Arc::new(AtomicBool::new(false));
+        let startup_threads = locations
+            .into_iter()
+            .map(|location| {
+                let cfg = list_cfg.clone();
+                let state = Arc::clone(&state);
+                let sink = sink.clone();
+                let senders = senders.clone();
+                let cancel = Arc::clone(&startup_cancel);
+                let reader = Arc::clone(&reader);
+                std::thread::Builder::new()
+                    .name("starfold-startup".into())
+                    .spawn(move || {
+                        let done = reader(location, &cfg);
+                        if !cancel.load(Ordering::Relaxed) {
+                            worker::finish(done, &state, &sink, &senders);
+                        }
+                    })
+                    .expect("spawn startup reader")
+            })
+            .collect();
+
         Handle::from_parts(HandleParts {
             senders,
             events: event_rx,
             state,
             sink,
             threads: (Some(io_thread), Some(ops_thread)),
+            startup_threads,
+            startup_cancel,
             dropped,
         })
     }
@@ -374,6 +477,8 @@ impl Handle {
             state: parts.state,
             sink: parts.sink,
             threads: parts.threads,
+            startup_threads: parts.startup_threads,
+            startup_cancel: parts.startup_cancel,
             dropped: parts.dropped,
         }
     }
@@ -416,6 +521,14 @@ impl Handle {
 
 impl Drop for Handle {
     fn drop(&mut self) {
+        self.startup_cancel.store(true, Ordering::Relaxed);
+        // A sleeping USB drive may keep a read in the kernel. Detach that
+        // short-lived thread on exit instead of delaying terminal restore.
+        for thread in self.startup_threads.drain(..) {
+            if thread.is_finished() {
+                let _ = thread.join();
+            }
+        }
         self.send(Command::Shutdown);
         // `try_send`, not a blocking send: if a worker's queue is full it is
         // busy, and closing the channel below stops it once it drains.
@@ -467,6 +580,8 @@ mod tests {
             ))),
             sink: EventSink::new(event_tx.clone(), Arc::new(AtomicU64::new(0))),
             threads: (None, None),
+            startup_threads: Vec::new(),
+            startup_cancel: Arc::new(AtomicBool::new(false)),
             dropped: Arc::new(AtomicU64::new(0)),
         });
         (handle, event_tx, io_rx)
@@ -493,30 +608,107 @@ mod tests {
         assert!(handle.drain().any(|e| matches!(e, Event::Stack)));
     }
 
-    /// `Handle::spawn` lists `start` synchronously before either worker
-    /// thread runs, so the first frame is never empty for want of a job
-    /// being picked up. This depends on Phase 1b's `state::apply` folding
-    /// `Done::Listed` into `State::listings` and clearing `State::loading`;
-    /// today `apply` is still the bootstrap stub, so this fails for that
-    /// reason alone until 1b lands, not because `listing::read` or
-    /// `Handle::spawn` themselves are wrong.
+    /// A sleeping drive cannot hold up the caller. The test reader pauses
+    /// before doing any filesystem work; the handle must still return with a
+    /// drawable loading frame, then accept the eventual listing.
     #[test]
-    fn spawning_lists_the_start_directory_before_either_thread_runs() {
+    fn spawning_returns_before_a_slow_startup_listing() {
         let fixture = crate::fold::testing::Fixture::tree();
-        let handle = Handle::spawn(
+        let (release, paused) = crossbeam_channel::bounded::<()>(0);
+        let reader: StartupReader = Arc::new(move |location, cfg| {
+            paused.recv().unwrap();
+            worker::read_startup(location, cfg)
+        });
+        let started = Instant::now();
+        let handle = Handle::spawn_with_reader(
             FoldConfig::default(),
+            Startup {
+                fold: StartupLocation {
+                    path: fixture.home().to_path_buf(),
+                    fallback: None,
+                    label: "Fold",
+                },
+                commander: None,
+            },
             fixture.home().to_path_buf(),
+            false,
+            reader,
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(handle.state().loading);
+        assert!(handle.state().active_frame().loading);
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while handle.state().loading && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(handle.state().listing_of(fixture.home()).is_some());
+    }
+
+    #[test]
+    fn missing_saved_location_falls_back_after_startup_read() {
+        let fixture = crate::fold::testing::Fixture::tree();
+        let missing = fixture.path("missing-directory");
+        let handle = Handle::spawn_startup(
+            FoldConfig::default(),
+            Startup {
+                fold: StartupLocation {
+                    path: missing,
+                    fallback: Some(fixture.home().to_path_buf()),
+                    label: "Fold",
+                },
+                commander: None,
+            },
             fixture.home().to_path_buf(),
             false,
         );
-        assert!(
-            handle.state().listing_of(fixture.home()).is_some(),
-            "state::apply (Phase 1b) is what inserts the listing"
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while handle.state().loading && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let state = handle.state();
+        assert_eq!(state.active_frame().dir, fixture.home());
+        assert!(state.listing_of(fixture.home()).is_some());
+        drop(state);
+        assert!(handle.drain().any(|event| matches!(event, Event::Note(_))));
+    }
+
+    #[test]
+    fn late_startup_listing_does_not_replace_user_navigation() {
+        let fixture = crate::fold::testing::Fixture::tree();
+        let original = fixture.path("projects");
+        let destination = fixture.path("empty");
+        let (release, paused) = crossbeam_channel::bounded::<()>(0);
+        let reader: StartupReader = Arc::new(move |location, cfg| {
+            paused.recv().unwrap();
+            worker::read_startup(location, cfg)
+        });
+        let handle = Handle::spawn_with_reader(
+            FoldConfig::default(),
+            Startup {
+                fold: StartupLocation {
+                    path: original,
+                    fallback: None,
+                    label: "Fold",
+                },
+                commander: None,
+            },
+            fixture.home().to_path_buf(),
+            false,
+            reader,
         );
-        assert!(
-            !handle.state().loading,
-            "state::apply (Phase 1b) is what clears `loading`"
-        );
+        handle.send(Command::Push(destination.clone()));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while handle.state().listing_of(&destination).is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(handle.state().listing_of(&destination).is_some());
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !handle.startup_threads[0].is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(handle.state().active_frame().dir, destination);
     }
 
     /// `Drop` sends `Job::Shutdown` to both real worker threads and waits for

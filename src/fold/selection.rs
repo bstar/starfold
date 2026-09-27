@@ -2,7 +2,7 @@
 //!
 //! Marking a file does not depend on where the cursor is or which frame is
 //! open: `space` marks it, and it stays marked while the fold moves elsewhere,
-//! which is what lets `y`/`m` mean "copy or move the marked files *here*"
+//! which is what lets `y` save and `m` move the marked files
 //! from any level. The set is keyed by path rather than by an index into a
 //! listing for exactly that reason -- an index means nothing once the frame
 //! has changed.
@@ -210,6 +210,8 @@ mod tests {
             link_kind: None,
             len,
             modified: None,
+            created: None,
+            accessed: None,
             mode: 0,
             executable: false,
             hidden: false,

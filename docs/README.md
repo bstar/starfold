@@ -31,6 +31,8 @@ grouped by what you are trying to do.
   manual checks for the current application.
 - [Creation validation](create-validation.md): milestone 1 checks for new files
   and directories in Fold and Commander.
+- [Content search validation](content-search-validation.md): milestone 2b checks
+  nested text matches, skips, cancellation, and result actions.
 - [Status](status.md): what is done, what is in progress, and what is not
   started.
 - [Contributing](../CONTRIBUTING.md), [Security](../SECURITY.md),

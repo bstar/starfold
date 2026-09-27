@@ -97,6 +97,9 @@ file's real path. Do not silently claim a partial scan is complete.
 **Pass:** Find text in a nested file; verify binary/oversized cases, an
 unreadable file, cancellation, and actions on a result.
 
+Implementation and the [milestone 2b manual checklist](content-search-validation.md)
+are available for validation before starting milestone 3.
+
 ### 3. Recovery after execution
 
 Add a way to inspect and restore items STAR/FOLD put in Trash, including a

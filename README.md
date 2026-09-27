@@ -31,9 +31,9 @@ starfold ~/projects
 ```
 
 Opens the window there: `l` or `enter` drills into a directory, `h` backs out
-one level, `space` marks the entry under the cursor, and `y` queues a copy of
-whatever is marked to wherever you land next — nothing touches disk until you
-run the queue with `enter` or `X`.
+one level, `space` marks the entry under the cursor, `y` (or `yy`) yanks the
+marked entries or highlighted entry, and `p` queues a copy wherever you land.
+Nothing touches disk until you run the queue with `enter` or `X`.
 
 ```sh
 starfold list .
@@ -49,8 +49,8 @@ rest of it.
   level you have drilled through is still there, folded to one line, and
   `alt+up` / `alt+down` jump between them without losing anything below.
 - **Persistent marks.** `space` marks a file wherever you are; the marks
-  follow you to a different directory, so `y` or `m` mean "copy or move what I
-  marked, to here".
+  follow you to a different directory. `y` saves the marked paths for `p` to
+  copy, and `m` queues a move to the current directory.
 - **An operations queue.** Copies, moves, deletes, renames, compression and extraction are queued
   rather than run on the spot; nothing touches the filesystem until you run
   the queue, and a delete goes to the trash where the platform has one. A
@@ -66,11 +66,14 @@ rest of it.
   embedding-compatible STAR/AMP; without it, the existing opener still works.
 - **File actions menu.** Press `c` with the Stack focused, click `actions` in its heading, Ctrl+click a
   file, or press Menu / Shift+F10 for creation, editing, compression, extraction
-  and other file actions. Edit runs the terminal editor in Preview. Physical right-click is optional in configuration.
+  and other file actions. “Copy current path” puts the open directory on the system clipboard.
+  Edit runs the terminal editor in Preview. Physical right-click is optional in configuration.
   Archive jobs appear in OPERATIONS.
   See [previews and archives](docs/previews-and-archives.md).
-- **Recursive filename search.** Press F3 or Ctrl+F to search below the active
-  directory without changing `/`'s current-directory filter. Results support
+- **Recursive filename and content search.** Press F3 or Ctrl+F to search below
+  the active directory; Tab in the prompt switches modes. Content results show
+  a matching line and label skipped binary or oversized files. `/` still filters
+  only the current directory. Results support
   preview, marks and file actions. Escape cancels a scan or closes results;
   closing restores the original directory and cursor.
 - **Commander view and Places.** Press `v` for two independently browsable

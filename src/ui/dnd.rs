@@ -186,6 +186,8 @@ pub fn machine_id() -> Option<String> {
 pub struct Offer {
     pub sources: Vec<PathBuf>,
     pub uri_text: String,
+    /// Fold is stack 0; Commander's left and right panes are 1 and 2.
+    pub source_stack: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -206,9 +208,12 @@ pub struct Active {
 #[derive(Debug, Default)]
 pub struct State {
     pub enabled: bool,
+    /// True from an accepted source offer until the gesture finishes.
+    pub drag_active: bool,
     pub offered_uri: bool,
     pub hover: Option<PathBuf>,
     pub hover_coords: Option<(u16, u16)>,
+    pub hover_allowed: i32,
     pub offer: Option<Offer>,
     pub choice: Option<Choice>,
     pub active: Option<Active>,

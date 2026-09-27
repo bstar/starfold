@@ -1,16 +1,16 @@
 ---
 source: src/ui/frames.rs
-expression: "render(&mut app,w,h)"
+expression: wide
 ---
-╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
+╔═ SEARCH — ~ ═════════════════════════════════════════════════════════════════════════════ stack ═╗
 ║                                         ‹  hidden  sort  filter  Bookmark  places  view  actions ║
-║─ ~ ── 3 files · 3 dirs · 290 B ──────────────────────────────────────────────────────────────────║
-║    ▸ empty/                                                       dir             -  Sep 10      ║
-║    ▸ pictures/                                                    dir             -  Sep 10      ║
-║    ▸ projects/                                                    dir             -  Sep 10      ║
-║    ◇ blob.bin                                                     bin         256 B  Sep 10      ║
-║    ↗ dangling                                                     link          7 B  Sep 10      ║
-║    ↗ notes.txt                                                    link         27 B  Sep 10      ║
+║─ content: STAR/WIRE · complete · 1 matches · 2 binary · 0 large · 13 scanned ────────────────────║
+║    ≡ README.md:1: # STAR/WIRE · projects/starwire/README.md       md          244 B  Sep 10      ║
+║                                                                                                  ║
+║                                                                                                  ║
+║                                                                                                  ║
+║                                                                                                  ║
+║                                                                                                  ║
 ║                                                                                                  ║
 ║                                                                                                  ║
 ║                                                                                                  ║
@@ -19,16 +19,16 @@ expression: "render(&mut app,w,h)"
 ║                                                                                                  ║
 ║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-╔═ PREVIEW — ◇ blob.bin ═══════════════════════════════════════════════════════════════════════════╗
+╔═ PREVIEW — ≡ README.md ══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
-║                                                                                            Audio ║
-║ Title: Evening light                                                                             █
-║ Artist: Example artist                                                                           ║
-║ Album: Home recordings                                                                           ║
-║ Duration: 0:03:42                                                                                ║
+║                                                                                       md · 244 B ║
+║ # STAR/WIRE                                                                                      █
+║ line 2                                                                                           ║
+║ line 3                                                                                           ║
+║ line 4                                                                                           ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                       run  clear ║
 ║                                          nothing queued                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  / filter  space mark  enter open  y yank  p paste  m move  d delete                   ~  off
+? help  esc cancel / close search  space mark  c actions  F3 search                           ~  off

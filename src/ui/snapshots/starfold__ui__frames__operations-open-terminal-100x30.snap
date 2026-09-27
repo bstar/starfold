@@ -31,4 +31,4 @@ expression: "render(&mut app, 100, 30)"
 ║MOVE 1 item: ~/notes.txt → ~                                                                queued║
 ║TRASH 1 item                                                                                queued║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  enter run  x drop  esc clear                                                          ~  off
+? help  yanked 1 item                                                                         ~  off

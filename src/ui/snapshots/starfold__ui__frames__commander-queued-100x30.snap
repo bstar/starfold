@@ -2,7 +2,7 @@
 source: src/ui/frames.rs
 expression: "render(&mut app, 100, 30)"
 ---
-╔═ S T A R / F O L D — › LEFT ═══════ commander ═╗╔═ RIGHT ════════════════════════════ commander ═╗
+╔═ S T A R / F O L D — LEFT ═════════ commander ═╗╔═ › RIGHT ══════════════════════════ commander ═╗
 ║  sort  filter  Bookmark  places  view  actions ║║  sort  filter  Bookmark  places  view  actions ║
 ║─ ~/pictures ───────────────────────────────────║║─ ~/empty ──────────────────────────────────────║
 ║    ▧ harbour.png                          482 B║║                                                ║
@@ -19,16 +19,16 @@ expression: "render(&mut app, 100, 30)"
 ║                                                ║║                                                ║
 ║                                                ║║                                                ║
 ╚════════════════════════════════════════════════╝╚════════════════════════════════════════════════╝
-╔═ PREVIEW — ▧ harbour.png ════════════════════════════════════════════════════════════════════════╗
+╔═ PREVIEW ════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
-║                                           ▀▀▀▀▀▀▀▀▀▀▀                                            ║
-║                                           ▀▀▀▀▀▀▀▀▀▀▀                                            ║
-║                                           ▀▀▀▀▀▀▀▀▀▀▀                                            ║
-║                                           ▀▀▀▀▀▀▀▀▀▀▀                                            ║
-║                                                                               png · 64 × 48 · 1x ║
+║                                                                                                  ║
+║                                                                                                  ║
+║                                        nothing to preview                                        ║
+║                                                                                                  ║
+║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                       run  clear ║
 ║COPY 1 item: ~/pictures/harbour.png → ~/empty · queued                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  / filter  space mark  enter open  y copy  m move  d delete                   ~/pictures  off
+? help  yanked 1 item                                                                   ~/empty  off

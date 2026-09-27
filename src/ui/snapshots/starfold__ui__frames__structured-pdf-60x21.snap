@@ -22,4 +22,4 @@ expression: "render(&mut app,w,h)"
 ║                                               run  clear ║
 ║                      nothing queued                      ║
 ╚══════════════════════════════════════════════════════════╝
-? help  / filter  space mark  enter open  y copy  m   ~  off
+? help  / filter  space mark  enter open  y yank  p   ~  off

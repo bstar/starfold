@@ -1,36 +1,47 @@
-//! Prompt for a recursive filename search.
+//! Prompt for recursive filename or text-content search.
 
 use starkit::chrome::overlay::{self, Anchor};
-use starkit::crossterm::event::KeyEvent;
+use starkit::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use starkit::input::{Edit, TextInput};
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::Style;
 
+use crate::fold::search::Mode;
 use crate::ui::panels::{fit, rgb};
 use crate::ui::theme::Theme;
 
 #[derive(Debug)]
 pub struct Search {
     pub input: TextInput,
+    pub mode: Mode,
     pub error: Option<&'static str>,
 }
 
 impl Search {
-    pub fn new(query: &str) -> Self {
+    pub fn new(query: &str, mode: Mode) -> Self {
         Self {
             input: TextInput::single().with_text(query),
+            mode,
             error: None,
         }
     }
 
-    pub fn handle(&mut self, key: KeyEvent) -> Option<String> {
+    pub fn handle(&mut self, key: KeyEvent) -> Option<(String, Mode)> {
+        if key.code == KeyCode::Tab && key.modifiers == KeyModifiers::NONE {
+            self.mode = match self.mode {
+                Mode::Names => Mode::Contents,
+                Mode::Contents => Mode::Names,
+            };
+            self.error = None;
+            return None;
+        }
         match self.input.handle(key) {
             Edit::Submit if !self.input.text().trim().is_empty() => {
-                Some(self.input.text().trim().to_string())
+                Some((self.input.text().trim().to_string(), self.mode))
             }
             Edit::Submit => {
-                self.error = Some("enter a filename");
+                self.error = Some("enter a search term");
                 None
             }
             Edit::Consumed => {
@@ -62,9 +73,12 @@ pub fn render(
         buf,
         &overlay::Overlay {
             theme: core,
-            title: "search filenames below here",
+            title: match form.mode {
+                Mode::Names => "search filenames below here",
+                Mode::Contents => "search file contents below here",
+            },
             detail: None,
-            footer: Some("enter search · esc cancel"),
+            footer: Some("tab names/contents · enter search · esc cancel"),
         },
     );
     if inner.width == 0 || inner.height == 0 {

@@ -11,16 +11,19 @@ active pane; clicking a pane focuses it. Each pane remembers its own directory,
 cursor and filter. The preview follows the active pane, and the operations
 queue is shared between views.
 
-In Commander, `space` marks entries in the active directory. `y` or `p` queues
-those entries for copying to the opposite pane's directory; `m` queues a move.
-With no marks, the highlighted entry is the source. The destination is
-captured when the operation is queued, so later navigation cannot change it.
-Run the queue with `X`. Marks in Fold keep their existing across-directory
+In Commander, `space` marks entries in the active directory. `y` (or `yy`)
+yanks those entries, or the highlighted entry when nothing is marked. Switch
+to the destination pane and press `p` to queue a copy there. `m` still queues
+a move to the opposite pane. The paste destination is captured when `p` is
+pressed, so later navigation cannot change it. Run the queue with `X`.
+Marks in Fold keep their existing across-directory
 behavior; Commander marks belong to each pane and clear when that pane changes
 directory.
 
-Press `c` with the Stack focused or click `actions` in its heading to open the file actions menu. Choose
-New file or New directory, type one name, and press Enter. Creation runs immediately through the
+Press `c` with the Stack focused or click `actions` in its heading to open the file actions menu.
+Choose Copy current path to put the open directory's full path on the system clipboard. This works
+with a file highlighted and in an empty directory. Choose New file or New directory, type one name,
+and press Enter. Creation runs immediately through the
 IO worker; it does not enter the operations queue. An existing file, directory,
 or symlink is never overwritten. A successful creation refreshes the listing
 and selects the new item, so Enter can open a new directory at once. In
@@ -106,16 +109,17 @@ directory. Mark a file three levels down, jump back to the top of the stack,
 mark another file somewhere else entirely, and both are still marked. The
 status line says how many: `2 marked · 14.2 MB`.
 
-This is what makes `y` (copy) and `m` (move) make sense as "copy what I
-marked, to here": you gather files from wherever they are, land wherever you
-want them, and press one key. Once the operation has run, the marks it
+This is what makes `y` and `p` work across directories: gather marked files,
+press `y` to save their paths, then land where you want them and press `p`.
+The saved paths can be pasted more than once. `m` queues a move of the marked
+files to the current directory. Once an operation has run, the marks it
 consumed are gone: the copies are not marked, and neither are the originals,
 so a `d` pressed next deletes what is under the cursor and not what you just
 copied.
 
 ## The queue is the confirmation
 
-Marking files and pressing `y` or `m` does not touch the filesystem. It adds
+Pressing `p` or `m` does not touch the filesystem. It adds
 an entry to the OPERATIONS module:
 
 ```
@@ -146,20 +150,20 @@ in the queue has not started running yet.
 
 ## Sorting, hiding and filtering
 
-`s` cycles the sort key — name, size, time, ext, back to name — and `S`
-reverses it. Directories lead under every key, in either direction: reversing
-the sort reverses the files among themselves, not whether a directory comes
-before a file.
+`s` or the `sort` heading opens a picker for the sort key, reverse order, and
+directories first. `S` reverses the current order directly. With directories
+first enabled, reversing changes the order within each group while directories
+continue to lead.
 
 - **name** compares case-insensitively and treats a run of digits as a
   number, so `file2.txt` sorts before `file10.txt` rather than after it.
 - **size** is smallest first; reversed, largest first.
-- **time** is newest first *by default* — the one key whose forward
-  direction is not "smallest value first", because nobody browsing by time
-  wants to scroll past years of history to find what they touched five
-  minutes ago. Reversed, it is oldest first.
+- **time / modified**, **created**, and **accessed** are newest first by
+  default and oldest first when reversed. Unavailable dates stay last.
 - **ext** groups by extension (lowercased, without the dot), then falls back
   to the name within a group.
+- **type** groups directories, files, symlinks, and other entries, then sorts
+  names within each group.
 
 `.` shows or hides dotfiles; hidden by default. `/` filters the active
 level's rows through a fuzzy, ranked match (best match first, case

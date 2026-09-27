@@ -21,7 +21,7 @@ defaults. Editing one key never means writing the other six.
 | `[ui] padding_x` / `padding_y` | blank columns and rows around the whole layout, for a terminal whose window has none. Default `0` |
 | `[ui] right_click` | accept physical right-click mouse actions. Default `false`; Ctrl+click works without this setting |
 | `[ui] show_hidden` | show dotfiles by default. Default `false`. `.` toggles it for the running session |
-| `[ui] sort` | the starting sort key: `name`, `size`, `time` or `ext`. Default `"name"`. `time` sorts newest first; `ext` groups by extension, then by name |
+| `[ui] sort` | the starting sort key: `name`, `size`, `time` (also `modified`), `ext`, `created`, `accessed`, or `type`. Default `"name"`. Dates sort newest first; `ext` groups by extension, then by name |
 | `[ui] sort_reverse` | reverse the starting sort. Default `false` |
 | `[ui] dirs_first` | list directories before files under any sort. Default `true` |
 | `[ui] fold_rows` | how many folded parent levels the stack shows before squeezing them into one crumb row. Default `6` |

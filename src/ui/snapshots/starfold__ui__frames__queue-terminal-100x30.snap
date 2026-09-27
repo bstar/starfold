@@ -31,4 +31,4 @@ expression: "render(&mut app, 100, 30)"
 ║                                                                                       run  clear ║
 ║COPY 2 items: ~/projects/sta…re/Cargo.toml +1 → ~/projects queued · enter run · x drop · esc clear║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  enter run  x drop  esc clear                               2 marked · 105 B  ~/projects  off
+? help  yanked 2 items                                             2 marked · 105 B  ~/projects  off

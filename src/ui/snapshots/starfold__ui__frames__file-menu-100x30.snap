@@ -9,14 +9,14 @@ expression: "render(&mut app, w, h)"
 ║ ║Preview                 ║                                        dir             -  Sep 10      ║
 ║ ║Mark / unmark           ║                                        dir             -  Sep 10      ║
 ║ ║Copy…                   ║                                        bin         256 B  Sep 10      ║
-║ ║Move…                   ║                                        link          7 B  Sep 10      ║
-║ ║Rename…                 ║                                        link         27 B  Sep 10      ║
+║ ║Copy current path       ║                                        link          7 B  Sep 10      ║
+║ ║Move…                   ║                                        link         27 B  Sep 10      ║
+║ ║Rename…                 ║                                                                       ║
 ║ ║New file…               ║                                                                       ║
 ║ ║New directory…          ║                                                                       ║
 ║ ║Delete (queue)          ║                                                                       ║
 ║ ║Compress…               ║                                                                       ║
 ║ ╚════════════════════════╝                                                                       ║
-║                                                                                                  ║
 ║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ PREVIEW — ◇ blob.bin ═══════════════════════════════════════════════════════════════════════════╗
@@ -31,4 +31,4 @@ expression: "render(&mut app, w, h)"
 ║                                                                                       run  clear ║
 ║                                          nothing queued                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  / filter  space mark  enter open  y copy  m move  d delete                            ~  off
+? help  / filter  space mark  enter open  y yank  p paste  m move  d delete                   ~  off

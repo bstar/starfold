@@ -38,6 +38,7 @@ pub enum Action {
     Edit,
     Mark,
     Copy,
+    CopyCurrentPath,
     Move,
     Rename,
     CreateFile,
@@ -54,6 +55,7 @@ impl Action {
             Self::Edit => "Edit",
             Self::Mark => "Mark / unmark",
             Self::Copy => "Copy…",
+            Self::CopyCurrentPath => "Copy current path",
             Self::Move => "Move…",
             Self::Rename => "Rename…",
             Self::CreateFile => "New file…",
@@ -76,13 +78,18 @@ impl Menu {
     pub fn new(target: Target, anchor: (u16, u16)) -> Self {
         let empty = target.sources.is_empty();
         let mut actions = if target.sources.is_empty() {
-            vec![Action::CreateFile, Action::CreateDirectory]
+            vec![
+                Action::CopyCurrentPath,
+                Action::CreateFile,
+                Action::CreateDirectory,
+            ]
         } else {
             vec![
                 Action::Open,
                 Action::Preview,
                 Action::Mark,
                 Action::Copy,
+                Action::CopyCurrentPath,
                 Action::Move,
                 Action::Rename,
                 Action::CreateFile,

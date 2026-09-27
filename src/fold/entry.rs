@@ -43,6 +43,8 @@ pub struct Entry {
     /// is exactly the walk `summary::summarize` exists to budget.
     pub len: u64,
     pub modified: Option<SystemTime>,
+    pub created: Option<SystemTime>,
+    pub accessed: Option<SystemTime>,
     /// The raw Unix mode bits, for the permissions column. `0` on a platform
     /// or filesystem that does not report them.
     pub mode: u32,
@@ -132,15 +134,17 @@ pub fn stat(path: &Path) -> Entry {
     let hidden = display.starts_with('.');
 
     let meta = std::fs::symlink_metadata(path);
-    let (kind, mode, len, modified, executable) = match &meta {
+    let (kind, mode, len, modified, created, accessed, executable) = match &meta {
         Ok(m) => (
             kind_of(m.file_type()),
             mode_of(m),
             m.len(),
             m.modified().ok(),
+            m.created().ok(),
+            m.accessed().ok(),
             executable_of(m),
         ),
-        Err(_) => (EntryKind::Other, 0, 0, None, false),
+        Err(_) => (EntryKind::Other, 0, 0, None, None, None, false),
     };
 
     let link_kind = (kind == EntryKind::Symlink)
@@ -154,6 +158,8 @@ pub fn stat(path: &Path) -> Entry {
         link_kind,
         len,
         modified,
+        created,
+        accessed,
         mode,
         executable,
         hidden,

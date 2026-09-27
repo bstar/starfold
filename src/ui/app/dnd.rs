@@ -20,6 +20,109 @@ fn final_drop_operation(status: Option<(OpStatus, usize)>, intended: OpKind) -> 
 }
 
 impl App {
+    pub(super) fn dnd_autoscroll(&mut self) {
+        let Some((x, y)) = self.dnd.hover_coords else {
+            self.dnd_edge = None;
+            return;
+        };
+        let Some(regions) = self.layout.last.as_ref() else {
+            self.dnd_edge = None;
+            return;
+        };
+        if self.bars.held().is_some()
+            || self.overlays.is_open()
+            || regions.hit(x, y) != Some(ModuleId::Stack)
+        {
+            self.dnd_edge = None;
+            return;
+        }
+
+        let area = regions.rect_of(ModuleId::Stack);
+        let (bar, stack_index) = if self.commander {
+            let pane = usize::from(x >= area.x + area.width / 2);
+            (Bar::Commander(pane), pane + 1)
+        } else {
+            (Bar::Stack, 0)
+        };
+        if self.dnd.drag_active
+            && self
+                .dnd
+                .offer
+                .as_ref()
+                .is_some_and(|offer| offer.source_stack == stack_index)
+        {
+            self.dnd_edge = None;
+            return;
+        }
+
+        let Some(track) = self.bars.track_of(bar) else {
+            self.dnd_edge = None;
+            return;
+        };
+        if track.height < 4 || y < track.y || y >= track.bottom() {
+            self.dnd_edge = None;
+            return;
+        }
+        let direction = if y < track.y + 2 {
+            -1
+        } else if y >= track.bottom() - 2 {
+            1
+        } else {
+            self.dnd_edge = None;
+            return;
+        };
+
+        let now = Instant::now();
+        if self
+            .dnd_edge
+            .is_some_and(|(held_bar, held_direction, last)| {
+                held_bar == bar
+                    && held_direction == direction
+                    && now.duration_since(last) < Duration::from_millis(120)
+            })
+        {
+            return;
+        }
+        self.dnd_edge = Some((bar, direction, now));
+
+        let (above, total) = match bar {
+            Bar::Commander(pane) => {
+                let p = &self.panes[pane];
+                (self.scroll.get(&p.key).copied().unwrap_or(0), p.rows.len())
+            }
+            Bar::Stack => (
+                self.scroll.get(&self.view.frame_id).copied().unwrap_or(0),
+                self.view.rows.len(),
+            ),
+            _ => return,
+        };
+        let max = total.saturating_sub(usize::from(track.height));
+        let next = if direction < 0 {
+            above.saturating_sub(1)
+        } else {
+            above.saturating_add(1).min(max)
+        };
+        if next == above {
+            return;
+        }
+        self.scroll_bar_to(bar, next as u32);
+
+        // A stationary pointer now rests on a different row. Update both
+        // STAR/FOLD's highlight and Kitty's acceptance without waiting for
+        // another pixel-motion message.
+        let target = self.dnd_target(i32::from(x), i32::from(y));
+        if target != self.dnd.hover {
+            if target.is_some() {
+                let action = if self.dnd.hover_allowed == 2 { 2 } else { 1 };
+                let _ = wire::send(&format!("t=m:o={action}:i=1"), Some("text/uri-list"));
+            } else {
+                let _ = wire::send("t=m:o=0:i=1", None);
+            }
+            self.dnd.hover = target;
+            self.dnd.hover_coords = self.dnd.hover.as_ref().map(|_| (x, y));
+        }
+    }
+
     pub(super) fn dnd_query(&self) {
         // DA is the ordering marker prescribed by OSC 72. Crossterm swallows
         // its reply; if no OSC 72 reply arrives, the feature stays disabled.
@@ -112,7 +215,15 @@ impl App {
         let (Some(x), Some(y)) = (m.number("x"), m.number("y")) else {
             return;
         };
-        let Some(sources) = self.dnd_sources(x, y) else {
+        // A scrollbar owns the gesture from its first press through release.
+        // Kitty may still ask for a file offer while that mouse button is held.
+        if self.bars.held().is_some()
+            || self.suppress_dnd_offer_until_press
+            || self.dnd_on_scrollbar(x, y)
+        {
+            return;
+        }
+        let Some((source_stack, sources)) = self.dnd_sources(x, y) else {
             return;
         };
         let uri_text: String = sources
@@ -131,7 +242,9 @@ impl App {
         self.dnd.offer = Some(Offer {
             sources,
             uri_text: uri_text.clone(),
+            source_stack,
         });
+        self.dnd.drag_active = true;
         // SSH exports are copy-only. In-window Move remains possible through
         // the post-drop choice because STAR/FOLD itself owns both paths.
         let _ = wire::send("t=o:o=1:i=1", Some("text/uri-list"));
@@ -144,11 +257,12 @@ impl App {
             return;
         };
         let allowed = m.number("o").unwrap_or(0);
+        self.dnd.hover_allowed = allowed;
         if x >= 0 && y >= 0 && !m.payload.is_empty() {
             self.dnd.offered_uri = m.payload.split_whitespace().any(|s| s == "text/uri-list");
         }
         let mime_ok = self.dnd.offered_uri;
-        let target = (mime_ok && allowed != 0 && x >= 0 && y >= 0)
+        let target = (self.bars.held().is_none() && mime_ok && allowed != 0 && x >= 0 && y >= 0)
             .then(|| self.dnd_target(x, y))
             .flatten();
         tracing::debug!(
@@ -160,7 +274,6 @@ impl App {
             "OSC 72 drag hover received"
         );
         let coords = target.as_ref().map(|_| (x as u16, y as u16));
-        let changed = self.dnd.hover != target || self.dnd.hover_coords != coords;
         self.dnd.hover = target;
         self.dnd.hover_coords = coords;
         if self.dnd.hover.is_some() {
@@ -169,18 +282,21 @@ impl App {
         } else {
             let _ = wire::send("t=m:o=0:i=1", None);
         }
-        // Kitty reports pointer motion at pixel resolution. Repainting a full
-        // Commander view for every event can lag behind the gesture and leave
-        // a source drag canceled before the drop reaches us.
-        if changed {
-            self.repaint = true;
-        }
+        // The regular frame draw updates the hover cells. A full terminal
+        // resize here clears the screen on every pointer movement.
     }
 
     fn dnd_drop(&mut self, m: &Message<'_>) {
+        self.dnd.drag_active = false;
         self.dnd.hover = None;
         self.dnd.hover_coords = None;
         self.dnd.offered_uri = false;
+        self.dnd.hover_allowed = 0;
+        self.dnd_edge = None;
+        if self.bars.held().is_some() {
+            let _ = wire::send("t=r:o=0:i=1", None);
+            return;
+        }
         let (Some(x), Some(y)) = (m.number("x"), m.number("y")) else {
             let _ = wire::send("t=r:o=0:i=1", None);
             return;
@@ -358,6 +474,10 @@ impl App {
             }
         }
         if m.number("x") == Some(4) {
+            self.dnd.drag_active = false;
+            self.dnd.hover = None;
+            self.dnd.hover_coords = None;
+            self.dnd_edge = None;
             self.dnd.export_drag_finished = true;
             self.dnd.export_cancelled = m.number("y") == Some(1);
             self.dnd.export_tx = None;
@@ -529,9 +649,14 @@ impl App {
         self.dnd.result_kind = None;
         self.dnd.remote = None;
         self.dnd.staged = None;
+        self.dnd_edge = None;
     }
 
     fn dnd_error_with(&mut self, reason: impl std::fmt::Display) {
+        self.dnd.drag_active = false;
+        self.dnd.hover = None;
+        self.dnd.hover_coords = None;
+        self.dnd_edge = None;
         tracing::warn!(%reason, "OSC 72 drop transfer failed");
         if self.dnd.choice.is_some() {
             self.dnd_cancel_choice();
@@ -552,7 +677,7 @@ impl App {
         self.dnd_error_with("invalid drop data");
     }
 
-    fn dnd_sources(&self, x: i32, y: i32) -> Option<Vec<PathBuf>> {
+    fn dnd_sources(&self, x: i32, y: i32) -> Option<(usize, Vec<PathBuf>)> {
         let (stack_index, row) = self.dnd_hit_row(x, y)?;
         let state = self.core.state();
         let stack = state.tabs.active().stacks.get(stack_index)?;
@@ -564,7 +689,7 @@ impl App {
         } else {
             vec![entry.path.clone()]
         };
-        sources
+        let paths = sources
             .into_iter()
             .map(|path| {
                 if path.is_absolute() {
@@ -573,10 +698,14 @@ impl App {
                     Some(std::env::current_dir().ok()?.join(path))
                 }
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()?;
+        Some((stack_index, paths))
     }
 
     fn dnd_hit_row(&self, x: i32, y: i32) -> Option<(usize, usize)> {
+        if self.dnd_on_scrollbar(x, y) {
+            return None;
+        }
         let (x, y) = (u16::try_from(x).ok()?, u16::try_from(y).ok()?);
         let regions = self.layout.last.as_ref()?;
         if regions.hit(x, y) != Some(ModuleId::Stack) || self.overlays.is_open() {
@@ -602,7 +731,17 @@ impl App {
         }
     }
 
-    fn dnd_target(&self, x: i32, y: i32) -> Option<PathBuf> {
+    fn dnd_on_scrollbar(&self, x: i32, y: i32) -> bool {
+        let (Ok(x), Ok(y)) = (u16::try_from(x), u16::try_from(y)) else {
+            return false;
+        };
+        [Bar::Stack, Bar::Commander(0), Bar::Commander(1)]
+            .into_iter()
+            .filter_map(|bar| self.bars.track_of(bar))
+            .any(|track| x >= track.x && x < track.right() && y >= track.y && y < track.bottom())
+    }
+
+    pub(super) fn dnd_target(&self, x: i32, y: i32) -> Option<PathBuf> {
         let (x, y) = (u16::try_from(x).ok()?, u16::try_from(y).ok()?);
         let regions = self.layout.last.as_ref()?;
         if regions.hit(x, y) != Some(ModuleId::Stack) || self.overlays.is_open() {
@@ -652,6 +791,7 @@ impl App {
         if self.dnd.offer.as_ref().is_some_and(|offer| {
             offer.sources.iter().any(|source| {
                 target == *source
+                    || source.parent() == Some(target.as_path())
                     || std::fs::symlink_metadata(source)
                         .is_ok_and(|meta| meta.is_dir() && target.starts_with(source))
             })

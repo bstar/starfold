@@ -75,6 +75,8 @@ pub struct View<'a> {
     pub scroll: usize,
     pub fold_rows: u16,
     pub loading: bool,
+    /// Current glyph while a directory listing is in flight.
+    pub loading_spinner: &'static str,
     pub filter: Option<&'a str>,
     pub error: Option<&'a str>,
     pub truncated: bool,
@@ -375,7 +377,12 @@ fn columns(width: u16) -> Cols {
 
 fn render_list(area: Rect, buf: &mut Buffer, t: &Theme, v: &View<'_>) {
     if v.loading {
-        empty(area, buf, t, "reading\u{2026}");
+        empty(
+            area,
+            buf,
+            t,
+            &format!("{} reading\u{2026}", v.loading_spinner),
+        );
         return;
     }
     if let Some(err) = v.error {
@@ -633,6 +640,7 @@ mod tests {
             scroll: 0,
             fold_rows: 6,
             loading: false,
+            loading_spinner: crate::ui::SPINNER[0],
             filter: None,
             error: None,
             truncated: false,
@@ -734,16 +742,17 @@ mod tests {
     }
 
     #[test]
-    fn loading_draws_its_own_text() {
+    fn loading_draws_the_current_spinner_next_to_its_text() {
         let t = theme("terminal");
         let crumbs: Vec<Crumb> = Vec::new();
         let rows: Vec<Row> = Vec::new();
         let mut v = view(&t, &crumbs, &rows);
         v.loading = true;
+        v.loading_spinner = crate::ui::SPINNER[3];
         let area = Rect::new(0, 0, 60, 20);
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &v, &mut Bars::new());
-        assert!(dump(&buf, area).contains("reading"));
+        assert!(dump(&buf, area).contains("⠸ reading\u{2026}"));
     }
 
     #[test]

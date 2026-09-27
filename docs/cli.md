@@ -2,7 +2,7 @@
 
 ```
 starfold [--verbose] [DIR]
-starfold list DIR [--hidden] [--sort name|size|time|ext]
+starfold list DIR [--hidden] [--sort name|size|time|ext|created|accessed|type]
 ```
 
 `--verbose` raises the log level to debug. It goes to the log file at
@@ -47,7 +47,7 @@ a trailing `/`; a symlink to one counts as a directory here too.
 | Flag | Does |
 | --- | --- |
 | `--hidden` | include entries whose name starts with `.` |
-| `--sort KEY` | `name`, `size`, `time` or `ext`. Default `name` |
+| `--sort KEY` | `name`, `size`, `time` (also `modified`), `ext`, `created`, `accessed`, or `type`. Default `name` |
 
 If the directory holds more than `[ui] max_entries` entries (50000 by
 default — the same limit the window's own listing uses), the read stops there

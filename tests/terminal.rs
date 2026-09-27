@@ -344,6 +344,15 @@ fn osc72_capability_reply_and_internal_drop_copy() {
         source_y.expect("source row did not offer a drag"),
         folder_y.expect("folder row did not offer a drag"),
     );
+    // End the row-discovery source gesture before checking an external drop.
+    // An internal drop back into this same directory must be rejected.
+    child
+        .master
+        .as_mut()
+        .unwrap()
+        .write_all(b"\x1b]72;t=e:x=4:y=0:i=1;\x1b\\")
+        .unwrap();
+    let _ = collect_for(&mut child, Duration::from_millis(20));
     // A Nautilus drop over an occupied file row must target the current
     // directory. A full pane may have no empty row at all.
     let hover_file = format!("\x1b]72;t=m:x=10:y={source_y}:o=3:i=1;text/uri-list\x1b\\");

@@ -29,7 +29,8 @@ the tree automatically, so it stays available while checking results.
    filter with Escape.
 2. **Marks and queue:** In `project-a/nested`, mark `note.txt` with Space.
    Navigate to `project-b` through the parent directories. The mark count
-   remains visible. Press `y`: OPERATIONS gains a queued copy to `project-b`.
+   remains visible. Press `y`, then `p`: OPERATIONS gains a queued copy to
+   `project-b`.
    Before running it, verify in another shell that
    `"$lab/files/project-b/note.txt"` does not exist. Press `X` to run the
    queue; the copied file should then exist with the same contents.

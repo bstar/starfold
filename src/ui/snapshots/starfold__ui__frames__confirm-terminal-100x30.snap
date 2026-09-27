@@ -31,4 +31,4 @@ expression: "render(&mut app, 100, 30)"
 ║                                                                                       run  clear ║
 ║COPY 1 item: ~/blob.bin → ~/empty · copying 40%                                                   ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  COPYING ████░░░░░░ 40%                                        1 marked · 256 B  ~/empty  off
+? help  yanked 1 item                                                 1 marked · 256 B  ~/empty  off

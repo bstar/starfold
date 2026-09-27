@@ -1,7 +1,7 @@
 //! The operations queue: what will happen to which files, and how far it has
 //! got.
 //!
-//! An [`Op`] is queued the moment `y`, `m` or `d` is pressed -- the queue
+//! An [`Op`] is queued the moment `p`, `m` or `d` is pressed -- the queue
 //! *is* the confirmation, the way STAR/CORD's composer holds a draft rather
 //! than sending on every keystroke. Nothing here runs anything: `plan`,
 //! `exec` and `trash`, which turn a queued `Op` into bytes moving on disk,

@@ -115,8 +115,8 @@ fn run_list(dir: PathBuf, hidden: bool, sort: cli::SortArg) -> Result<()> {
 /// The window.
 ///
 /// A command-line directory opens in the active view. Otherwise each view
-/// restores its own last directory, falling back to the working directory
-/// when a saved mount has disappeared.
+/// restores its own last directory. A worker checks saved locations and
+/// falls back to the working directory when a mount has disappeared.
 /// `session.show_hidden`/`sort` are applied right after `Handle::spawn` --
 /// before the window ever draws a frame -- so the first thing on screen is
 /// already how the last session left it rather than the defaults for one
@@ -135,102 +135,94 @@ fn run_tui(dir: Option<PathBuf>) -> Result<()> {
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let restored = restore_locations(dir, &session, &cwd);
-    let start = restored.fold_dir;
 
     let home = std::env::home_dir()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .unwrap_or_else(|| start.clone());
+        .unwrap_or_else(|| restored.fold.path.clone());
 
-    let core = fold::Handle::spawn(cfg.core(), start, home, fold::Handle::probe_trash());
+    let core = fold::Handle::spawn_startup(cfg.core(), restored, home, fold::Handle::probe_trash());
     if let Some(hidden) = session.show_hidden {
         core.send(fold::Command::SetHidden(hidden));
     }
     if let Some(sort) = session.sort {
         core.send(fold::Command::SetSort(sort));
     }
-    if let Some((dirs, active, enabled)) = restored.commander {
-        core.send(fold::Command::RestoreCommander {
-            dirs,
-            active,
-            enabled,
-        });
-    }
-    for notice in restored.notices {
-        tracing::warn!("{notice}");
-        core.send(fold::Command::Notify(notice));
-    }
-
     ui::app::App::run(core, cfg, config_path, Some(session_path))
-}
-
-struct RestoredLocations {
-    fold_dir: PathBuf,
-    commander: Option<([PathBuf; 2], usize, bool)>,
-    notices: Vec<String>,
 }
 
 fn restore_locations(
     explicit_dir: Option<PathBuf>,
     session: &session::Session,
     cwd: &std::path::Path,
-) -> RestoredLocations {
-    let mut notices = Vec::new();
-    let mut fold_dir = restored_dir(session.last_dir.as_ref(), cwd, "Fold", &mut notices);
+) -> fold::handle::Startup {
+    let mut fold = saved_location(session.last_dir.as_ref(), cwd, "Fold");
     let active = session.commander_active.unwrap_or(0).min(1);
     let enabled = session.commander.unwrap_or(false);
     let has_commander =
         enabled || session.commander_left.is_some() || session.commander_right.is_some();
     let mut commander = has_commander.then(|| {
         let dirs = [
-            session.commander_left.as_ref().map_or_else(
-                || fold_dir.clone(),
-                |dir| restored_dir(Some(dir), cwd, "left pane", &mut notices),
+            saved_location(
+                session
+                    .commander_left
+                    .as_ref()
+                    .or(session.last_dir.as_ref()),
+                cwd,
+                "left pane",
             ),
-            session.commander_right.as_ref().map_or_else(
-                || fold_dir.clone(),
-                |dir| restored_dir(Some(dir), cwd, "right pane", &mut notices),
+            saved_location(
+                session
+                    .commander_right
+                    .as_ref()
+                    .or(session.last_dir.as_ref()),
+                cwd,
+                "right pane",
             ),
         ];
         (dirs, active, enabled)
     });
 
     if let Some(dir) = explicit_dir {
-        let dir = dir.canonicalize().unwrap_or(dir);
         if let Some((dirs, active, enabled)) = commander.as_mut() {
             if *enabled {
-                dirs[*active] = dir;
+                dirs[*active] = fold::handle::StartupLocation {
+                    path: dir,
+                    fallback: None,
+                    label: if *active == 0 {
+                        "left pane"
+                    } else {
+                        "right pane"
+                    },
+                };
             } else {
-                fold_dir = dir;
+                fold.path = dir;
+                fold.fallback = None;
             }
         } else {
-            fold_dir = dir;
+            fold.path = dir;
+            fold.fallback = None;
         }
     }
 
-    RestoredLocations {
-        fold_dir,
-        commander,
-        notices,
-    }
+    fold::handle::Startup { fold, commander }
 }
 
-fn restored_dir(
+fn saved_location(
     saved: Option<&PathBuf>,
     cwd: &std::path::Path,
-    label: &str,
-    notices: &mut Vec<String>,
-) -> PathBuf {
+    label: &'static str,
+) -> fold::handle::StartupLocation {
     match saved {
-        Some(dir) if dir.is_dir() => dir.canonicalize().unwrap_or_else(|_| dir.clone()),
-        Some(dir) => {
-            notices.push(format!(
-                "saved {label} location {} is unavailable; opened {}",
-                dir.display(),
-                cwd.display()
-            ));
-            cwd.to_path_buf()
-        }
-        None => cwd.to_path_buf(),
+        Some(dir) => fold::handle::StartupLocation {
+            path: dir.clone(),
+            fallback: Some(cwd.to_path_buf()),
+            label,
+        },
+        None => fold::handle::StartupLocation {
+            path: cwd.to_path_buf(),
+            fallback: None,
+            label,
+        },
     }
 }
 
@@ -246,7 +238,7 @@ mod startup_tests {
             ..Default::default()
         };
         let restored = restore_locations(None, &session, dir.path());
-        assert_eq!(restored.fold_dir, dir.path().canonicalize().unwrap());
+        assert_eq!(restored.fold.path, dir.path());
         assert!(restored.commander.is_none());
     }
 
@@ -268,22 +260,18 @@ mod startup_tests {
             ..Default::default()
         };
         let restored = restore_locations(Some(requested.clone()), &session, dir.path());
-        assert_eq!(restored.fold_dir, dir.path().canonicalize().unwrap());
+        assert_eq!(restored.fold.path, dir.path());
+        let (dirs, active, enabled) = restored.commander.unwrap();
         assert_eq!(
-            restored.commander,
-            Some((
-                [
-                    left.canonicalize().unwrap(),
-                    requested.canonicalize().unwrap()
-                ],
-                1,
-                true
-            ))
+            [dirs[0].path.clone(), dirs[1].path.clone()],
+            [left, requested]
         );
+        assert_eq!((active, enabled), (1, true));
+        assert_eq!(dirs[1].fallback, None);
     }
 
     #[test]
-    fn missing_saved_location_uses_working_directory_with_notice() {
+    fn missing_saved_location_is_deferred_for_worker_validation() {
         let dir = tempfile::tempdir().unwrap();
         let session = session::Session {
             commander: Some(true),
@@ -291,14 +279,10 @@ mod startup_tests {
             ..Default::default()
         };
         let restored = restore_locations(None, &session, dir.path());
-        assert_eq!(
-            restored.commander,
-            Some((
-                [dir.path().to_path_buf(), dir.path().to_path_buf()],
-                0,
-                true
-            ))
-        );
-        assert_eq!(restored.notices.len(), 1);
+        let (dirs, active, enabled) = restored.commander.unwrap();
+        assert_eq!(dirs[0].path, dir.path().join("missing"));
+        assert_eq!(dirs[0].fallback.as_deref(), Some(dir.path()));
+        assert_eq!(dirs[1].path, dir.path());
+        assert_eq!((active, enabled), (0, true));
     }
 }

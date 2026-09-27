@@ -121,6 +121,27 @@ fn build(theme: &str) -> (App, fake::Fake) {
     (app, fk)
 }
 
+#[test]
+fn content_search_frames() {
+    let (mut app, fake) = build("terminal");
+    app.key(code(KeyCode::F(3)));
+    app.key(code(KeyCode::Tab));
+    for ch in "STAR/WIRE".chars() {
+        app.key(key(ch));
+    }
+    let prompt = render(&mut app, 100, 30);
+    assert!(prompt.contains("SEARCH FILE CONTENTS BELOW HERE"));
+    app.key(code(KeyCode::Enter));
+    settle(&mut app, &fake);
+    let wide = render(&mut app, 100, 30);
+    assert!(wide.contains("starwire/README.md"), "{wide}");
+    assert!(wide.contains("README.md:1: # STAR/WIRE"));
+    insta::assert_snapshot!("content-search-100x30", wide);
+    let floor = render(&mut app, 60, 21);
+    assert!(floor.contains("README.md:1: # STAR/WIRE"));
+    insta::assert_snapshot!("content-search-60x21", floor);
+}
+
 /// The row named `name`'s index in whatever level is active, by the same
 /// name-matching `ui/app.rs`'s own tests use -- panics with the whole row
 /// list when it is not there, which is a better failure than an out-of-range
@@ -187,6 +208,10 @@ fn commander_frames() {
     settle(&mut app, &fk);
     app.key(key('y'));
     settle(&mut app, &fk);
+    app.key(code(KeyCode::Tab));
+    settle(&mut app, &fk);
+    app.key(key('p'));
+    settle(&mut app, &fk);
     insta::assert_snapshot!("commander-queued-100x30", render(&mut app, 100, 30));
 }
 
@@ -211,14 +236,15 @@ fn enter(app: &mut App, fk: &fake::Fake) {
     settle(app, fk);
 }
 
-/// `y`: queue a copy of whatever is already marked into the active
+/// `p`: queue a copy of whatever was yanked into the active
 /// directory, run it, and set the resulting op's progress by hand to
 /// `done`/`total` -- the shared setup behind the progress and the
 /// quit-with-running-confirm snapshots. The caller marks its own entries and
-/// settles into the destination directory first, the same order a real `y`
-/// needs: the mark has to land while the marked entry's own level is active.
+/// settles into the destination directory after yanking the marked entries.
 fn running_op(app: &mut App, fk: &fake::Fake, done: u64, total: u64) {
     app.key(key('y'));
+    settle(app, fk);
+    app.key(key('p'));
     settle(app, fk);
 
     let op_id = fk.state().queue.iter().next().expect("one queued op").id;
@@ -307,7 +333,7 @@ fn two_marks_show_in_the_status() {
 }
 
 /// Two marks in `starwire/`, `alt+up` to the parent without losing the child
-/// frame, then `y` queues a copy of them into the level jumped back to.
+/// frame, then `p` queues a copy of them into the level jumped back to.
 /// Focusing OPERATIONS (`alt+3`) opens the module so the queued row shows.
 #[test]
 fn marking_jumping_up_and_copying_queues_an_operation() {
@@ -322,10 +348,13 @@ fn marking_jumping_up_and_copying_queues_an_operation() {
     app.key(key(' '));
     settle(&mut app, &fk);
 
+    app.key(key('y'));
+    settle(&mut app, &fk);
+
     app.key(alt_code(KeyCode::Up));
     settle(&mut app, &fk);
 
-    app.key(key('y'));
+    app.key(key('p'));
     settle(&mut app, &fk);
 
     app.key(alt('3'));
@@ -368,9 +397,11 @@ fn the_conflict_overlay_opens_when_a_second_copy_collides_with_the_first() {
     cursor_to(&mut app, &fk, "blob.bin");
     app.key(key(' '));
     settle(&mut app, &fk);
+    app.key(key('y'));
+    settle(&mut app, &fk);
     cursor_to(&mut app, &fk, "empty");
     enter(&mut app, &fk);
-    app.key(key('y'));
+    app.key(key('p'));
     settle(&mut app, &fk);
     app.key(key('X'));
     settle(&mut app, &fk);
@@ -381,9 +412,11 @@ fn the_conflict_overlay_opens_when_a_second_copy_collides_with_the_first() {
     cursor_to(&mut app, &fk, "blob.bin");
     app.key(key(' '));
     settle(&mut app, &fk);
+    app.key(key('y'));
+    settle(&mut app, &fk);
     cursor_to(&mut app, &fk, "empty");
     enter(&mut app, &fk);
-    app.key(key('y'));
+    app.key(key('p'));
     settle(&mut app, &fk);
     app.key(key('X'));
     settle(&mut app, &fk);
@@ -408,14 +441,14 @@ fn create_dialogs_at_both_terminal_sizes() {
         let (mut app, fk) = build("terminal");
         cursor_to(&mut app, &fk, "blob.bin");
         app.key(code(KeyCode::Menu));
-        for _ in 0..6 {
+        for _ in 0..7 {
             app.key(code(KeyCode::Down));
         }
         app.key(code(KeyCode::Enter));
         insta::assert_snapshot!(format!("create-file-{w}x{h}"), render(&mut app, w, h));
         app.key(code(KeyCode::Esc));
         app.key(code(KeyCode::Menu));
-        for _ in 0..7 {
+        for _ in 0..8 {
             app.key(code(KeyCode::Down));
         }
         app.key(code(KeyCode::Enter));
@@ -571,6 +604,8 @@ fn three_queued_operations_with_the_module_focused() {
     app.key(key(' '));
     settle(&mut app, &fk);
     app.key(key('y'));
+    settle(&mut app, &fk);
+    app.key(key('p'));
     settle(&mut app, &fk);
     app.key(key('u'));
     settle(&mut app, &fk);

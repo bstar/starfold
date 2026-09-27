@@ -74,11 +74,13 @@ fn panes_keep_independent_marks_and_navigation_clears_only_current_marks() {
 }
 
 #[test]
-fn queued_copy_uses_opposite_directory_even_after_pane_navigation() {
+fn paste_uses_active_directory_even_after_pane_navigation() {
     let (handle, fake) = fake::handle(FoldConfig::default());
     restore(&handle, &fake, "projects/starwire", "empty");
     select_row(&handle, &fake, "README.md");
-    handle.send(Command::QueueCopyHere); // highlighted row fallback
+    handle.send(Command::Yank); // highlighted row fallback
+    handle.send(Command::FocusPane(1));
+    handle.send(Command::PasteHere);
     let source = fake.fixture.path("projects/starwire/README.md");
     let destination = fake.fixture.path("empty");
     {
@@ -89,7 +91,6 @@ fn queued_copy_uses_opposite_directory_even_after_pane_navigation() {
         assert_eq!(op.dest.as_deref(), Some(destination.as_path()));
     }
 
-    handle.send(Command::FocusPane(1));
     handle.send(Command::Push(fake.fixture.path("pictures")));
     fake.pump();
     handle.send(Command::Run);

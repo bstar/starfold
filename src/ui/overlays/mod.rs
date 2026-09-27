@@ -29,6 +29,7 @@ pub mod context;
 pub mod create;
 pub mod rename;
 pub mod search;
+pub mod sort;
 
 use std::path::PathBuf;
 
@@ -40,6 +41,7 @@ use starkit::ratatui::widgets::Widget;
 
 use crate::fold::create::Kind as CreateKind;
 use crate::fold::ops::{ConflictPolicy, OpId};
+use crate::fold::sort::SortOrder;
 use crate::ui::keymap::{BINDINGS, MOUSE};
 use crate::ui::theme::Theme;
 use crate::ui::Bars;
@@ -66,6 +68,7 @@ pub enum Overlay {
     Create(create::Create),
     Rename(rename::Rename),
     Search(search::Search),
+    Sort(sort::Picker),
     Conflict(conflict::Prompt),
 }
 
@@ -100,7 +103,8 @@ pub enum Answer {
         kind: CreateKind,
         name: String,
     },
-    Search(String),
+    Search(String, crate::fold::search::Mode),
+    Sort(SortOrder),
     /// `o`/`s`/`r` on a [`conflict::Prompt`], applied to the whole op.
     Policy {
         op: OpId,
@@ -139,6 +143,10 @@ impl Overlays {
         self.current = Some(Overlay::Help { scroll: 0 });
     }
 
+    pub fn open_sort(&mut self, order: SortOrder) {
+        self.current = Some(Overlay::Sort(sort::Picker::new(order)));
+    }
+
     pub fn open_confirm(&mut self, c: confirm::Confirm) {
         self.current = Some(Overlay::Confirm(c));
     }
@@ -161,8 +169,8 @@ impl Overlays {
         self.current = Some(Overlay::Create(create::Create::new(dir, kind)));
     }
 
-    pub fn open_search(&mut self, query: &str) {
-        self.current = Some(Overlay::Search(search::Search::new(query)));
+    pub fn open_search(&mut self, query: &str, mode: crate::fold::search::Mode) {
+        self.current = Some(Overlay::Search(search::Search::new(query, mode)));
     }
 
     pub fn paste(&mut self, text: &str) -> bool {
@@ -270,7 +278,11 @@ impl Overlays {
                 }
             },
             Overlay::Search(form) => match form.handle(k) {
-                Some(query) => (true, Answer::Search(query)),
+                Some((query, mode)) => (true, Answer::Search(query, mode)),
+                None => (false, Answer::Consumed),
+            },
+            Overlay::Sort(picker) => match picker.key(k) {
+                Some(order) => (true, Answer::Sort(order)),
                 None => (false, Answer::Consumed),
             },
             Overlay::Conflict(p) => match p.handle(k) {
@@ -372,6 +384,19 @@ impl Overlays {
                     (true, Answer::Closed)
                 }
             }
+            Overlay::Sort(picker) => {
+                let rect = sort::Picker::rect(area);
+                if !inside(rect, x, y) {
+                    (true, Answer::Closed)
+                } else if y > rect.y && y < rect.bottom().saturating_sub(1) {
+                    match picker.choose((y - rect.y - 1) as usize) {
+                        Some(order) => (true, Answer::Sort(order)),
+                        None => (false, Answer::Consumed),
+                    }
+                } else {
+                    (false, Answer::Consumed)
+                }
+            }
             Overlay::Conflict(p) => match conflict::layout(area, p) {
                 Some(l) if !inside(l.rect, x, y) => (true, Answer::Closed),
                 Some(l) => {
@@ -460,6 +485,10 @@ impl Overlays {
             Overlay::Rename(r) => rename::render(area, buf, theme, r),
             Overlay::Create(form) => create::render(area, buf, theme, form),
             Overlay::Search(form) => search::render(area, buf, theme, form),
+            Overlay::Sort(picker) => {
+                picker.render(area, buf, theme);
+                None
+            }
             Overlay::Conflict(p) => {
                 conflict::render(area, buf, theme, p, bars);
                 None

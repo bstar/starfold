@@ -60,6 +60,8 @@ mod tests {
             link_kind: None,
             len: 0,
             modified: None,
+            created: None,
+            accessed: None,
             mode: 0,
             executable: false,
             hidden: name.starts_with('.'),

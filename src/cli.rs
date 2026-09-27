@@ -59,8 +59,12 @@ pub enum SortArg {
     #[default]
     Name,
     Size,
+    #[value(alias = "modified")]
     Time,
     Ext,
+    Created,
+    Accessed,
+    Type,
 }
 
 impl std::fmt::Display for SortArg {
@@ -79,6 +83,9 @@ impl SortArg {
             SortArg::Size => SortKey::Size,
             SortArg::Time => SortKey::Time,
             SortArg::Ext => SortKey::Ext,
+            SortArg::Created => SortKey::Created,
+            SortArg::Accessed => SortKey::Accessed,
+            SortArg::Type => SortKey::Type,
         }
     }
 }
