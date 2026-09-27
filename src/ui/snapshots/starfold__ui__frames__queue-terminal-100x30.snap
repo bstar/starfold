@@ -6,7 +6,7 @@ expression: "render(&mut app, 100, 30)"
 ║                                         ‹  hidden  sort  filter  Bookmark  places  view  actions ║
 ║▸ ~                                                                                        6 items║
 ║─ projects/ ── 0 files · 1 dirs · 0 B ────────────────────────────────────────────────────────────║
-║○   ▸ starwire/                                                    dir             -  Sep 10      ║
+║ ○  ▸ starwire/                                                    dir             -  Sep 10      ║
 ║                                                                                                  ║
 ║                                                                                                  ║
 ║                                                                                                  ║

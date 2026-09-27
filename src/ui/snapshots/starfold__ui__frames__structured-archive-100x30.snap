@@ -8,7 +8,7 @@ expression: "render(&mut app,w,h)"
 ║    ▸ empty/                                                       dir             -  Sep 10      ║
 ║    ▸ pictures/                                                    dir             -  Sep 10      ║
 ║    ▸ projects/                                                    dir             -  Sep 10      ║
-║    ◇ blob.bin                                                     bin         256 B  Sep 10      ║
+║›   ◇ blob.bin                                                     bin         256 B  Sep 10      ║
 ║    ↗ dangling                                                     link          7 B  Sep 10      ║
 ║    ↗ notes.txt                                                    link         27 B  Sep 10      ║
 ║                                                                                                  ║

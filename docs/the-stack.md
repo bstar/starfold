@@ -108,6 +108,8 @@ stack where you wanted to look, not that you were done with where you were.
 directory. Mark a file three levels down, jump back to the top of the stack,
 mark another file somewhere else entirely, and both are still marked. The
 status line says how many: `2 marked · 14.2 MB`.
+The focused row has a `›` pointer. A marked row keeps its filled `●` beside
+that pointer when the cursor lands on it; an unmarked row shows `○`.
 
 This is what makes `y` and `p` work across directories: gather marked files,
 press `y` to save their paths, then land where you want them and press `p`.

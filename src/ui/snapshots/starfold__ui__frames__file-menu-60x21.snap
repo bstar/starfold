@@ -8,7 +8,7 @@ expression: "render(&mut app, w, h)"
 ║ ║Open                    ║                -  Sep 10      ║
 ║ ║Preview                 ║                -  Sep 10      ║
 ║ ║Mark / unmark           ║                -  Sep 10      ║
-║ ║Copy…                   ║            256 B  Sep 10      ║
+║›║Copy…                   ║            256 B  Sep 10      ║
 ║ ║Copy current path       ║              7 B  Sep 10      ║
 ║ ║Move…                   ║             27 B  Sep 10      ║
 ║ ║Rename…                 ║                               ║

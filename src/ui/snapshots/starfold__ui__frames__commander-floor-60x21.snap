@@ -5,7 +5,7 @@ expression: floor
 ╔═ S T A R / F O L D › LEFT ═╗╔═ RIGHT ════════ commander ═╗
 ║      places  view  actions ║║      places  view  actions ║
 ║─ ~/pictures ───────────────║║─ ~ ────────────────────────║
-║    ▧ harbour.png           ║║    ▸ empty/                ║
+║›   ▧ harbour.png           ║║    ▸ empty/                ║
 ║                            ║║    ▸ pictures/             ║
 ║                            ║║    ▸ projects/             ║
 ║                            ║║    ◇ blob.bin              ║

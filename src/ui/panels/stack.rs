@@ -458,18 +458,22 @@ fn render_row(
     cursor: bool,
 ) {
     let marked = row.mark == Mark::Marked;
-    // A marked cursor row draws in the cursor's colours -- the glyph still
-    // shows the mark, but which row is under the cursor is the more urgent
-    // fact, and two competing highlights would fight for the reader's eye.
-    let highlight_bg = if cursor {
-        Some(rgb(t.row_cursor_bg))
+    // A cursor must remain distinct from the marked-row tint in both dark and
+    // light themes. The pointer and the mark get separate cells and colours.
+    let cursor_colors = cursor.then(|| {
+        let bg = t.row_cursor_bg.ensure_contrast(t.panel_bg, 3.0);
+        let fg = t.row_cursor_fg.ensure_contrast(bg, 4.5);
+        (bg, fg)
+    });
+    let highlight_bg = if let Some((bg, _)) = cursor_colors {
+        Some(rgb(bg))
     } else if marked {
         Some(rgb(t.fold.marked_bg))
     } else {
         None
     };
-    let highlight_fg = if cursor {
-        Some(rgb(t.row_cursor_fg))
+    let highlight_fg = if let Some((_, fg)) = cursor_colors {
+        Some(rgb(fg))
     } else if marked {
         Some(rgb(t.fold.marked_fg))
     } else {
@@ -495,13 +499,27 @@ fn render_row(
 
     let mut x = x0;
     if cols.mark_w > 0 {
+        let pointer_style = match cursor_colors {
+            Some((bg, fg)) => Style::default().fg(rgb(fg)).bg(rgb(bg)),
+            None => highlight_bg.map_or(Style::default(), |bg| Style::default().bg(bg)),
+        };
+        buf.set_string(x, y, if cursor { "›" } else { " " }, pointer_style);
         let glyph = match row.mark {
             Mark::Marked => "\u{25cf}",
             Mark::Unmarked => "\u{25cb}",
             Mark::None => " ",
         };
-        let glyph_fg = if marked { t.fold.marked_fg } else { t.dim };
-        buf.set_string(x, y, fit(glyph, cols.mark_w), style_for(glyph_fg));
+        let mark_style = if marked {
+            let mark_fg = if cursor {
+                t.fold.marked_fg.ensure_contrast(t.fold.marked_bg, 4.5)
+            } else {
+                t.fold.marked_fg
+            };
+            Style::default().fg(rgb(mark_fg)).bg(rgb(t.fold.marked_bg))
+        } else {
+            style_for(t.dim)
+        };
+        buf.set_string(x + 1, y, glyph, mark_style);
         x += cols.mark_w + GAP;
     }
 
@@ -729,7 +747,76 @@ mod tests {
         let body = frame::body(area, &words(ModuleId::Stack));
         let s = split(body, 0, v.fold_rows);
         let style = buf[(s.list.x, s.list.y)].style();
-        assert_eq!(style.bg, Some(rgb(t.row_cursor_bg)));
+        let cursor_bg = t.row_cursor_bg.ensure_contrast(t.panel_bg, 3.0);
+        assert_eq!(style.bg, Some(rgb(cursor_bg)));
+        assert_eq!(buf[(s.list.x, s.list.y)].symbol(), "›");
+        assert!(cursor_bg.contrast(t.panel_bg) >= 3.0);
+    }
+
+    #[test]
+    fn cursor_and_mark_stay_distinct_when_the_cursor_moves() {
+        for theme_id in ["catppuccin-mocha", "catppuccin-latte"] {
+            let t = theme(theme_id);
+            let crumbs = Vec::new();
+            let rows = vec![row("marked", Mark::Marked), row("plain", Mark::Unmarked)];
+            let mut v = view(&t, &crumbs, &rows);
+            let area = Rect::new(0, 0, 60, 20);
+            let body = frame::body(area, &words(ModuleId::Stack));
+            let list = split(body, 0, v.fold_rows).list;
+
+            let mut buf = Buffer::empty(area);
+            render(area, &mut buf, &v, &mut Bars::new());
+            let cursor_bg = t.row_cursor_bg.ensure_contrast(t.panel_bg, 3.0);
+            let cursor_fg = t.row_cursor_fg.ensure_contrast(cursor_bg, 4.5);
+            assert_eq!(buf[(list.x, list.y)].symbol(), "›", "{theme_id}");
+            assert_eq!(buf[(list.x + 1, list.y)].symbol(), "●", "{theme_id}");
+            assert_eq!(
+                buf[(list.x + 1, list.y)].style().bg,
+                Some(rgb(t.fold.marked_bg))
+            );
+            assert_eq!(
+                buf[(list.x + 1, list.y)].style().fg,
+                Some(rgb(t.fold.marked_fg.ensure_contrast(t.fold.marked_bg, 4.5)))
+            );
+            assert_eq!(buf[(list.x + 4, list.y)].style().bg, Some(rgb(cursor_bg)));
+            assert_eq!(buf[(list.x + 4, list.y)].style().fg, Some(rgb(cursor_fg)));
+            assert!(cursor_fg.contrast(cursor_bg) >= 4.5, "{theme_id}");
+
+            v.cursor = 1;
+            let mut buf = Buffer::empty(area);
+            render(area, &mut buf, &v, &mut Bars::new());
+            assert_eq!(buf[(list.x, list.y)].symbol(), " ", "{theme_id}");
+            assert_eq!(buf[(list.x + 1, list.y)].symbol(), "●", "{theme_id}");
+            assert_eq!(buf[(list.x, list.y + 1)].symbol(), "›", "{theme_id}");
+            assert_eq!(buf[(list.x + 1, list.y + 1)].symbol(), "○", "{theme_id}");
+
+            v.focused = false;
+            let mut buf = Buffer::empty(area);
+            render(area, &mut buf, &v, &mut Bars::new());
+            assert_eq!(buf[(list.x, list.y + 1)].symbol(), " ", "{theme_id}");
+            assert_eq!(buf[(list.x + 1, list.y)].symbol(), "●", "{theme_id}");
+        }
+    }
+
+    #[test]
+    fn every_builtin_has_a_legible_file_cursor() {
+        for builtin in starkit::theme::builtin::BUILTINS {
+            let t = theme(builtin.id);
+            let bg = t.row_cursor_bg.ensure_contrast(t.panel_bg, 3.0);
+            let fg = t.row_cursor_fg.ensure_contrast(bg, 4.5);
+            assert!(
+                bg.contrast(t.panel_bg) >= 3.0,
+                "{} cursor background",
+                builtin.id
+            );
+            assert!(fg.contrast(bg) >= 4.5, "{} cursor text", builtin.id);
+            let marked_fg = t.fold.marked_fg.ensure_contrast(t.fold.marked_bg, 4.5);
+            assert!(
+                marked_fg.contrast(t.fold.marked_bg) >= 4.5,
+                "{} marked glyph",
+                builtin.id
+            );
+        }
     }
 
     #[test]

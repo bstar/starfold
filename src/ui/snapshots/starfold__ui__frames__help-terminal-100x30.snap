@@ -5,7 +5,7 @@ expression: "render(&mut app, 100, 30)"
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
 ║         ╔═ KEYS ═══════════════════════════════════════════════════════════════════════╗ actions ║
 ║─ ~ ── 3 ║  navigation                         stack                                    ║─────────║
-║    ▸ emp║  tab           next module          click                move the cursor     ║ 10      ║
+║›   ▸ emp║  tab           next module          click                move the cursor     ║ 10      ║
 ║    ▸ pic║  shift+tab     previous module      double-click         open it             ║ 10      ║
 ║    ▸ pro║  alt+1         the stack            ctrl+click           actions menu        ║ 10      ║
 ║    ◇ blo║  alt+2         the preview          right-click          actions if enabled  ║ 10      ║

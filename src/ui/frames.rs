@@ -332,6 +332,25 @@ fn two_marks_show_in_the_status() {
     insta::assert_snapshot!("marked-terminal-100x30", render(&mut app, 100, 30));
 }
 
+#[test]
+fn a_marked_cursor_is_visible_in_dark_and_light_themes() {
+    let (mut dark, dark_fake) = build("catppuccin-mocha");
+    dark.key(key(' '));
+    dark.key(key('k'));
+    settle(&mut dark, &dark_fake);
+    let dark_frame = render(&mut dark, 100, 30);
+    assert!(dark_frame.contains("›●"));
+    insta::assert_snapshot!("marked-cursor-mocha-100x30", dark_frame);
+
+    let (mut light, light_fake) = build("catppuccin-latte");
+    light.key(key(' '));
+    light.key(key('k'));
+    settle(&mut light, &light_fake);
+    let light_frame = render(&mut light, 100, 30);
+    assert!(light_frame.contains("›●"));
+    insta::assert_snapshot!("marked-cursor-latte-100x30", light_frame);
+}
+
 /// Two marks in `starwire/`, `alt+up` to the parent without losing the child
 /// frame, then `p` queues a copy of them into the level jumped back to.
 /// Focusing OPERATIONS (`alt+3`) opens the module so the queued row shows.
