@@ -180,14 +180,13 @@ before/after preview and a clear failure report.
 **Pass:** Try each action on a file and directory, including an existing
 target, a broken link, a read-only source, and a denied permission change.
 
-### 8. Progress and cancellation within a file
+### 8. Progress and cancellation within a file (implemented)
 
-Prototype chunked copy against today's `std::fs::copy` path. Measure common
-and large files on Linux and macOS and verify xattrs, permissions, timestamps,
-and APFS cloning behavior. Ship chunk progress only if the implementation
-preserves required metadata and acceptable copy performance; otherwise keep
-the fast copy path and accurately show per-file, indeterminate progress.
-Define what happens to an incomplete destination after cancellation.
+Copies now stream in bounded chunks to a private destination file, report
+byte progress, and remove unfinished files on cancellation. Permissions,
+timestamps, and extended attributes are copied before publication. This
+forgoes the APFS clone optimization; large-file performance and metadata
+behavior still need interactive validation on both supported platforms.
 
 **Pass:** Cancel a large copy and inspect the destination; compare metadata
 and elapsed time to the current path. No incomplete file may be presented as

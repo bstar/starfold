@@ -100,6 +100,7 @@ pub enum Word {
     Sort,
     Filter,
     Run,
+    Cancel,
     Clear,
     Close,
 }
@@ -118,7 +119,8 @@ impl Word {
             Word::Places => Some(('e', 4)),
             Word::View => Some(('v', 0)),
             Word::Run => Some(('r', 0)),
-            Word::Clear | Word::Close => Some(('c', 0)),
+            Word::Cancel | Word::Clear => None,
+            Word::Close => Some(('c', 0)),
         }
     }
 }
@@ -134,8 +136,9 @@ impl header::Word for Word {
             Word::Hidden => "hidden".into(),
             Word::Sort => "sort".into(),
             Word::Filter => "filter".into(),
-            Word::Run => "run".into(),
-            Word::Clear => "clear".into(),
+            Word::Run => "resume".into(),
+            Word::Cancel => "cancel".into(),
+            Word::Clear => "remove".into(),
             Word::Close => "close".into(),
         }
     }
@@ -151,13 +154,25 @@ pub fn highlight_header_hotkeys(
     enabled: bool,
     focused: bool,
 ) {
+    highlight_header_hotkeys_for_words(area, &words(module), module, buf, theme, enabled, focused);
+}
+
+pub fn highlight_header_hotkeys_for_words(
+    area: Rect,
+    word_list: &[Word],
+    module: ModuleId,
+    buf: &mut Buffer,
+    theme: &Theme,
+    enabled: bool,
+    focused: bool,
+) {
     if !enabled || (module != ModuleId::Stack && !focused) {
         return;
     }
     let color = theme
         .panel_bg
         .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]);
-    for (word, slot) in header::slots(area, &words(module)) {
+    for (word, slot) in header::slots(area, word_list) {
         let Some((key, offset)) = word.mnemonic() else {
             continue;
         };
@@ -186,7 +201,7 @@ pub fn words(module: ModuleId) -> Vec<Word> {
             Word::Actions,
         ],
         ModuleId::Preview => vec![Word::Close],
-        ModuleId::Operations => vec![Word::Run, Word::Clear],
+        ModuleId::Operations => vec![Word::Clear],
     }
 }
 

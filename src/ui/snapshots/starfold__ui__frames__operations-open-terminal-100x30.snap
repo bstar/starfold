@@ -4,12 +4,11 @@ expression: "render(&mut app, 100, 30)"
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
 ║                                         ‹  hidden  sort  filter  Bookmark  places  view  actions ║
-║─ ~ ── 3 files · 3 dirs · 290 B ──────────────────────────────────────────────────────────────────║
+║─ ~ ── 2 files · 3 dirs · 283 B ──────────────────────────────────────────────────────────────────║
 ║    ▸ empty/                                                       dir             -  Sep 10      ║
 ║    ▸ pictures/                                                    dir             -  Sep 10      ║
 ║    ▸ projects/                                                    dir             -  Sep 10      ║
 ║    ◇ blob.bin                                                     bin         256 B  Sep 10      ║
-║    ↗ dangling                                                     link          7 B  Sep 10      ║
 ║    ↗ notes.txt                                                    link         27 B  Sep 10      ║
 ║                                                                                                  ║
 ║                                                                                                  ║
@@ -20,15 +19,16 @@ expression: "render(&mut app, 100, 30)"
 ║                                                                                                  ║
 ║                                                                                                  ║
 ║                                                                                                  ║
+║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-╔═ PREVIEW — ↗ dangling ═══════════════════════════════════════════════════════════════════════════╗
+╔═ PREVIEW — ↗ notes.txt ══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
-║ → nowhere (broken)                                                                               ║
+║ → projects/starwire/README.md                                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                       run  clear ║
-║COPY 1 item: ~/blob.bin → ~                                queued · enter run · x drop · esc clear║
-║MOVE 1 item: ~/notes.txt → ~                                                                queued║
-║TRASH 1 item                                                                                queued║
+║                                                                                           remove ║
+║COPY 1 item: ~/blob.bin → ~                 failed · ctrl+x cancel · x remove · esc remove waiting║
+║MOVE 1 item: ~/notes.txt → ~                                                                failed║
+║TRASH 1 item                                                                                  done║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  yanked 1 item                                                                         ~  off
+? help  ctrl+x cancel  x remove  esc remove waiting                                           ~  off

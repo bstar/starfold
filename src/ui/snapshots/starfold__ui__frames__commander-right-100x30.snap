@@ -28,7 +28,7 @@ expression: right
 ║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                       run  clear ║
+║                                                                                           remove ║
 ║                                          nothing queued                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  / filter  space mark  enter open  y yank  p paste  m move  d delete             ~/empty  off
+? help  / filter  space mark  enter open  y yank  p paste  m move  dd delete            ~/empty  off

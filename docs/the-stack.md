@@ -15,14 +15,16 @@ In Commander, `space` marks entries in the active directory. `y` (or `yy`)
 yanks those entries, or the highlighted entry when nothing is marked. Switch
 to the destination pane and press `p` to queue a copy there. `m` still queues
 a move to the opposite pane. The paste destination is captured when `p` is
-pressed, so later navigation cannot change it. Run the queue with `X`.
+pressed, so later navigation cannot change it. Operations start immediately.
 Marks in Fold keep their existing across-directory
 behavior; Commander marks belong to each pane and clear when that pane changes
 directory.
 
 Press `c` with the Stack focused or click `actions` in its heading to open the file actions menu.
-Choose Copy current path to put the open directory's full path on the system clipboard. This works
-with a file highlighted and in an empty directory. Choose New file or New directory, type one name,
+Choose Copy current path to put the open directory's full path on the system clipboard. Over SSH,
+STAR/FOLD sends it to the terminal's clipboard with OSC 52, so the local computer receives it
+when the terminal allows clipboard writes. This works with a file highlighted and in an empty
+directory. Choose New file or New directory, type one name,
 and press Enter. Creation runs immediately through the
 IO worker; it does not enter the operations queue. An existing file, directory,
 or symlink is never overwritten. A successful creation refreshes the listing
@@ -116,32 +118,33 @@ press `y` to save their paths, then land where you want them and press `p`.
 The saved paths can be pasted more than once. `m` queues a move of the marked
 files to the current directory. Once an operation has run, the marks it
 consumed are gone: the copies are not marked, and neither are the originals,
-so a `d` pressed next deletes what is under the cursor and not what you just
+so `dd` pressed next targets what is under the cursor and not what you just
 copied.
 
-## The queue is the confirmation
+## The operations queue
 
-Pressing `p` or `m` does not touch the filesystem. It adds
-an entry to the OPERATIONS module:
+Pressing `p` or `m` adds an entry to OPERATIONS and starts it when the worker is free:
 
 ```
-COPY 2 items → ~/Archive                                    queued · enter run
+COPY 2 items → ~/Archive                                 copying 42.0%
 ```
 
-Nothing is copied, moved, deleted or renamed until you run the queue —
-`enter` on the module, or `X` from anywhere. `esc` on the module clears
-whatever has not started yet; a running operation is left to finish, or is
-stopped with `ctrl+x`. This is the confirmation dialog, except it is a list
-you can inspect, add to and take things off, rather than a single yes-or-no
-you have to get right the first time. A running operation shows a progress
-bar in the status row (`COPYING ████████░░ 78%`) and `ctrl+x` stops it
-without leaving anything half-done: what has already completed stays done,
-whatever file was in flight finishes (cancellation is checked between files,
-not partway through one), and nothing after it is touched.
+OPERATIONS expands while work is active without changing keyboard focus.
+`ctrl+x` stops the active operation and pauses later work, including new
+requests. `X` from anywhere or `enter`/`r` in OPERATIONS resumes it. `esc`
+there clears work that has not started. A running copy shows live byte progress
+to a tenth of a percent, with partial bar cells, even while the file view is
+idle (`COPYING ███████▊░░ 78.0%`). Stopping it removes any unfinished
+destination file. Files already completed stay completed.
+For a remote drag and drop, the same operation shows a receiving bar and live
+byte count while the sender's total is unknown. It then continues into the
+measured placement phase without starting a second operation or resetting the
+progress bar.
 
-`d` deletes the marked entries, or the entry under the cursor when nothing is
-marked — the one queueing command with something to do when the selection is
-empty.
+`dd` asks for confirmation, then starts deletion of the marked entries or the
+entry under the cursor when nothing is marked. A single `d` only waits for the
+second key. The confirmation names the captured target; accepting it does not
+starts the deletion without a second Run step.
 
 ## What `esc` does
 
@@ -152,10 +155,12 @@ in the queue has not started running yet.
 
 ## Sorting, hiding and filtering
 
-`s` or the `sort` heading opens a picker for the sort key, reverse order, and
-directories first. `S` reverses the current order directly. With directories
-first enabled, reversing changes the order within each group while directories
-continue to lead.
+`s` or the `sort` heading opens a picker for the sort key, direction, and
+directories first. The direction row toggles between Low → High and High → Low
+for size, A → Z and Z → A for names and extensions, or newest and oldest for
+dates. Press `S` to toggle direction directly, including while the picker is
+open. With directories first enabled, direction changes the order within each
+group while directories continue to lead.
 
 - **name** compares case-insensitively and treats a run of digits as a
   number, so `file2.txt` sorts before `file10.txt` rather than after it.
@@ -199,9 +204,10 @@ shows depends on what the cursor is on:
 - **Text** shows up to `[preview] max_bytes` (256 KiB by default) and
   `[preview] max_lines` (400) of the file, with a `(truncated)` marker when
   either limit cut it short.
-- **An image** decodes to real pixels, refusing to decode anything wider or
-  taller than `[preview] max_image_dimension` (4096) rather than trusting a
-  hostile header. How it is actually drawn — a terminal graphics protocol or
+- **An image** decodes to real pixels and is downscaled when the original is
+  wider or taller than `[preview] max_image_dimension` (4096). Very large
+  originals use `vipsthumbnail` when it is installed; source and output sizes
+  remain bounded. How it is actually drawn — a terminal graphics protocol or
   half-blocks — is the `[ui] graphics` setting; see
   [Installing](installing.md#terminals-and-whether-you-get-a-picture-in-the-preview).
 - **Anything else that is not text** — a binary blob without a recognised
@@ -212,8 +218,7 @@ shows depends on what the cursor is on:
 
 ## Operations: plan, conflicts and running
 
-Queueing an operation only records what you asked for. Running it plans the
-operation first — every source directory is expanded, its bytes totalled, and
+An operation starts by planning — every source directory is expanded, its bytes totalled, and
 every name that would collide with something already at the destination is
 found — and only then, if nothing needs asking, copies, moves, deletes or
 renames anything. Planning never follows a symlink: a symlinked directory
@@ -221,10 +226,9 @@ among your marks is queued as one item, recreated as a link at the other end,
 not walked into. Copying or moving a directory into itself, or into its own
 descendant, is refused outright rather than attempted.
 
-A drop is the deliberate start gesture for a transfer: it enters OPERATIONS
-and runs when the operations worker is free. Earlier keyboard-queued entries
-do not start just because a drop did. A drop still uses the same planning and
-conflict handling as an ordinary copy or move.
+A drop joins the same serial queue as keyboard and menu operations. It waits
+for earlier work, and for Resume if the queue is paused. It uses the same
+planning and conflict handling as an ordinary copy or move.
 
 When a plan finds a name already at the destination, the queue stops and
 asks — the OPERATIONS module shows the conflicts, and there are three
@@ -239,8 +243,8 @@ silently doing nothing the way a direct rename to the same name would.
 A delete goes to the trash where the platform has one; `[ops] trash` decides
 whether that is even attempted (`auto`, `always` or `never`), and where there
 is no trash to reach, STAR/FOLD asks before deleting permanently unless
-`[ops] confirm_delete` is turned off. Deleting is queued the same way copying
-and moving are: nothing happens until the queue runs.
+`[ops] confirm_delete` is turned off. `dd` always asks once; a confirmed
+delete starts as soon as the worker is free.
 
 If an operation cannot finish everything — one file among fourteen was
 unreadable, say — the status line says so plainly: `1 of 14 failed`. The

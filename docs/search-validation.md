@@ -24,7 +24,7 @@ STARFOLD_DIR="$lab/state" starfold "$lab/files"
 2. Select a result and inspect Preview. Press Space to mark it, then `c` to
    open its file menu. Confirm the clicked path names the nested result, not
    the directory you started in. Queue a copy to the disposable search root
-   and run it from OPERATIONS.
+   and watch it start in OPERATIONS.
 3. Press `h` from results. The original directory and cursor should return.
    Repeat in Commander; its pane locations should return when search closes.
 4. Search again, click `hidden` or press `n`, and check the hidden result

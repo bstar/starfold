@@ -1005,6 +1005,7 @@ mod tests {
                 transport: Some("usb".into()),
                 capacity: Some(1_000_000_000_000),
                 available: Some(600_000_000_000),
+                trash_disabled: false,
             }),
             ..item(PlaceGroup::Devices, name, path)
         }

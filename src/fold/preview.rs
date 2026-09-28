@@ -298,6 +298,29 @@ mod tests {
     }
 
     #[test]
+    fn an_image_wider_than_the_preview_limit_is_downscaled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wide.png");
+        starkit::image::RgbaImage::from_pixel(4100, 10, starkit::image::Rgba([12, 34, 56, 255]))
+            .save(&path)
+            .unwrap();
+
+        let got = build(&path, &PreviewConfig::default(), &AtomicBool::new(false));
+        match got {
+            Preview::Image {
+                width,
+                height,
+                data,
+                ..
+            } => {
+                assert_eq!((width, height), (4096, 10));
+                assert_eq!(data.get_pixel(0, 0).0, [12, 34, 56, 255]);
+            }
+            other => panic!("expected a downscaled image, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn a_png_header_claiming_absurd_dimensions_is_refused_without_a_panic() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bomb.png");

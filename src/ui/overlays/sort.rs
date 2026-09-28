@@ -67,10 +67,24 @@ impl Picker {
             KeyCode::Down | KeyCode::Char('j') => self.cursor = (self.cursor + 1).min(ROWS - 1),
             KeyCode::Home => self.cursor = 0,
             KeyCode::End => self.cursor = ROWS - 1,
+            KeyCode::Char('S' | 'r') => return self.choose(KEYS.len()),
             KeyCode::Enter | KeyCode::Char(' ') => return self.choose(self.cursor),
             _ => {}
         }
         None
+    }
+
+    fn direction_label(&self) -> &'static str {
+        match (self.order.key, self.order.reverse) {
+            (SortKey::Size, false) => "Low → High",
+            (SortKey::Size, true) => "High → Low",
+            (SortKey::Time | SortKey::Created | SortKey::Accessed, false) => "Newest → Oldest",
+            (SortKey::Time | SortKey::Created | SortKey::Accessed, true) => "Oldest → Newest",
+            (SortKey::Name | SortKey::Ext, false) => "A → Z",
+            (SortKey::Name | SortKey::Ext, true) => "Z → A",
+            (SortKey::Type, false) => "Types ↑",
+            (SortKey::Type, true) => "Types ↓",
+        }
     }
 
     pub fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
@@ -94,7 +108,7 @@ impl Picker {
                     key.label()
                 )
             } else if row == KEYS.len() {
-                format!("{} reverse", if self.order.reverse { '✓' } else { ' ' })
+                format!("↕ order: {}", self.direction_label())
             } else {
                 format!(
                     "{} directories first",
@@ -142,5 +156,22 @@ mod tests {
                 .dirs_first,
             false
         );
+    }
+
+    #[test]
+    fn direction_toggle_names_the_current_order() {
+        let mut picker = Picker::new(SortOrder {
+            key: SortKey::Size,
+            ..SortOrder::default()
+        });
+        assert_eq!(picker.direction_label(), "Low → High");
+        picker.order = picker
+            .key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
+            .unwrap();
+        assert_eq!(picker.direction_label(), "High → Low");
+        picker.order.key = SortKey::Time;
+        assert_eq!(picker.direction_label(), "Oldest → Newest");
+        picker.order.reverse = false;
+        assert_eq!(picker.direction_label(), "Newest → Oldest");
     }
 }

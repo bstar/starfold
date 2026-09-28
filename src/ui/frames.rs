@@ -237,7 +237,7 @@ fn enter(app: &mut App, fk: &fake::Fake) {
 }
 
 /// `p`: queue a copy of whatever was yanked into the active
-/// directory, run it, and set the resulting op's progress by hand to
+/// directory, then set the resulting op's progress by hand to
 /// `done`/`total` -- the shared setup behind the progress and the
 /// quit-with-running-confirm snapshots. The caller marks its own entries and
 /// settles into the destination directory after yanking the marked entries.
@@ -255,7 +255,7 @@ fn running_op(app: &mut App, fk: &fake::Fake, done: u64, total: u64) {
             .get_mut(op_id)
             .expect("the op is still in the queue");
         op.status = OpStatus::Running;
-        op.progress.set_total(total);
+        op.progress = std::sync::Arc::new(crate::fold::ops::progress::Progress::new(total));
         op.progress.add(done);
         state.version += 1;
     }
@@ -401,6 +401,34 @@ fn an_operation_running_shows_its_percentage() {
     settle(&mut app, &fk);
 
     insta::assert_snapshot!("progress-terminal-100x30", render(&mut app, 100, 30));
+}
+
+#[test]
+fn copy_progress_repaints_without_a_state_version_change() {
+    let (mut app, fk) = build("terminal");
+    cursor_to(&mut app, &fk, "blob.bin");
+    app.key(key(' '));
+    settle(&mut app, &fk);
+    cursor_to(&mut app, &fk, "empty");
+    enter(&mut app, &fk);
+    running_op(&mut app, &fk, 150, 1000);
+
+    let version = fk.state().version;
+    let progress = fk.state().queue.running().unwrap().progress.clone();
+    progress.add(3);
+    app.tick();
+    assert_eq!(fk.state().version, version);
+    assert_eq!(app.view().ops.last().unwrap().status, "copying 15.3%");
+    assert!(app
+        .view()
+        .ops
+        .last()
+        .unwrap()
+        .bar
+        .as_ref()
+        .unwrap()
+        .contains("15.3%"));
+    assert!(app.view().running_bar.as_ref().unwrap().contains("15.3%"));
 }
 
 // -- overlays ---------------------------------------------------------------
@@ -639,6 +667,8 @@ fn three_queued_operations_with_the_module_focused() {
 
     cursor_to(&mut app, &fk, "dangling");
     app.key(key('d'));
+    app.key(key('d'));
+    app.key(key('y'));
     settle(&mut app, &fk);
 
     // PREVIEW is served its room first (see `ui/layout.rs`'s module doc) and

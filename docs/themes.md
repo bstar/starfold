@@ -16,8 +16,9 @@ This page is only what is particular to STAR/FOLD.
 theme = "catppuccin-mocha"
 ```
 
-`t` and `T` cycle the built-ins while it is running, and `"system"` follows the
-desktop through Stylix. The sixteen built-in ids are listed on
+`alt+t` and `alt+shift+t` cycle the built-ins while it is running. The footer
+briefly shows the selected theme. `"system"` follows the desktop through
+Stylix. The sixteen built-in ids are listed on
 [the configuration page](configuration.md#theming).
 
 They are the same sixteen files STAR/AMP and STAR/CORD read, so setting a

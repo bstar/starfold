@@ -22,7 +22,7 @@ defaults. Editing one key never means writing the other six.
 | `[ui] right_click` | accept physical right-click mouse actions. Default `false`; Ctrl+click works without this setting |
 | `[ui] show_hidden` | show dotfiles by default. Default `false`. `.` toggles it for the running session |
 | `[ui] sort` | the starting sort key: `name`, `size`, `time` (also `modified`), `ext`, `created`, `accessed`, or `type`. Default `"name"`. Dates sort newest first; `ext` groups by extension, then by name |
-| `[ui] sort_reverse` | reverse the starting sort. Default `false` |
+| `[ui] sort_reverse` | toggle the starting sort direction. Default `false` (Low → High for size, newest first for dates) |
 | `[ui] dirs_first` | list directories before files under any sort. Default `true` |
 | `[ui] fold_rows` | how many folded parent levels the stack shows before squeezing them into one crumb row. Default `6` |
 | `[ui] preview_rows` | rows the preview panel gets when it is open and unfocused, never more than half of what the terminal has to spare above the floor. Default `10` |
@@ -36,8 +36,8 @@ than drawing something it cannot draw honestly.
 
 | Key | Does |
 | --- | --- |
-| `[ops] trash` | where a delete goes: `"auto"` (default) uses the platform's trash if one is available and asks before a permanent delete if not; `"always"` insists on the trash and refuses to delete without one; `"never"` always deletes permanently, with the same confirmation |
-| `[ops] confirm_delete` | ask before a permanent delete. Default `true` |
+| `[ops] trash` | where a delete goes: `"auto"` (default) uses Trash, but recognizes a mounted drive's explicit Trash-disabled marker and asks before permanent deletion. That dialog can stop repeating the extra warning for the drive until STAR/FOLD exits; normal delete confirmations still apply. If a single file's Trash move fails elsewhere, it asks separately before permanent deletion. `"always"` insists on Trash; `"never"` always deletes permanently after confirmation |
+| `[ops] confirm_delete` | ask before a permanent delete from the actions menu. `dd` always confirms once. Default `true` |
 | `[ops] conflicts` | the default answer when a copy or move would overwrite something: `"ask"` (default) stops the queue and asks, `"skip"` leaves the existing file alone, `"overwrite"` replaces it, `"rename"` keeps both under a new name |
 | `[ops] preserve_times` | keep a copied file's modification time rather than stamping it with the time of the copy. Default `true` |
 
@@ -50,7 +50,7 @@ than drawing something it cannot draw honestly.
 | `[preview] pdf_page_bytes` | extracted text limit per PDF page, clamped to 1–256 KiB. Default `262144` |
 | `[preview] max_bytes` | how much of a text file is read for the preview. Default `262144` (256 KiB) |
 | `[preview] max_lines` | how many lines of that text are drawn. Default `400` |
-| `[preview] max_image_dimension` | a picture wider or taller than this, in pixels, is refused rather than decoded. Default `4096` |
+| `[preview] max_image_dimension` | maximum width or height of the decoded preview, in pixels. Larger originals are downscaled. Default `4096` |
 | `[preview] dir_budget` | the most entries inspected for a directory tree or marked-directory size. Trees also stop at 400 displayed entries, four levels and 200 ms. Default `20000` |
 | `[preview] image_scale` | how a picture smaller than the panel is grown: `1x`, `pixels` or `smooth`. Default `1x` |
 
@@ -69,7 +69,7 @@ fall back to fitting the panel.
 
 | Key | Does |
 | --- | --- |
-| `[open] command` | a whitespace-split argv for opening a file externally, with the path appended as its own argument. Default `""`, which is the desktop's own opener — `open` on macOS, `xdg-open` elsewhere |
+| `[open] command` | a whitespace-split argv for opening a file externally, with the path appended as its own argument. Default `""`, which is the desktop's own opener — `open` on macOS, `xdg-open` elsewhere. Empty video files use their extension's desktop video association on Linux so they do not open as `inode/x-empty` in a browser. |
 
 `command` is one string, split on whitespace into a program and its flags,
 rather than a shell line: a file name with a space or a semicolon in it is
@@ -88,7 +88,7 @@ variables are parsed, and the file path is passed as one separate argument.
 scheme the rest of the desktop is set to, it matches it, and falls back to
 COSMIC's own settings when there is no Stylix file to read.
 
-Sixteen themes ship built in, and `t` and `T` cycle them live:
+Sixteen themes ship built in, and `alt+t` and `alt+shift+t` cycle them live:
 
 `winamp-classic` · `cosmic` · `catppuccin-mocha` · `catppuccin-latte` ·
 `gruvbox-dark` · `nord` · `tokyo-night` · `dracula` · `rose-pine` ·

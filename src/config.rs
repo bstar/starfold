@@ -325,8 +325,8 @@ const TEMPLATE: &str = r#"# STAR/FOLD configuration.
 # session and the log. $STARFOLD_DIR relocates all of it.
 
 [ui]
-# "system" follows the desktop. Or name one of the built-in themes; `t` and
-# `T` cycle through them while it is running.
+# "system" follows the desktop. Or name one of the built-in themes; Alt+T and
+# Alt+Shift+T cycle through them while it is running.
 theme = "catppuccin-mocha"
 # How pictures are drawn in the preview: auto, kitty, blocks, or off.
 graphics = "auto"
@@ -374,7 +374,7 @@ audio_buttons = "auto"
 # The most a text preview reads, in bytes, and shows, in lines.
 max_bytes = 262144
 max_lines = 400
-# A picture wider or taller than this, in pixels, is not decoded.
+# The largest preview width or height, in pixels. Larger originals are downscaled.
 max_image_dimension = 4096
 # The most entries a directory preview's summary counts before giving up.
 dir_budget = 20000

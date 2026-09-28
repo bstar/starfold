@@ -368,7 +368,10 @@ impl App {
         } else if let Some(index) = choice.mime_index {
             self.dnd.receiving_uri = true;
             self.dnd.received.clear();
-            let _ = wire::send(&format!("t=r:x={index}:i=1"), None);
+            if let Err(err) = wire::send(&format!("t=r:x={index}:i=1"), None) {
+                self.dnd_error_with(err);
+                return;
+            }
             // Remember the choice until the URI list arrives.
             self.dnd_requested_kind(kind);
         } else {
@@ -387,14 +390,18 @@ impl App {
                     let remote = self.dnd.remote.take().unwrap();
                     let roots = remote.roots.clone();
                     self.dnd.staged = Some(remote.stage);
-                    if let Some(op) = self.dnd.import_op.take() {
-                        self.core.send(Command::FinishImport { op, success: true });
-                    }
+                    let Some(op) = self.dnd.import_op.take() else {
+                        self.dnd_error_with("missing import operation");
+                        return;
+                    };
                     let result = self.dnd.result_kind.unwrap_or(OpKind::Copy);
-                    self.dnd_queue(roots, OpKind::Move);
-                    if let Some(active) = &mut self.dnd.active {
-                        active.result_operation = result;
-                    }
+                    self.dnd.choice = None;
+                    self.core
+                        .send(Command::CompleteImport { op, sources: roots });
+                    self.dnd.active = Some(Active {
+                        op,
+                        result_operation: result,
+                    });
                 }
                 Ok(false) => {}
                 Err(err) => self.dnd_error_with(&err),
@@ -428,7 +435,7 @@ impl App {
             if self.dnd.choice.as_ref().is_some_and(|choice| choice.remote) {
                 tracing::info!(files = paths.len(), "receiving remote drop files");
                 let choice = self.dnd.choice.as_ref().unwrap();
-                let Some(index) = choice.mime_index else {
+                let Some(_) = choice.mime_index else {
                     self.dnd_error();
                     return;
                 };
@@ -438,25 +445,15 @@ impl App {
                 });
                 let latest = {
                     let state = self.core.state();
-                    state
-                        .queue
-                        .iter()
-                        .last()
-                        .map(|op| (op.id, Arc::clone(&op.progress)))
+                    let id = state.queue.iter().last().map(|op| op.id);
+                    id
                 };
-                let Some((op_id, progress)) = latest else {
+                let Some(op_id) = latest else {
                     self.dnd_error();
                     return;
                 };
                 self.dnd.import_op = Some(op_id);
-                match wire::Remote::new(&choice.dest, &paths, index, progress) {
-                    Ok(mut remote) => match remote.request_next() {
-                        Ok(false) => self.dnd.remote = Some(remote),
-                        Ok(true) => self.dnd_error_with("remote drop had no files"),
-                        Err(err) => self.dnd_error_with(&err),
-                    },
-                    Err(err) => self.dnd_error_with(&err),
-                }
+                self.dnd.pending_paths = Some(paths);
             } else {
                 // An external source owns removal on successful Move completion.
                 self.dnd_queue(paths, OpKind::Copy);
@@ -464,6 +461,85 @@ impl App {
                     active.result_operation = kind;
                 }
             }
+        }
+    }
+
+    pub(super) fn dnd_start_remote(&mut self, op: crate::fold::ops::OpId) {
+        if self.dnd.import_op != Some(op) {
+            return;
+        }
+        if !self
+            .core
+            .state()
+            .queue
+            .iter()
+            .any(|entry| entry.id == op && entry.status == OpStatus::Running)
+        {
+            return;
+        }
+        let Some(paths) = self.dnd.pending_paths.take() else {
+            return;
+        };
+        let Some(choice) = self.dnd.choice.as_ref() else {
+            return;
+        };
+        let Some(index) = choice.mime_index else {
+            self.dnd_error_with("missing drop format");
+            return;
+        };
+        let dest = choice.dest.clone();
+        let found = {
+            let state = self.core.state();
+            let found = state
+                .queue
+                .iter()
+                .find(|entry| entry.id == op)
+                .map(|entry| {
+                    let skip = if entry.policy == crate::fold::ops::ConflictPolicy::Skip {
+                        entry
+                            .plan
+                            .as_ref()
+                            .map(|plan| {
+                                paths
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(i, path)| {
+                                        plan.conflicts
+                                            .iter()
+                                            .any(|conflict| conflict.source == *path)
+                                            .then_some(i)
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    (Arc::clone(&entry.progress), skip)
+                });
+            found
+        };
+        let Some((progress, skip)) = found else {
+            self.dnd_error_with("missing import operation");
+            return;
+        };
+        if skip.len() == paths.len() {
+            self.dnd.choice = None;
+            self.dnd.import_op = None;
+            self.core.send(Command::FinishImport { op, success: true });
+            self.dnd.active = Some(Active {
+                op,
+                result_operation: self.dnd.result_kind.unwrap_or(OpKind::Copy),
+            });
+            return;
+        }
+        match wire::Remote::new_filtered(&dest, &paths, index, progress, &skip) {
+            Ok(mut remote) => match remote.request_next() {
+                Ok(false) => self.dnd.remote = Some(remote),
+                Ok(true) => self.dnd_error_with("remote drop had no files"),
+                Err(error) => self.dnd_error_with(error),
+            },
+            Err(error) => self.dnd_error_with(error),
         }
     }
 
@@ -646,6 +722,7 @@ impl App {
         }
         self.dnd.receiving_uri = false;
         self.dnd.received.clear();
+        self.dnd.pending_paths = None;
         self.dnd.result_kind = None;
         self.dnd.remote = None;
         self.dnd.staged = None;

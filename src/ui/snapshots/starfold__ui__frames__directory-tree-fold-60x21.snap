@@ -19,7 +19,7 @@ expression: "render(&mut app, 60, 21)"
 ║ └── ▸ starwire/                                          █
 ╚══════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════╗
-║                                               run  clear ║
+║                                                   remove ║
 ║                      nothing queued                      ║
 ╚══════════════════════════════════════════════════════════╝
 ? help  j/k scroll  i fold  z scale                   ~  off

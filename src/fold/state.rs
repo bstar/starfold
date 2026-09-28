@@ -472,10 +472,7 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
                 .queue
                 .enqueue(kind, sources.clone(), dest, state.conflicts);
             record_search_expectations(state, id, &sources);
-            Effects {
-                jobs: vec![],
-                events: vec![Event::Queue(id)],
-            }
+            queued_effects(state, id)
         }
         Command::QueueDrop {
             kind,
@@ -489,9 +486,7 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
                 .queue
                 .enqueue_drop(kind, sources.clone(), dest, state.conflicts);
             record_search_expectations(state, id, &sources);
-            let mut effects = run_next(state);
-            effects.events.insert(0, Event::Queue(id));
-            effects
+            queued_effects(state, id)
         }
         Command::BeginExport(sources) => {
             if sources.is_empty() {
@@ -519,15 +514,62 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             if sources.is_empty() {
                 return Effects::default();
             }
-            let id = state.queue.begin_import(sources, dest, state.conflicts);
+            let id = state
+                .queue
+                .begin_import(sources.clone(), dest.clone(), state.conflicts);
             Effects {
-                jobs: vec![],
+                jobs: vec![Job::CheckImport {
+                    op: id,
+                    sources,
+                    dest,
+                }],
                 events: vec![Event::Queue(id)],
+            }
+        }
+        Command::CompleteImport { op, sources } => {
+            let Some(entry) = state.queue.get_mut(op) else {
+                return Effects::default();
+            };
+            if entry.import_sources.is_some() && entry.progress.is_cancelled() {
+                entry.status = OpStatus::Cancelled;
+                return Effects {
+                    jobs: vec![],
+                    events: vec![Event::Queue(op)],
+                };
+            }
+            if entry.import_sources.is_none() || entry.status != OpStatus::Running {
+                return Effects::default();
+            }
+            if entry.progress.is_cancelled() || sources.is_empty() {
+                entry.status = if entry.progress.is_cancelled() {
+                    OpStatus::Cancelled
+                } else {
+                    OpStatus::Failed
+                };
+                let mut effects = run_next(state);
+                effects.events.insert(0, Event::Queue(op));
+                return effects;
+            }
+            entry.progress.finish_receiving();
+            entry.sources = sources.clone();
+            entry.kind = OpKind::Move;
+            entry.status = OpStatus::Planning;
+            Effects {
+                jobs: vec![Job::Plan {
+                    op,
+                    kind: OpKind::Move,
+                    sources,
+                    dest: entry.dest.clone(),
+                    expected: Vec::new(),
+                }],
+                events: vec![Event::Queue(op)],
             }
         }
         Command::FinishImport { op, success } => {
             if let Some(entry) = state.queue.get_mut(op) {
-                entry.status = if success {
+                entry.status = if entry.progress.is_cancelled() {
+                    OpStatus::Cancelled
+                } else if success {
                     OpStatus::Done
                 } else {
                     OpStatus::Failed
@@ -566,15 +608,40 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::QueueMoveHere => cmd_queue_move(state),
         Command::QueueDelete => cmd_queue_delete(state),
         Command::QueueDeleteSources(sources) => queue_delete_sources(state, sources),
+        Command::QueuePermanentDeleteSources(sources) => {
+            queue_delete_sources_with_how(state, sources, DeleteHow::Permanent)
+        }
         Command::QueueRename { from, to } => cmd_queue_rename(state, from, to),
         Command::RemoveOp(id) => cmd_remove_op(state, id),
         Command::ClearQueue => cmd_clear_queue(state),
         Command::Run => {
-            state.queue.start_manual();
+            state.queue.resume();
             run_next(state)
         }
         Command::SetPolicy(id, policy) => cmd_set_policy(state, id, policy),
+        Command::SetConflictNames(id, names) => {
+            let Some(op) = state.queue.get_mut(id) else {
+                return Effects::default();
+            };
+            if op.status != OpStatus::NeedsPolicy {
+                return Effects::default();
+            }
+            op.rename_targets = names;
+            cmd_set_policy(state, id, ConflictPolicy::RenameNew)
+        }
         Command::Cancel(id) => cmd_cancel(state, id),
+        Command::StopActive(id) => {
+            if state
+                .queue
+                .get_mut(id)
+                .is_some_and(|op| matches!(op.status, OpStatus::Planning | OpStatus::Running))
+            {
+                state.queue.pause();
+                cmd_cancel(state, id)
+            } else {
+                Effects::default()
+            }
+        }
         Command::Preview(path) => cmd_preview(state, path),
         Command::ClosePreview => {
             state.preview_generation += 1;
@@ -781,6 +848,7 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
             preview,
         } => done_previewed(state, path, generation, preview),
         Done::Planned { op, result } => done_planned(state, op, result),
+        Done::ImportChecked { op, result } => done_import_checked(state, op, result),
         Done::Finished { op, outcome } => done_finished(state, op, outcome),
         Done::Changed(dirs) => done_changed(state, dirs),
     }
@@ -1540,10 +1608,7 @@ fn cmd_paste_here(state: &mut State) -> Effects {
             }
         }
     }
-    Effects {
-        jobs: Vec::new(),
-        events: vec![Event::Queue(id)],
-    }
+    queued_effects(state, id)
 }
 
 /// `QueueMoveHere`: everything marked, into the opposite Commander pane or
@@ -1570,10 +1635,7 @@ fn cmd_queue_move(state: &mut State) -> Effects {
         .queue
         .enqueue(OpKind::Move, sources.clone(), Some(dest), state.conflicts);
     record_search_expectations(state, id, &sources);
-    Effects {
-        jobs: Vec::new(),
-        events: vec![Event::Queue(id)],
-    }
+    queued_effects(state, id)
 }
 
 /// `QueueDelete`: the marked entries, or the entry under the cursor when
@@ -1604,14 +1666,22 @@ fn queue_delete_sources(state: &mut State, sources: Vec<PathBuf>) -> Effects {
     } else {
         DeleteHow::Permanent
     };
+    queue_delete_sources_with_how(state, sources, how)
+}
+
+fn queue_delete_sources_with_how(
+    state: &mut State,
+    sources: Vec<PathBuf>,
+    how: DeleteHow,
+) -> Effects {
+    if sources.is_empty() {
+        return Effects::default();
+    }
     let id = state
         .queue
         .enqueue(OpKind::Delete(how), sources.clone(), None, state.conflicts);
     record_search_expectations(state, id, &sources);
-    Effects {
-        jobs: Vec::new(),
-        events: vec![Event::Queue(id)],
-    }
+    queued_effects(state, id)
 }
 
 fn cmd_queue_rename(state: &mut State, from: PathBuf, to: PathBuf) -> Effects {
@@ -1622,10 +1692,13 @@ fn cmd_queue_rename(state: &mut State, from: PathBuf, to: PathBuf) -> Effects {
         state.conflicts,
     );
     record_search_expectations(state, id, &[from]);
-    Effects {
-        jobs: Vec::new(),
-        events: vec![Event::Queue(id)],
-    }
+    queued_effects(state, id)
+}
+
+fn queued_effects(state: &mut State, id: OpId) -> Effects {
+    let mut effects = run_next(state);
+    effects.events.insert(0, Event::Queue(id));
+    effects
 }
 
 fn record_search_expectations(state: &mut State, id: OpId, sources: &[PathBuf]) {
@@ -1674,6 +1747,13 @@ fn nothing_marked_note() -> Effects {
 }
 
 fn cmd_remove_op(state: &mut State, id: OpId) -> Effects {
+    if state
+        .queue
+        .get_mut(id)
+        .is_some_and(|op| matches!(op.status, OpStatus::Planning | OpStatus::Running))
+    {
+        return Effects::default();
+    }
     if state.queue.remove(id) {
         Effects {
             jobs: Vec::new(),
@@ -1691,7 +1771,7 @@ fn cmd_clear_queue(state: &mut State) -> Effects {
     let removed: Vec<OpId> = state
         .queue
         .iter()
-        .filter(|op| op.is_pending())
+        .filter(|op| matches!(op.status, OpStatus::Queued | OpStatus::NeedsPolicy))
         .map(|op| op.id)
         .collect();
     if removed.is_empty() {
@@ -1715,10 +1795,7 @@ fn run_next(state: &mut State) -> Effects {
         .iter()
         .any(|op| matches!(op.status, OpStatus::Planning | OpStatus::Running));
     if in_flight {
-        return Effects {
-            jobs: Vec::new(),
-            events: vec![Event::Note(Note::info("an operation is already running"))],
-        };
+        return Effects::default();
     }
     let Some(id) = state.queue.next_runnable() else {
         return Effects::default();
@@ -1744,6 +1821,7 @@ fn run_next(state: &mut State) -> Effects {
                 kind,
                 plan,
                 policy,
+                rename_targets: op.rename_targets.clone(),
                 progress: Arc::clone(&op.progress),
                 expected: op.expected.clone(),
             }],
@@ -1770,6 +1848,17 @@ fn cmd_set_policy(state: &mut State, id: OpId, policy: ConflictPolicy) -> Effect
         return Effects::default();
     };
     op.policy = policy;
+    if op.import_sources.is_some() && op.kind == OpKind::Copy && op.status == OpStatus::NeedsPolicy
+    {
+        op.status = OpStatus::Running;
+        if policy == ConflictPolicy::Skip {
+            op.skipped = op.plan.as_ref().map_or(0, |plan| plan.conflicts.len());
+        }
+        return Effects {
+            jobs: vec![],
+            events: vec![Event::Queue(id), Event::ImportReady(id)],
+        };
+    }
     if op.status == OpStatus::NeedsPolicy {
         op.status = OpStatus::Queued;
     }
@@ -1991,11 +2080,80 @@ fn done_previewed(
     }
 }
 
+fn done_import_checked(
+    state: &mut State,
+    op_id: OpId,
+    result: Result<Vec<super::ops::Conflict>, String>,
+) -> Effects {
+    let Some(op) = state.queue.get_mut(op_id) else {
+        return Effects::default();
+    };
+    if op.import_sources.is_none() || op.status != OpStatus::Planning {
+        return Effects::default();
+    }
+    if op.progress.is_cancelled() {
+        op.status = OpStatus::Cancelled;
+        return Effects {
+            jobs: vec![],
+            events: vec![Event::Queue(op_id)],
+        };
+    }
+    match result {
+        Err(error) => {
+            op.status = OpStatus::Failed;
+            Effects {
+                jobs: vec![],
+                events: vec![
+                    Event::Queue(op_id),
+                    Event::Note(Note::error("import-check", error)),
+                ],
+            }
+        }
+        Ok(conflicts) if !conflicts.is_empty() && op.policy == ConflictPolicy::Ask => {
+            op.plan = Some(super::ops::Plan {
+                conflicts,
+                ..Default::default()
+            });
+            op.status = OpStatus::NeedsPolicy;
+            Effects {
+                jobs: vec![],
+                events: vec![Event::Queue(op_id), Event::Conflicts(op_id)],
+            }
+        }
+        Ok(conflicts) => {
+            if op.policy == ConflictPolicy::Skip {
+                op.skipped = conflicts.len();
+            }
+            op.plan = Some(super::ops::Plan {
+                conflicts,
+                ..Default::default()
+            });
+            op.status = OpStatus::Running;
+            Effects {
+                jobs: vec![],
+                events: vec![Event::Queue(op_id), Event::ImportReady(op_id)],
+            }
+        }
+    }
+}
+
 fn done_planned(
     state: &mut State,
     op_id: OpId,
     result: Result<super::ops::Plan, String>,
 ) -> Effects {
+    if state
+        .queue
+        .get_mut(op_id)
+        .is_some_and(|op| op.progress.is_cancelled())
+    {
+        if let Some(op) = state.queue.get_mut(op_id) {
+            op.status = OpStatus::Cancelled;
+        }
+        let mut effects = run_next(state);
+        effects.events.insert(0, Event::Queue(op_id));
+        return effects;
+    }
     match result {
         Err(message) => {
             if let Some(op) = state.queue.get_mut(op_id) {
@@ -2027,6 +2185,7 @@ fn done_planned(
                         kind,
                         plan,
                         policy,
+                        rename_targets: op.rename_targets.clone(),
                         progress: Arc::clone(&op.progress),
                         expected: op.expected.clone(),
                     });
@@ -2048,7 +2207,7 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
     let mut moved_or_deleted: Vec<PathBuf> = Vec::new();
 
     if let Some(op) = state.queue.get_mut(op_id) {
-        op.skipped = outcome.skipped;
+        op.skipped += outcome.skipped;
         op.status = if outcome.cancelled {
             OpStatus::Cancelled
         } else if !outcome.failed.is_empty() {
@@ -2059,10 +2218,21 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
 
         if op.status == OpStatus::Failed {
             let total = outcome.done + outcome.skipped + outcome.failed.len();
+            let detail = if outcome.failed.len() == 1 {
+                format!(": {}", outcome.failed[0].1)
+            } else {
+                String::new()
+            };
             events.push(Event::Note(Note::error(
                 "op-failed",
-                format!("{} of {} failed", outcome.failed.len(), total),
+                format!("{} of {} failed{detail}", outcome.failed.len(), total),
             )));
+            if op.kind == OpKind::Delete(DeleteHow::Trash)
+                && state.trash == TrashMode::Auto
+                && op.sources.len() == 1
+            {
+                op.trash_failure = Some(outcome.failed[0].1.clone());
+            }
         }
 
         // Every kind consumes its marks. A move, a delete and a rename have
@@ -2070,7 +2240,12 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
         // being copied, and a `d` pressed afterwards that deleted the
         // originals because they were still marked is a mistake nobody
         // should be able to make.
-        if !outcome.cancelled {
+        // The trash library may report the unusable trash directory as the
+        // failing path rather than the requested source. A failed batch does
+        // not identify which sources moved, so retain its marks.
+        if !outcome.cancelled
+            && !(op.kind == OpKind::Delete(DeleteHow::Trash) && !outcome.failed.is_empty())
+        {
             for src in &op.sources {
                 if !outcome.failed.iter().any(|(p, _)| p == src) {
                     moved_or_deleted.push(src.clone());
@@ -2143,6 +2318,207 @@ mod tests {
 
     fn state_at(dir: &str) -> State {
         State::new(&cfg(), PathBuf::from(dir), PathBuf::from(dir), true)
+    }
+
+    #[test]
+    fn remote_import_keeps_one_operation_and_one_progress_counter() {
+        let mut state = state_at("/home");
+        apply(
+            &mut state,
+            Change::Command(Command::BeginImport {
+                sources: vec!["/remote/photo.jpg".into()],
+                dest: "/home/photos".into(),
+            }),
+        );
+        let op = state.queue.iter().last().unwrap();
+        let id = op.id;
+        let checked = apply(
+            &mut state,
+            Change::Done(Done::ImportChecked {
+                op: id,
+                result: Ok(vec![]),
+            }),
+        );
+        assert!(checked
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::ImportReady(found) if *found == id)));
+        let op = state.queue.get_mut(id).unwrap();
+        op.progress.add(100);
+        assert_eq!(op.progress.done(), 100);
+        assert_eq!(op.progress.total(), 0);
+
+        let effects = apply(
+            &mut state,
+            Change::Command(Command::CompleteImport {
+                op: id,
+                sources: vec!["/home/photos/.starfold-drop/photo.jpg".into()],
+            }),
+        );
+        assert!(
+            matches!(effects.jobs.as_slice(), [Job::Plan { op, kind: OpKind::Move, .. }] if *op == id)
+        );
+        let op = state.queue.get_mut(id).unwrap();
+        assert_eq!(op.title(), "COPY 1 item → /home/photos");
+        assert_eq!(
+            op.import_sources.as_ref().unwrap()[0],
+            Path::new("/remote/photo.jpg")
+        );
+        assert_eq!(op.progress.percent(), "50.0%");
+        assert_eq!(state.queue.len(), 1);
+
+        apply(
+            &mut state,
+            Change::Done(Done::Planned {
+                op: id,
+                result: Ok(super::super::ops::Plan {
+                    total_bytes: 100,
+                    ..Default::default()
+                }),
+            }),
+        );
+        let op = state.queue.get_mut(id).unwrap();
+        assert_eq!(op.progress.percent(), "50.0%");
+        op.progress.add(100);
+        assert_eq!(op.progress.percent(), "100.0%");
+        assert_eq!(state.queue.len(), 1);
+    }
+
+    #[test]
+    fn remote_collision_waits_for_policy_before_receiving() {
+        let mut state = state_at("/home");
+        let source = PathBuf::from("/remote/photo.jpg");
+        let dest = PathBuf::from("/home/photos");
+        let started = apply(
+            &mut state,
+            Change::Command(Command::BeginImport {
+                sources: vec![source.clone()],
+                dest: dest.clone(),
+            }),
+        );
+        let id = state.queue.iter().last().unwrap().id;
+        assert!(matches!(started.jobs.as_slice(), [Job::CheckImport { .. }]));
+        assert_eq!(state.queue.get_mut(id).unwrap().status, OpStatus::Planning);
+        let checked = apply(
+            &mut state,
+            Change::Done(Done::ImportChecked {
+                op: id,
+                result: Ok(vec![super::super::ops::Conflict {
+                    source,
+                    dest: dest.join("photo.jpg"),
+                    both_dirs: false,
+                }]),
+            }),
+        );
+        assert!(checked
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::Conflicts(found) if *found == id)));
+        assert!(!checked
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::ImportReady(_))));
+        let op = state.queue.get_mut(id).unwrap();
+        assert_eq!(op.status, OpStatus::NeedsPolicy);
+        assert_eq!(
+            op.plan.as_ref().unwrap().conflicts[0].dest,
+            dest.join("photo.jpg")
+        );
+        let answered = apply(
+            &mut state,
+            Change::Command(Command::SetPolicy(id, ConflictPolicy::RenameNew)),
+        );
+        assert!(answered
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::ImportReady(found) if *found == id)));
+        assert_eq!(state.queue.get_mut(id).unwrap().status, OpStatus::Running);
+    }
+
+    #[test]
+    fn remote_conflict_keeps_entered_name_after_staging() {
+        let mut state = state_at("/home");
+        let dest = PathBuf::from("/home/photos");
+        let original = dest.join("photo.jpg");
+        apply(
+            &mut state,
+            Change::Command(Command::BeginImport {
+                sources: vec!["/remote/photo.jpg".into()],
+                dest: dest.clone(),
+            }),
+        );
+        let id = state.queue.iter().last().unwrap().id;
+        let conflict = super::super::ops::Conflict {
+            source: "/remote/photo.jpg".into(),
+            dest: original.clone(),
+            both_dirs: false,
+        };
+        apply(
+            &mut state,
+            Change::Done(Done::ImportChecked {
+                op: id,
+                result: Ok(vec![conflict]),
+            }),
+        );
+        let names = vec![(original.clone(), dest.join("my photo.jpg"))];
+        let ready = apply(
+            &mut state,
+            Change::Command(Command::SetConflictNames(id, names.clone())),
+        );
+        assert!(ready
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::ImportReady(found) if *found == id)));
+        let staged = PathBuf::from("/home/photos/.starfold-drop/photo.jpg");
+        apply(
+            &mut state,
+            Change::Command(Command::CompleteImport {
+                op: id,
+                sources: vec![staged.clone()],
+            }),
+        );
+        let planned = apply(
+            &mut state,
+            Change::Done(Done::Planned {
+                op: id,
+                result: Ok(super::super::ops::Plan {
+                    sources: vec![staged.clone()],
+                    dest,
+                    conflicts: vec![super::super::ops::Conflict {
+                        source: staged,
+                        dest: original,
+                        both_dirs: false,
+                    }],
+                    ..Default::default()
+                }),
+            }),
+        );
+        assert!(
+            matches!(planned.jobs.as_slice(), [Job::Run { rename_targets, .. }] if *rename_targets == names)
+        );
+    }
+
+    #[test]
+    fn stopped_remote_receipt_never_plans_the_staged_move() {
+        let mut state = state_at("/home");
+        apply(
+            &mut state,
+            Change::Command(Command::BeginImport {
+                sources: vec!["/remote/photo.jpg".into()],
+                dest: "/home/photos".into(),
+            }),
+        );
+        let id = state.queue.iter().last().unwrap().id;
+        apply(&mut state, Change::Command(Command::StopActive(id)));
+        let effects = apply(
+            &mut state,
+            Change::Command(Command::CompleteImport {
+                op: id,
+                sources: vec!["/home/photos/.starfold-drop/photo.jpg".into()],
+            }),
+        );
+        assert!(effects.jobs.is_empty());
+        assert_eq!(state.queue.get_mut(id).unwrap().status, OpStatus::Cancelled);
     }
 
     fn entry_named(dir: &str, name: &str, kind: EntryKind) -> Entry {
@@ -2486,7 +2862,8 @@ mod tests {
         let op = s.queue.iter().next().unwrap();
         assert_eq!(op.dest.as_deref(), Some(Path::new("/dest")));
         assert_eq!(op.sources, vec![PathBuf::from("/src/a.txt")]);
-        assert!(matches!(effects.events.as_slice(), [Event::Queue(_)]));
+        assert!(effects.events.iter().any(|e| matches!(e, Event::Queue(_))));
+        assert!(matches!(effects.jobs.as_slice(), [Job::Plan { .. }]));
     }
 
     #[test]
@@ -2536,14 +2913,12 @@ mod tests {
     }
 
     #[test]
-    fn run_plans_the_first_runnable_op() {
+    fn paste_plans_the_first_runnable_op_immediately() {
         let mut s = state_at("/home");
         s.selection
             .toggle(&entry_named("/home", "a.txt", EntryKind::File));
         apply(&mut s, Change::Command(Command::Yank));
-        apply(&mut s, Change::Command(Command::PasteHere));
-
-        let effects = apply(&mut s, Change::Command(Command::Run));
+        let effects = apply(&mut s, Change::Command(Command::PasteHere));
         assert!(matches!(effects.jobs.as_slice(), [Job::Plan { .. }]));
         assert_eq!(s.queue.iter().next().unwrap().status, OpStatus::Planning);
     }
@@ -2603,9 +2978,27 @@ mod tests {
     }
 
     #[test]
-    fn dropped_transfer_runs_next_without_starting_old_manual_entries() {
+    fn named_conflict_choice_reaches_the_worker() {
+        let mut s = state_at("/home");
+        let id = queued_copy_with_a_conflict(&mut s);
+        let targets = vec![(
+            PathBuf::from("/home/a.txt"),
+            PathBuf::from("/home/my copy.txt"),
+        )];
+        let effects = apply(
+            &mut s,
+            Change::Command(Command::SetConflictNames(id, targets.clone())),
+        );
+        assert!(
+            matches!(effects.jobs.as_slice(), [Job::Run { rename_targets, policy: ConflictPolicy::RenameNew, .. }] if *rename_targets == targets)
+        );
+        assert_eq!(s.queue.get_mut(id).unwrap().status, OpStatus::Running);
+    }
+
+    #[test]
+    fn dropped_transfer_waits_for_the_earlier_operation() {
         let mut s = state_at("/dest");
-        apply(
+        let first = apply(
             &mut s,
             Change::Command(Command::QueueOperation {
                 kind: OpKind::Copy,
@@ -2614,6 +3007,7 @@ mod tests {
             }),
         );
         let old = s.queue.iter().next().unwrap().id;
+        assert!(matches!(first.jobs.as_slice(), [Job::Plan { op, .. }] if *op == old));
         let started = apply(
             &mut s,
             Change::Command(Command::QueueDrop {
@@ -2623,26 +3017,81 @@ mod tests {
             }),
         );
         let drop_id = s.queue.iter().nth(1).unwrap().id;
-        assert!(matches!(started.jobs.as_slice(), [Job::Plan { op, .. }] if *op == drop_id));
+        assert!(started.jobs.is_empty());
+        assert_eq!(s.queue.iter().nth(1).unwrap().status, OpStatus::Queued);
         apply(
             &mut s,
             Change::Done(Done::Planned {
-                op: drop_id,
+                op: old,
                 result: Ok(super::super::ops::Plan::default()),
             }),
         );
         let finished = apply(
             &mut s,
             Change::Done(Done::Finished {
-                op: drop_id,
+                op: old,
                 outcome: super::super::ops::Outcome::default(),
             }),
         );
-        assert!(!finished
+        assert!(finished
             .jobs
             .iter()
-            .any(|job| matches!(job, Job::Plan { op, .. } if *op == old)));
-        assert_eq!(s.queue.iter().next().unwrap().status, OpStatus::Queued);
+            .any(|job| matches!(job, Job::Plan { op, .. } if *op == drop_id)));
+        assert_eq!(s.queue.iter().next().unwrap().status, OpStatus::Done);
+    }
+
+    #[test]
+    fn stop_pauses_later_and_new_work_until_resume() {
+        let mut s = state_at("/dest");
+        let first = apply(
+            &mut s,
+            Change::Command(Command::QueueOperation {
+                kind: OpKind::Copy,
+                sources: vec!["/a".into()],
+                dest: Some("/dest".into()),
+            }),
+        );
+        let active = s.queue.iter().next().unwrap().id;
+        assert!(matches!(first.jobs.as_slice(), [Job::Plan { op, .. }] if *op == active));
+        apply(
+            &mut s,
+            Change::Command(Command::QueueOperation {
+                kind: OpKind::Copy,
+                sources: vec!["/b".into()],
+                dest: Some("/dest".into()),
+            }),
+        );
+        apply(&mut s, Change::Command(Command::StopActive(active)));
+        assert!(s.queue.is_paused());
+        let planned = apply(
+            &mut s,
+            Change::Done(Done::Planned {
+                op: active,
+                result: Ok(super::super::ops::Plan::default()),
+            }),
+        );
+        assert!(planned.jobs.is_empty());
+        assert_eq!(s.queue.iter().next().unwrap().status, OpStatus::Cancelled);
+        let dropped = apply(
+            &mut s,
+            Change::Command(Command::QueueDrop {
+                kind: OpKind::Copy,
+                sources: vec!["/c".into()],
+                dest: "/dest".into(),
+            }),
+        );
+        assert!(dropped.jobs.is_empty());
+        assert_eq!(
+            s.queue
+                .iter()
+                .filter(|op| op.status == OpStatus::Queued)
+                .count(),
+            2
+        );
+        let resumed = apply(&mut s, Change::Command(Command::Run));
+        assert!(!s.queue.is_paused());
+        let second = s.queue.iter().nth(1).unwrap().id;
+        assert!(matches!(resumed.jobs.as_slice(), [Job::Plan { op, .. }] if *op == second));
     }
 
     #[test]
@@ -2705,6 +3154,73 @@ mod tests {
             "the next op started: {:?}",
             effects.jobs
         );
+    }
+
+    #[test]
+    fn failed_delete_reports_the_reason() {
+        let mut s = state_at("/home");
+        let source = PathBuf::from("/home/uploaded.txt");
+        s.selection
+            .toggle(&entry_named("/home", "uploaded.txt", EntryKind::File));
+        apply(
+            &mut s,
+            Change::Command(Command::QueueDeleteSources(vec![source.clone()])),
+        );
+        let id = s.queue.iter().next().unwrap().id;
+        let effects = apply(
+            &mut s,
+            Change::Done(Done::Finished {
+                op: id,
+                outcome: super::super::ops::Outcome {
+                    failed: vec![(
+                        "/volume/.Trash-1000".into(),
+                        "trash directory is unavailable".into(),
+                    )],
+                    ..Default::default()
+                },
+            }),
+        );
+        assert!(effects.events.iter().any(|event| matches!(
+            event,
+            Event::Note(note) if note.text.contains("trash directory is unavailable")
+        )));
+        assert_eq!(
+            s.queue.get_mut(id).unwrap().trash_failure.as_deref(),
+            Some("trash directory is unavailable")
+        );
+        assert!(s.selection.is_marked(&source));
+
+        apply(
+            &mut s,
+            Change::Command(Command::QueuePermanentDeleteSources(vec![
+                "/home/uploaded.txt".into(),
+            ])),
+        );
+        assert_eq!(
+            s.queue.iter().last().unwrap().kind,
+            OpKind::Delete(DeleteHow::Permanent)
+        );
+
+        let mut s = state_at("/home");
+        s.trash = TrashMode::Always;
+        apply(
+            &mut s,
+            Change::Command(Command::QueueDeleteSources(vec![
+                "/home/uploaded.txt".into()
+            ])),
+        );
+        let id = s.queue.iter().next().unwrap().id;
+        apply(
+            &mut s,
+            Change::Done(Done::Finished {
+                op: id,
+                outcome: super::super::ops::Outcome {
+                    failed: vec![("/home/uploaded.txt".into(), "still unavailable".into())],
+                    ..Default::default()
+                },
+            }),
+        );
+        assert!(s.queue.get_mut(id).unwrap().trash_failure.is_none());
     }
 
     #[test]

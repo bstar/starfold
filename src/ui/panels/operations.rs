@@ -41,16 +41,32 @@ pub struct View<'a> {
     pub theme: &'a Theme,
     pub focused: bool,
     pub folded: bool,
+    pub paused: bool,
+    pub active: bool,
     pub rows: &'a [OpRow],
     /// A volume unmount is worker activity, not a removable queue entry.
     pub unmounting: Option<&'a str>,
+    /// An accepted external drop is visible while its file list is in transit.
+    pub incoming: Option<String>,
     pub spinner: &'a str,
     pub cursor: usize,
     pub scroll: usize,
-    /// `"enter run · esc clear"` -- shown beside the cursor row's own status
+    /// `"enter resume · esc remove waiting"` -- shown beside the cursor row's own status
     /// while the module has focus, the same way a status bar's key hints
     /// only mean anything once you know where you are.
     pub hint: &'a str,
+}
+
+pub fn header_words(paused: bool, active: bool) -> Vec<super::Word> {
+    let mut result = Vec::new();
+    if active {
+        result.push(super::Word::Cancel);
+    }
+    if paused {
+        result.push(super::Word::Run);
+    }
+    result.push(super::Word::Clear);
+    result
 }
 
 fn tone_fg(t: &Theme, tone: Tone) -> Rgb {
@@ -74,8 +90,13 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
     let detail = v
         .unmounting
         .map(|_| activity_status(v).to_string())
+        .or_else(|| {
+            v.incoming
+                .as_ref()
+                .map(|_| "waiting for file list".to_string())
+        })
         .or_else(|| running(v).map(|r| r.status.clone()));
-    let word_list = words(ModuleId::Operations);
+    let word_list = header_words(v.paused, v.active);
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
     let core: &starkit::theme::Theme = v.theme;
@@ -102,6 +123,20 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
 }
 
 fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
+    if let Some(title) = &v.incoming {
+        let status = " · waiting for file list";
+        let title_w = area.width.saturating_sub(width_of(status));
+        summary_row(
+            area,
+            buf,
+            &format!(
+                "{}{status}",
+                elide_middle(&format!("{} {title}", v.spinner), title_w)
+            ),
+            Style::default().fg(rgb(v.theme.fold.progress_fg)),
+        );
+        return;
+    }
     if let Some(name) = v.unmounting {
         let status = format!(" · {}", activity_status(v));
         let title_w = area.width.saturating_sub(width_of(&status));
@@ -136,6 +171,23 @@ fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
 
 fn render_open(outer: Rect, area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
     let mut area = area;
+    if let Some(title) = &v.incoming {
+        if area.height > 0 {
+            let status = "waiting for file list";
+            let right_w = width_of(status).min(area.width);
+            let left_w = area.width.saturating_sub(right_w + 1);
+            let style = Style::default().fg(rgb(v.theme.fold.progress_fg));
+            buf.set_string(
+                area.x,
+                area.y,
+                elide_middle(&format!("{} {title}", v.spinner), left_w),
+                style,
+            );
+            buf.set_string(area.x + area.width - right_w, area.y, status, style);
+            area.y += 1;
+            area.height -= 1;
+        }
+    }
     if let Some(name) = v.unmounting {
         if area.height > 0 {
             let status = activity_status(v);
@@ -154,7 +206,7 @@ fn render_open(outer: Rect, area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &m
         }
     }
     if v.rows.is_empty() {
-        if v.unmounting.is_none() {
+        if v.unmounting.is_none() && v.incoming.is_none() {
             empty(area, buf, v.theme, "nothing queued");
         }
         return;
@@ -212,7 +264,7 @@ pub fn hit(area: Rect, v: &View<'_>, x: u16, y: u16) -> Option<usize> {
     if x < body.x || x >= body.x + body.width || y < body.y || y >= body.y + body.height {
         return None;
     }
-    let offset = usize::from(v.unmounting.is_some());
+    let offset = usize::from(v.unmounting.is_some()) + usize::from(v.incoming.is_some());
     let row = usize::from(y - body.y);
     if row < offset {
         return None;
@@ -250,10 +302,13 @@ mod tests {
             folded: false,
             rows,
             unmounting: None,
+            incoming: None,
             spinner: "⠋",
             cursor: 0,
             scroll: 0,
-            hint: "enter run \u{b7} esc clear",
+            paused: false,
+            active: false,
+            hint: "esc remove",
         }
     }
 
@@ -330,6 +385,28 @@ mod tests {
         let mut buf = Buffer::empty(area);
         render(area, &mut buf, &v, &mut Bars::new());
         assert!(dump(&buf, area).contains("⠹ UNMOUNT Camera"));
+    }
+
+    #[test]
+    fn incoming_drop_is_visible_before_the_file_list_arrives() {
+        let t = theme("terminal");
+        let rows = vec![row("COPY 1 item → ~/Work", "queued", Tone::Pending)];
+        let mut v = view(&t, &rows);
+        v.incoming = Some("COPY → ~/Archive".into());
+        let area = Rect::new(0, 0, 60, 7);
+        let body = frame::body(area, &words(ModuleId::Operations));
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v, &mut Bars::new());
+        let text = dump(&buf, area);
+        assert!(text.contains("COPY → ~/Archive"), "{text:?}");
+        assert!(text.contains("waiting for file list"), "{text:?}");
+        assert_eq!(hit(area, &v, 5, body.y), None);
+        assert_eq!(hit(area, &v, 5, body.y + 1), Some(0));
+
+        v.folded = true;
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v, &mut Bars::new());
+        assert!(dump(&buf, area).contains("COPY → ~/Archive"));
     }
 
     #[test]

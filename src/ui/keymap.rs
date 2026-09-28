@@ -40,9 +40,9 @@
 //! ## Two scopes, one group split in two
 //!
 //! The plan's Keys section describes the OPERATIONS queue's actions in two
-//! scopes at once -- `y`/`p`/`m`/`d`/`X`/`ctrl+x` reach from anywhere, while
-//! `enter`/`r`/`x`/`esc`/`c` only mean "run this op", "drop this one" and "clear the
-//! queue" while the OPERATIONS module has focus -- and [`Scope`] is a
+//! scopes at once -- `y`/`p`/`m`/`dd`/`X`/`ctrl+x` reach from anywhere, while
+//! `enter`/`r`/`x`/`esc`/`c` only mean "resume", "remove this one" and "remove
+//! waiting operations" while the OPERATIONS module has focus -- and [`Scope`] is a
 //! property of a *group*, not of one binding, the same as in STAR/CORD. Two
 //! scopes cannot share one group, so the global queue actions are the
 //! `"operations"` group and the module's own three keys are `"queue"`; both
@@ -409,14 +409,14 @@ pub const BINDINGS: &[Binding] = &[
     },
     Binding {
         action: Action::QueueDelete,
-        keys: "d",
-        label: "delete marked",
+        keys: "dd",
+        label: "delete (confirm)",
         group: "operations",
     },
     Binding {
         action: Action::RunQueue,
         keys: "X",
-        label: "run the queue",
+        label: "resume queue",
         group: "operations",
     },
     Binding {
@@ -429,19 +429,19 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         action: Action::RunOp,
         keys: "enter/r",
-        label: "run it",
+        label: "resume paused queue",
         group: "queue",
     },
     Binding {
         action: Action::DropOp,
         keys: "x/delete",
-        label: "drop one",
+        label: "remove one",
         group: "queue",
     },
     Binding {
         action: Action::ClearQueue,
         keys: "esc/c",
-        label: "clear the queue",
+        label: "remove waiting",
         group: "queue",
     },
     // -- the preview's own header key ---------------------------------------
@@ -491,7 +491,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         action: Action::ReverseSort,
         keys: "S",
-        label: "reverse the sort",
+        label: "toggle direction",
         group: "view",
     },
     Binding {
@@ -509,13 +509,13 @@ pub const BINDINGS: &[Binding] = &[
     // -- appearance ------------------------------------------------------------
     Binding {
         action: Action::NextTheme,
-        keys: "t",
+        keys: "alt+t",
         label: "next theme",
         group: "appearance",
     },
     Binding {
         action: Action::PrevTheme,
-        keys: "T",
+        keys: "alt+shift+t",
         label: "previous theme",
         group: "appearance",
     },
@@ -725,6 +725,16 @@ pub fn g_prefix(k: KeyEvent) -> Option<Action> {
     }
 }
 
+/// The second `d` of `dd`; the app owns whether a first `d` is pending.
+pub fn d_prefix(k: KeyEvent) -> Option<Action> {
+    if k.modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    (k.code == KeyCode::Char('d')).then_some(Action::QueueDelete)
+}
+
 /// Whether `k`, with no `ctrl`/`alt`, is a key someone typing text would
 /// expect to work: a character, or a plain editing motion.
 ///
@@ -813,15 +823,16 @@ active scan and then closes results; `h` closes results immediately. The
 original directory and cursor return when results close.
 
 `s` or the `sort` heading opens the sort picker. Choose name, extension,
-type, size, modified, created, or accessed time. The picker also toggles
-reverse order and directories first; `S` reverses the current order directly.
+type, size, modified, created, or accessed time. Its direction row toggles
+Low → High or High → Low for size, with corresponding labels for other keys;
+`S` toggles direction directly. The picker also toggles directories first.
 Timestamp sorts show newest first by default, with unavailable dates last.
 
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
 the active pane; `alt+2` and `alt+3` reach preview and operations. `y` (or
 `yy`) saves the marked entries or highlighted file; `p` queues a copy into
 the active pane's directory. `m` queues a move into the opposite pane's
-directory. `v` switches views, `b`
+directory. `dd` asks for confirmation before queuing deletion. `v` switches views, `b`
 opens Places, and `B` bookmarks the current directory. In Places, type to
 search, use arrows and `enter` to open a location, `F2` to rename a bookmark,
 `F3` to inspect the selected place, `delete` to remove one after confirmation,
@@ -925,14 +936,14 @@ mod tests {
     /// characters, the first a plain `g`: `KeySpec::parse` refuses this (it
     /// is not one key), and `g_prefix` is how it dispatches instead. See the
     /// module doc's note on `gh`/`gr`.
-    fn chord_char(alt: &str) -> Option<char> {
+    fn chord_char(alt: &str) -> Option<(char, char)> {
         let mut chars = alt.chars();
         let first = chars.next()?;
         let second = chars.next()?;
-        if chars.next().is_some() || first != 'g' {
+        if chars.next().is_some() || !matches!(first, 'g' | 'd') {
             return None;
         }
-        Some(second)
+        Some((first, second))
     }
 
     #[test]
@@ -991,11 +1002,16 @@ mod tests {
         for b in BINDINGS {
             let mut reachable = false;
             for alt in starkit::keymap::alternatives(b.keys) {
-                if let Some(c) = chord_char(alt) {
+                if let Some((prefix, c)) = chord_char(alt) {
+                    let resolved = match prefix {
+                        'g' => g_prefix(plain(c)),
+                        'd' => d_prefix(plain(c)),
+                        _ => unreachable!(),
+                    };
                     assert_eq!(
-                        g_prefix(plain(c)),
+                        resolved,
                         Some(b.action),
-                        "{:?} ({:?}) is a chord and g_prefix does not dispatch it",
+                        "{:?} ({:?}) is a chord and its prefix does not dispatch it",
                         b.keys,
                         b.action
                     );
@@ -1132,6 +1148,17 @@ mod tests {
         assert_eq!(g_prefix(plain('x')), None, "a mistake reaches nothing");
     }
 
+    #[test]
+    fn dd_only_dispatches_after_a_plain_second_d() {
+        assert_eq!(resolve(plain('d')), None);
+        assert_eq!(d_prefix(plain('d')), Some(Action::QueueDelete));
+        assert_eq!(d_prefix(plain('x')), None);
+        assert_eq!(
+            d_prefix(with(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+            None
+        );
+    }
+
     /// `ctrl`/`alt` on the second key is never part of the sequence -- it is
     /// some other binding's, not a mistyped chord.
     #[test]
@@ -1234,6 +1261,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn theme_shortcuts_require_alt() {
+        assert_eq!(resolve(plain('t')), None);
+        assert_eq!(resolve(plain('T')), None);
+        assert_eq!(
+            resolve(with(KeyCode::Char('t'), KeyModifiers::ALT)),
+            Some(Action::NextTheme)
+        );
+        assert_eq!(
+            resolve(with(
+                KeyCode::Char('t'),
+                KeyModifiers::ALT | KeyModifiers::SHIFT
+            )),
+            Some(Action::PrevTheme)
+        );
     }
 
     /// Preview owns only its close mnemonic; scrolling still uses global

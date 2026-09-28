@@ -2807,6 +2807,7 @@ dependencies = [
  "trash",
  "unrar_sys",
  "vt100",
+ "xattr",
  "zip",
 ]
 

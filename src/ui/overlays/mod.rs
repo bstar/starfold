@@ -30,6 +30,7 @@ pub mod create;
 pub mod rename;
 pub mod search;
 pub mod sort;
+pub mod trash_warning;
 
 use std::path::PathBuf;
 
@@ -48,9 +49,10 @@ use crate::ui::Bars;
 
 /// What a [`confirm::Confirm`] is asking about, carried through unopened so
 /// the caller learns it again only once the answer is yes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pending {
-    DeletePermanently(OpId),
+    DeletePermanently(Vec<PathBuf>),
+    QueueDelete(Vec<PathBuf>),
     ClearQueue,
     CancelRunning(OpId),
     Quit,
@@ -65,11 +67,13 @@ pub enum Overlay {
     Destination(context::Destination),
     Help { scroll: u16 },
     Confirm(confirm::Confirm),
+    TrashWarning(trash_warning::Prompt),
     Create(create::Create),
     Rename(rename::Rename),
     Search(search::Search),
     Sort(sort::Picker),
     Conflict(conflict::Prompt),
+    ConflictRename(conflict::RenameSequence),
 }
 
 /// Modal things drawn over everything else. See the module doc for the one
@@ -92,6 +96,11 @@ pub enum Answer {
     Closed,
     /// `y`/`enter` on a [`confirm::Confirm`].
     Confirmed(Pending),
+    TrashDelete {
+        sources: Vec<PathBuf>,
+        drive: trash_warning::DriveKey,
+        suppress_for_session: bool,
+    },
     /// A [`rename::Rename`] was submitted with a name that passed
     /// validation.
     Renamed {
@@ -109,6 +118,10 @@ pub enum Answer {
     Policy {
         op: OpId,
         policy: ConflictPolicy,
+    },
+    ConflictNames {
+        op: OpId,
+        targets: Vec<(PathBuf, PathBuf)>,
     },
     /// `ctrl+c`, which quits from inside an overlay the same as it does
     /// everywhere else.
@@ -151,6 +164,10 @@ impl Overlays {
         self.current = Some(Overlay::Confirm(c));
     }
 
+    pub fn open_trash_warning(&mut self, prompt: trash_warning::Prompt) {
+        self.current = Some(Overlay::TrashWarning(prompt));
+    }
+
     pub fn open_context(&mut self, target: context::Target, anchor: (u16, u16)) {
         self.current = Some(Overlay::Context(context::Menu::new(target, anchor)));
     }
@@ -177,6 +194,11 @@ impl Overlays {
         if let Some(Overlay::Search(form)) = self.current.as_mut() {
             form.input.paste(text);
             form.error = None;
+            return true;
+        }
+        if let Some(Overlay::ConflictRename(sequence)) = self.current.as_mut() {
+            sequence.form.input.paste(text);
+            sequence.form.error = None;
             return true;
         }
         false
@@ -207,6 +229,7 @@ impl Overlays {
         }
 
         let overlay = self.current.as_mut().expect("checked above");
+        let mut start_rename = None;
         let (close, answer) = match overlay {
             Overlay::Drop(m) => match k.code {
                 KeyCode::Char('c') => (true, Answer::Drop(crate::fold::ops::OpKind::Copy)),
@@ -251,13 +274,26 @@ impl Overlays {
                 _ => (true, Answer::Closed),
             },
             Overlay::Confirm(c) => match starkit::chrome::confirm::answer(k) {
-                starkit::chrome::confirm::Answer::Yes => (true, Answer::Confirmed(c.pending)),
+                starkit::chrome::confirm::Answer::Yes => {
+                    (true, Answer::Confirmed(c.pending.clone()))
+                }
                 starkit::chrome::confirm::Answer::No => (true, Answer::Closed),
                 // `ctrl+c` is caught above, ahead of every overlay's own
                 // keys, so this arm is unreached in practice; kept exhaustive
                 // rather than assumed away.
                 starkit::chrome::confirm::Answer::Quit => (true, Answer::Quit),
                 starkit::chrome::confirm::Answer::Waiting => (false, Answer::Consumed),
+            },
+            Overlay::TrashWarning(prompt) => match trash_warning::Prompt::key(k) {
+                Some(suppress_for_session) => (
+                    true,
+                    Answer::TrashDelete {
+                        sources: prompt.sources.clone(),
+                        drive: prompt.drive.clone(),
+                        suppress_for_session,
+                    },
+                ),
+                None => (false, Answer::Consumed),
             },
             Overlay::Rename(r) => match r.handle(k) {
                 rename::Action::Taken => (false, Answer::Consumed),
@@ -288,9 +324,31 @@ impl Overlays {
             Overlay::Conflict(p) => match p.handle(k) {
                 conflict::Action::Taken => (false, Answer::Consumed),
                 conflict::Action::Close => (true, Answer::Closed),
+                conflict::Action::Policy(ConflictPolicy::RenameNew) => {
+                    start_rename = Some(conflict::RenameSequence::new(p.op, p.conflicts.clone()));
+                    (false, Answer::Consumed)
+                }
                 conflict::Action::Policy(policy) => (true, Answer::Policy { op: p.op, policy }),
             },
+            Overlay::ConflictRename(sequence) => match sequence.form.handle(k) {
+                rename::Action::Taken => (false, Answer::Consumed),
+                rename::Action::Close => (true, Answer::Closed),
+                rename::Action::Renamed(target) => match sequence.accept(target) {
+                    Some(targets) => (
+                        true,
+                        Answer::ConflictNames {
+                            op: sequence.op,
+                            targets,
+                        },
+                    ),
+                    None => (false, Answer::Consumed),
+                },
+            },
         };
+        if let Some(sequence) = start_rename {
+            self.current = Some(Overlay::ConflictRename(sequence));
+            return Answer::Consumed;
+        }
         if close {
             self.current = None;
         }
@@ -306,6 +364,7 @@ impl Overlays {
             return Answer::Closed;
         }
         let overlay = self.current.as_mut().expect("checked above");
+        let mut start_rename = None;
         let (close, answer) = match overlay {
             Overlay::Drop(m) => {
                 let r = m.rect(area);
@@ -355,9 +414,27 @@ impl Overlays {
             }
             Overlay::Confirm(c) => match confirm::layout(area, c) {
                 Some(l) if !inside(l.rect, x, y) => (true, Answer::Closed),
-                Some(l) if in_word(l.yes, l.footer_y, x, y) => (true, Answer::Confirmed(c.pending)),
+                Some(l) if in_word(l.yes, l.footer_y, x, y) => {
+                    (true, Answer::Confirmed(c.pending.clone()))
+                }
                 Some(l) if in_word(l.no, l.footer_y, x, y) => (true, Answer::Closed),
                 Some(_) => (false, Answer::Consumed),
+                None => (true, Answer::Closed),
+            },
+            Overlay::TrashWarning(prompt) => match trash_warning::layout(area) {
+                Some(rect) if !inside(rect, x, y) => (true, Answer::Closed),
+                Some(rect) => match trash_warning::click(rect, x, y) {
+                    Some(Some(suppress_for_session)) => (
+                        true,
+                        Answer::TrashDelete {
+                            sources: prompt.sources.clone(),
+                            drive: prompt.drive.clone(),
+                            suppress_for_session,
+                        },
+                    ),
+                    Some(None) => (true, Answer::Closed),
+                    None => (false, Answer::Consumed),
+                },
                 None => (true, Answer::Closed),
             },
             Overlay::Rename(_) => {
@@ -401,7 +478,13 @@ impl Overlays {
                 Some(l) if !inside(l.rect, x, y) => (true, Answer::Closed),
                 Some(l) => {
                     if let Some(policy) = conflict::hit_footer(&l, x, y) {
-                        (true, Answer::Policy { op: p.op, policy })
+                        if policy == ConflictPolicy::RenameNew {
+                            start_rename =
+                                Some(conflict::RenameSequence::new(p.op, p.conflicts.clone()));
+                            (false, Answer::Consumed)
+                        } else {
+                            (true, Answer::Policy { op: p.op, policy })
+                        }
                     } else if conflict::hit_esc(&l, x, y) {
                         (true, Answer::Closed)
                     } else {
@@ -413,7 +496,18 @@ impl Overlays {
                 }
                 None => (true, Answer::Closed),
             },
+            Overlay::ConflictRename(_) => {
+                if inside(rename::rect(area), x, y) {
+                    (false, Answer::Consumed)
+                } else {
+                    (true, Answer::Closed)
+                }
+            }
         };
+        if let Some(sequence) = start_rename {
+            self.current = Some(Overlay::ConflictRename(sequence));
+            return Answer::Consumed;
+        }
         if close {
             self.current = None;
         }
@@ -482,6 +576,10 @@ impl Overlays {
                 confirm::render(area, buf, theme, c);
                 None
             }
+            Overlay::TrashWarning(prompt) => {
+                trash_warning::render(area, buf, theme, prompt);
+                None
+            }
             Overlay::Rename(r) => rename::render(area, buf, theme, r),
             Overlay::Create(form) => create::render(area, buf, theme, form),
             Overlay::Search(form) => search::render(area, buf, theme, form),
@@ -492,6 +590,9 @@ impl Overlays {
             Overlay::Conflict(p) => {
                 conflict::render(area, buf, theme, p, bars);
                 None
+            }
+            Overlay::ConflictRename(sequence) => {
+                rename::render(area, buf, theme, &mut sequence.form)
             }
         }
     }
@@ -532,10 +633,22 @@ mod tests {
         )
     }
 
+    fn trash_warning() -> trash_warning::Prompt {
+        trash_warning::Prompt::new(
+            vec![PathBuf::from("/mnt/drive/image.png")],
+            trash_warning::DriveKey {
+                path: PathBuf::from("/mnt/drive"),
+                source: "/dev/sdb1".into(),
+                uuid: Some("ABC".into()),
+            },
+        )
+    }
+
     fn every_overlay() -> Vec<fn(&mut Overlays)> {
         vec![
             |o: &mut Overlays| o.open_help(),
             |o: &mut Overlays| o.open_confirm(Confirm::clear_queue(2)),
+            |o: &mut Overlays| o.open_trash_warning(trash_warning()),
             |o: &mut Overlays| o.open_rename(PathBuf::from("/tmp/a.txt")),
             |o: &mut Overlays| o.open_conflict(one_conflict()),
         ]
@@ -585,14 +698,14 @@ mod tests {
     #[test]
     fn a_confirmation_answers_on_y_and_on_n() {
         let mut o = Overlays::new();
-        o.open_confirm(Confirm::delete_permanently(OpId(5), 3));
+        o.open_confirm(Confirm::delete_permanently(vec![PathBuf::from("/a"); 3]));
         assert_eq!(
             o.handle(key('y')),
-            Answer::Confirmed(Pending::DeletePermanently(OpId(5)))
+            Answer::Confirmed(Pending::DeletePermanently(vec![PathBuf::from("/a"); 3]))
         );
         assert!(!o.is_open());
 
-        o.open_confirm(Confirm::delete_permanently(OpId(5), 3));
+        o.open_confirm(Confirm::delete_permanently(vec![PathBuf::from("/a"); 3]));
         assert_eq!(o.handle(key('n')), Answer::Closed);
         assert!(!o.is_open());
     }
@@ -601,7 +714,7 @@ mod tests {
     fn a_confirmation_answers_on_a_click_of_either_word() {
         let area = Rect::new(0, 0, 60, 21);
         let mut o = Overlays::new();
-        o.open_confirm(Confirm::delete_permanently(OpId(5), 3));
+        o.open_confirm(Confirm::delete_permanently(vec![PathBuf::from("/a"); 3]));
         let l = match o.current() {
             Some(Overlay::Confirm(c)) => confirm::layout(area, c).unwrap(),
             _ => unreachable!(),
@@ -609,11 +722,11 @@ mod tests {
         let answer = o.click(l.yes.0, l.footer_y, area);
         assert_eq!(
             answer,
-            Answer::Confirmed(Pending::DeletePermanently(OpId(5)))
+            Answer::Confirmed(Pending::DeletePermanently(vec![PathBuf::from("/a"); 3]))
         );
         assert!(!o.is_open());
 
-        o.open_confirm(Confirm::delete_permanently(OpId(5), 3));
+        o.open_confirm(Confirm::delete_permanently(vec![PathBuf::from("/a"); 3]));
         let l = match o.current() {
             Some(Overlay::Confirm(c)) => confirm::layout(area, c).unwrap(),
             _ => unreachable!(),
@@ -621,6 +734,55 @@ mod tests {
         let answer = o.click(l.no.0, l.footer_y, area);
         assert_eq!(answer, Answer::Closed);
         assert!(!o.is_open());
+    }
+
+    #[test]
+    fn trash_warning_keys_and_clicks_have_distinct_delete_and_cancel_actions() {
+        let area = Rect::new(0, 0, 60, 21);
+        let rect = trash_warning::layout(area).unwrap();
+        let expected = trash_warning();
+        let mut overlays = Overlays::new();
+
+        overlays.open_trash_warning(trash_warning());
+        assert_eq!(overlays.handle(key('x')), Answer::Consumed);
+        assert_eq!(
+            overlays.handle(key('d')),
+            Answer::TrashDelete {
+                sources: expected.sources.clone(),
+                drive: expected.drive.clone(),
+                suppress_for_session: false,
+            }
+        );
+        overlays.open_trash_warning(trash_warning());
+        assert_eq!(
+            overlays.handle(key('s')),
+            Answer::TrashDelete {
+                sources: expected.sources.clone(),
+                drive: expected.drive.clone(),
+                suppress_for_session: true,
+            }
+        );
+        overlays.open_trash_warning(trash_warning());
+        assert_eq!(
+            overlays.click(rect.x + 2, rect.y + 2, area),
+            Answer::TrashDelete {
+                sources: expected.sources.clone(),
+                drive: expected.drive.clone(),
+                suppress_for_session: false,
+            }
+        );
+        overlays.open_trash_warning(trash_warning());
+        assert_eq!(
+            overlays.click(rect.x + 2, rect.y + 3, area),
+            Answer::TrashDelete {
+                sources: expected.sources.clone(),
+                drive: expected.drive.clone(),
+                suppress_for_session: true,
+            }
+        );
+        overlays.open_trash_warning(trash_warning());
+        assert_eq!(overlays.click(rect.x + 2, rect.y + 4, area), Answer::Closed);
+        assert!(!overlays.is_open());
     }
 
     #[test]
@@ -683,11 +845,57 @@ mod tests {
         );
 
         o.open_conflict(one_conflict());
+        assert_eq!(o.handle(key('r')), Answer::Consumed);
+        assert!(matches!(o.current(), Some(Overlay::ConflictRename(_))));
         assert_eq!(
-            o.handle(key('r')),
-            Answer::Policy {
+            o.handle(code(KeyCode::Enter)),
+            Answer::ConflictNames {
                 op: OpId(1),
-                policy: ConflictPolicy::RenameNew
+                targets: vec![(
+                    PathBuf::from("/dest/a.txt"),
+                    PathBuf::from("/dest/a (1).txt")
+                )],
+            }
+        );
+    }
+
+    #[test]
+    fn rename_edits_each_conflict_before_resuming() {
+        let mut o = Overlays::new();
+        o.open_conflict(conflict::Prompt::new(
+            OpId(7),
+            vec![
+                Conflict {
+                    source: "/src/a.txt".into(),
+                    dest: "/dest/a.txt".into(),
+                    both_dirs: false,
+                },
+                Conflict {
+                    source: "/src/b.txt".into(),
+                    dest: "/dest/b.txt".into(),
+                    both_dirs: false,
+                },
+            ],
+        ));
+        assert_eq!(o.handle(key('r')), Answer::Consumed);
+        assert_eq!(o.handle(code(KeyCode::Enter)), Answer::Consumed);
+        let Some(Overlay::ConflictRename(sequence)) = o.current() else {
+            panic!("rename editor")
+        };
+        assert_eq!(sequence.index, 1);
+        o.handle(code(KeyCode::End));
+        o.handle(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        for c in "other.txt".chars() {
+            o.handle(key(c));
+        }
+        assert_eq!(
+            o.handle(code(KeyCode::Enter)),
+            Answer::ConflictNames {
+                op: OpId(7),
+                targets: vec![
+                    ("/dest/a.txt".into(), "/dest/a (1).txt".into()),
+                    ("/dest/b.txt".into(), "/dest/other.txt".into()),
+                ]
             }
         );
     }
@@ -728,7 +936,7 @@ mod tests {
             ),
             (
                 |o: &mut Overlays| o.open_confirm(Confirm::clear_queue(2)),
-                "CLEAR THE QUEUE",
+                "REMOVE WAITING OPERATIONS",
             ),
             (
                 |o: &mut Overlays| o.open_rename(PathBuf::from("/tmp/Cargo.toml")),

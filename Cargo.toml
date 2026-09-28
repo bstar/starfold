@@ -92,7 +92,8 @@ nucleo-matcher = "0.3"
 # to `application/octet-stream`.
 mime_guess = "2"
 
-# Format backends stay private to preview/archive adapters. No runtime tools.
+# Format backends stay private to preview/archive adapters. Large raster
+# thumbnails can optionally use libvips' vipsthumbnail at runtime.
 lofty = "0.22"
 lopdf = { version = "0.42", default-features = false }
 pdf-extract = "0.12"
@@ -110,6 +111,7 @@ sevenz-rust2 = "=0.20.2"
 # The GPL Rust port is intentionally not used; see LICENSES/UnRAR.txt.
 unrar_sys = "0.5.8"
 tempfile = "3"
+xattr = "1"
 libc = "0.2"
 base64 = "0.22"
 percent-encoding = "2"

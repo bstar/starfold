@@ -19,7 +19,7 @@ expression: floor
 ║ # STAR/WIRE                                              █
 ╚══════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════╗
-║                                               run  clear ║
+║                                                   remove ║
 ║                      nothing queued                      ║
 ╚══════════════════════════════════════════════════════════╝
 ? help  esc cancel / close search  space mark  c act  ~  off

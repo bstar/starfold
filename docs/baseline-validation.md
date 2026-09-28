@@ -29,13 +29,11 @@ the tree automatically, so it stays available while checking results.
    filter with Escape.
 2. **Marks and queue:** In `project-a/nested`, mark `note.txt` with Space.
    Navigate to `project-b` through the parent directories. The mark count
-   remains visible. Press `y`, then `p`: OPERATIONS gains a queued copy to
-   `project-b`.
-   Before running it, verify in another shell that
-   `"$lab/files/project-b/note.txt"` does not exist. Press `X` to run the
-   queue; the copied file should then exist with the same contents.
+   remains visible. Press `y`, then `p`: OPERATIONS shows the copy to
+   `project-b` starting immediately. Verify in another shell that
+   `"$lab/files/project-b/note.txt"` appears with the same contents.
 3. **Collision:** Mark `project-a/shared.txt` and queue a copy into
-   `project-b`, where `shared.txt` already exists. Run the queue and check
+   `project-b`, where `shared.txt` already exists. Check
    that STAR/FOLD asks how to resolve the conflict rather than silently
    overwriting the destination. Choose Skip for this baseline; the
    destination must still contain `destination version`.

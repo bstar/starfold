@@ -104,7 +104,10 @@ impl Senders {
     /// Send `job` to whichever worker owns its kind of work.
     pub fn dispatch(&self, job: Job) {
         let sender = match &job {
-            Job::Plan { .. } | Job::Run { .. } | Job::UnmountPlace { .. } => &self.ops,
+            Job::CheckImport { .. }
+            | Job::Plan { .. }
+            | Job::Run { .. }
+            | Job::UnmountPlace { .. } => &self.ops,
             _ => &self.io,
         };
         if sender.try_send(job).is_err() {
@@ -162,6 +165,12 @@ pub enum Job {
     },
     /// Ask the desktop, or the configured argv, to open a file.
     Open(PathBuf),
+    /// Check remote top-level names before requesting any file contents.
+    CheckImport {
+        op: OpId,
+        sources: Vec<PathBuf>,
+        dest: PathBuf,
+    },
     /// Expand an op's sources, total their bytes, and find conflicts.
     Plan {
         op: OpId,
@@ -177,6 +186,7 @@ pub enum Job {
         kind: OpKind,
         plan: Plan,
         policy: ConflictPolicy,
+        rename_targets: Vec<(PathBuf, PathBuf)>,
         progress: Arc<Progress>,
         expected: Vec<(PathBuf, search::Identity)>,
     },
@@ -234,6 +244,10 @@ pub enum Done {
     Planned {
         op: OpId,
         result: Result<Plan, String>,
+    },
+    ImportChecked {
+        op: OpId,
+        result: Result<Vec<ops::Conflict>, String>,
     },
     Finished {
         op: OpId,
@@ -470,6 +484,7 @@ pub fn perform_io(
         // `Job` grows another kind.
         Job::ClosePreview
         | Job::Shutdown
+        | Job::CheckImport { .. }
         | Job::Plan { .. }
         | Job::Run { .. }
         | Job::UnmountPlace { .. } => IoOutcome::None,
@@ -500,6 +515,28 @@ fn validate_search_sources_for_run(
 
 pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
     match job {
+        Job::CheckImport { op, sources, dest } => {
+            let result = sources
+                .iter()
+                .map(|source| {
+                    let name = source
+                        .file_name()
+                        .ok_or_else(|| "drop has no file name".to_string())?;
+                    let target = dest.join(name);
+                    match std::fs::symlink_metadata(&target) {
+                        Ok(_) => Ok(Some(ops::Conflict {
+                            source: source.clone(),
+                            dest: target,
+                            both_dirs: false,
+                        })),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                        Err(error) => Err(format!("{}: {error}", target.display())),
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(|items| items.into_iter().flatten().collect());
+            Some(Done::ImportChecked { op, result })
+        }
         Job::Plan {
             op,
             kind,
@@ -519,6 +556,7 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
             kind,
             plan,
             policy,
+            rename_targets,
             progress,
             expected,
         } => {
@@ -535,7 +573,14 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
                 preserve_times: cfg.preserve_times,
                 force_copy: false,
             };
-            let outcome = ops::exec::run(kind, &plan, policy, &options, &progress);
+            let outcome = ops::exec::run_with_names(
+                kind,
+                &plan,
+                policy,
+                &options,
+                &progress,
+                &rename_targets,
+            );
             Some(Done::Finished { op, outcome })
         }
         Job::UnmountPlace { path, source } => Some(Done::PlaceUnmounted {
@@ -628,7 +673,10 @@ pub fn spawn_io(
                             let _ = preview_tx.try_send(job);
                         }
                     }
-                    other @ (Job::Plan { .. } | Job::Run { .. } | Job::UnmountPlace { .. }) => {
+                    other @ (Job::CheckImport { .. }
+                    | Job::Plan { .. }
+                    | Job::Run { .. }
+                    | Job::UnmountPlace { .. }) => {
                         // `Senders::dispatch` always routes these to `ops`;
                         // arriving here would mean something upstream sent a
                         // job to the wrong queue. Forward it rather than
@@ -716,7 +764,10 @@ pub fn spawn_ops(
             for job in jobs.iter() {
                 match job {
                     Job::Shutdown => break,
-                    other @ (Job::Plan { .. } | Job::Run { .. } | Job::UnmountPlace { .. }) => {
+                    other @ (Job::CheckImport { .. }
+                    | Job::Plan { .. }
+                    | Job::Run { .. }
+                    | Job::UnmountPlace { .. }) => {
                         if let Some(done) = perform_ops(other, &cfg) {
                             finish(done, &state, &events, &senders);
                         }
@@ -735,6 +786,32 @@ pub fn spawn_ops(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_check_finds_destination_name_before_transfer() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("photo.jpg"), b"old").unwrap();
+        let source = PathBuf::from("/remote/photo.jpg");
+        let done = perform_ops(
+            Job::CheckImport {
+                op: OpId(1),
+                sources: vec![source.clone()],
+                dest: dir.path().to_path_buf(),
+            },
+            &FoldConfig::default(),
+        )
+        .unwrap();
+        let Done::ImportChecked {
+            result: Ok(conflicts),
+            ..
+        } = done
+        else {
+            panic!("expected import check")
+        };
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].source, source);
+        assert_eq!(conflicts[0].dest, dir.path().join("photo.jpg"));
+    }
 
     #[test]
     fn queued_search_result_is_rechecked_before_plan_and_run() {
@@ -766,6 +843,7 @@ mod tests {
                 kind: OpKind::Delete(ops::DeleteHow::Permanent),
                 plan: Plan::default(),
                 policy: ConflictPolicy::Ask,
+                rename_targets: vec![],
                 progress: Arc::new(Progress::new(0)),
                 expected,
             },
@@ -965,6 +1043,7 @@ mod tests {
             kind: OpKind::Copy,
             plan: Plan::default(),
             policy: ConflictPolicy::Ask,
+            rename_targets: vec![],
             progress: Arc::new(Progress::new(0)),
             expected: vec![],
         });

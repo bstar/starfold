@@ -4,6 +4,65 @@ use crate::fold::create::Kind as CreateKind;
 use crate::ui::overlays;
 use std::path::Path;
 impl App {
+    pub(super) fn request_delete(&mut self, sources: Vec<PathBuf>, keyboard: bool) {
+        let auto = matches!(self.cfg.ops.trash, crate::fold::TrashMode::Auto);
+        let disabled_drive = if auto && !sources.is_empty() {
+            let state = self.core.state();
+            let drives: Vec<_> = sources
+                .iter()
+                .filter_map(|source| {
+                    state
+                        .places
+                        .locations
+                        .iter()
+                        .filter(|location| source.starts_with(&location.path))
+                        .max_by_key(|location| location.path.components().count())
+                        .filter(|location| {
+                            location
+                                .info
+                                .as_ref()
+                                .is_some_and(|info| info.trash_disabled)
+                        })
+                        .map(trash_warning::DriveKey::from_location)
+                })
+                .collect();
+            (drives.len() == sources.len() && drives.iter().all(|drive| drive == &drives[0]))
+                .then(|| drives[0].clone())
+        } else {
+            None
+        };
+        if let Some(drive) = disabled_drive {
+            if self.suppressed_trash_warnings.contains(&drive) {
+                if keyboard {
+                    self.overlays
+                        .open_confirm(Confirm::queue_delete(sources, true));
+                } else if self.cfg.ops.confirm_delete {
+                    self.overlays
+                        .open_confirm(Confirm::delete_permanently(sources));
+                } else {
+                    self.core
+                        .send(Command::QueuePermanentDeleteSources(sources));
+                }
+            } else {
+                self.overlays
+                    .open_trash_warning(trash_warning::Prompt::new(sources, drive));
+            }
+        } else {
+            let permanent = matches!(self.cfg.ops.trash, crate::fold::TrashMode::Never)
+                || (auto && !self.view.trash_available);
+            if keyboard {
+                self.overlays
+                    .open_confirm(Confirm::queue_delete(sources, permanent));
+            } else if permanent && self.cfg.ops.confirm_delete {
+                self.overlays
+                    .open_confirm(Confirm::delete_permanently(sources));
+            } else {
+                self.core.send(Command::QueueDeleteSources(sources));
+            }
+        }
+        self.repaint = true;
+    }
+
     pub(super) fn open_actions_modal(&mut self) {
         self.open_file_menu(0, 0);
         if let (Some(regions), Some(Overlay::Context(menu))) =
@@ -136,13 +195,9 @@ impl App {
             A::Mark => self.core.send(Command::ToggleMarkPath(target.clicked)),
             A::CopyCurrentPath => {
                 let path = target.create_dir.to_string_lossy().into_owned();
-                match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(path)) {
-                    Ok(()) => {
-                        self.note = Some((
-                            "current path copied".into(),
-                            NoteLevel::Info,
-                            Instant::now(),
-                        ));
+                match crate::ui::clipboard::copy_text(&path) {
+                    Ok(message) => {
+                        self.note = Some((message.into(), NoteLevel::Info, Instant::now()));
                     }
                     Err(error) => {
                         self.note = Some((
@@ -160,7 +215,7 @@ impl App {
             A::CreateDirectory => self
                 .overlays
                 .open_create(target.create_dir, CreateKind::Directory),
-            A::Delete => self.core.send(Command::QueueDeleteSources(target.sources)),
+            A::Delete => self.request_delete(target.sources, false),
             A::Copy | A::Move => self.overlays.open_destination(Request {
                 kind: if action == A::Copy {
                     OpKind::Copy
@@ -413,6 +468,104 @@ mod tests {
             .contains(&overlays::context::Action::CopyCurrentPath));
         assert_eq!(menu.target.clicked, fake.fixture.path("blob.bin"));
         assert_eq!(menu.target.create_dir, fake.home());
+    }
+
+    #[test]
+    fn confirmed_permanent_delete_does_not_retry_the_broken_trash() {
+        let (mut app, fake) = app();
+        let path = fake.fixture.path("blob.bin");
+        app.on_confirmed(Pending::DeletePermanently(vec![path]));
+        assert_eq!(
+            app.core.state().queue.iter().last().unwrap().kind,
+            OpKind::Delete(crate::fold::ops::DeleteHow::Permanent)
+        );
+    }
+
+    #[test]
+    fn disabled_trash_warning_can_be_cancelled_or_suppressed_for_this_drive() {
+        use crate::fold::places::{Location, LocationInfo, LocationKind};
+
+        let (mut app, fake) = app();
+        let path = fake.fixture.path("blob.bin");
+        let mount = fake.home().to_path_buf();
+        fake.state_mut().places.locations.push(Location {
+            name: "Archive".into(),
+            path: mount.clone(),
+            kind: LocationKind::Device,
+            unmount_source: None,
+            info: Some(LocationInfo {
+                source: "/dev/sdb1".into(),
+                trash_disabled: true,
+                ..LocationInfo::default()
+            }),
+        });
+        for keyboard in [true, false] {
+            app.request_delete(vec![path.clone()], keyboard);
+            assert!(matches!(
+                app.overlays.current(),
+                Some(Overlay::TrashWarning(_))
+            ));
+            assert!(app.core.state().queue.iter().next().is_none());
+            app.key(key(KeyCode::Esc));
+        }
+
+        app.request_delete(vec![path.clone()], true);
+        app.key(key(KeyCode::Char('d')));
+        assert!(app.suppressed_trash_warnings.is_empty());
+        assert_eq!(
+            app.core.state().queue.iter().last().unwrap().kind,
+            OpKind::Delete(crate::fold::ops::DeleteHow::Permanent)
+        );
+
+        app.request_delete(vec![path.clone()], true);
+        assert!(matches!(
+            app.overlays.current(),
+            Some(Overlay::TrashWarning(_))
+        ));
+        app.key(key(KeyCode::Char('s')));
+        assert_eq!(app.suppressed_trash_warnings.len(), 1);
+        assert_eq!(
+            app.core.state().queue.iter().last().unwrap().kind,
+            OpKind::Delete(crate::fold::ops::DeleteHow::Permanent)
+        );
+
+        app.request_delete(vec![path.clone()], true);
+        assert!(
+            matches!(app.overlays.current(), Some(Overlay::Confirm(c)) if matches!(&c.pending, Pending::DeletePermanently(paths) if paths == &vec![path.clone()]))
+        );
+        app.key(key(KeyCode::Esc));
+        app.request_delete(vec![path.clone()], false);
+        assert!(matches!(app.overlays.current(), Some(Overlay::Confirm(_))));
+        app.key(key(KeyCode::Esc));
+
+        app.cfg.ops.confirm_delete = false;
+        app.request_delete(vec![path.clone()], false);
+        assert!(!app.overlays.is_open());
+        assert_eq!(
+            app.core.state().queue.iter().last().unwrap().kind,
+            OpKind::Delete(crate::fold::ops::DeleteHow::Permanent)
+        );
+
+        let other = tempfile::tempdir().unwrap();
+        fake.state_mut().places.locations.push(Location {
+            name: "Other".into(),
+            path: other.path().to_path_buf(),
+            kind: LocationKind::Device,
+            unmount_source: None,
+            info: Some(LocationInfo {
+                source: "/dev/sdc1".into(),
+                trash_disabled: true,
+                ..LocationInfo::default()
+            }),
+        });
+        app.request_delete(vec![other.path().join("image.png")], false);
+        assert!(matches!(
+            app.overlays.current(),
+            Some(Overlay::TrashWarning(_))
+        ));
+
+        let (fresh, _) = self::app();
+        assert!(fresh.suppressed_trash_warnings.is_empty());
     }
     #[test]
     fn compression_is_visible_in_operations_before_it_runs() {

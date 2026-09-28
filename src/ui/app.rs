@@ -42,8 +42,8 @@ mod dnd;
 mod editing;
 mod file_actions;
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -69,7 +69,7 @@ use super::editor::Editor;
 use super::keymap::{self, Action};
 use super::layout::{self, pane_rect, LayoutState, Regions};
 use super::overlays::confirm::Confirm;
-use super::overlays::{conflict, Answer, Overlay, Overlays, Pending};
+use super::overlays::{conflict, trash_warning, Answer, Overlay, Overlays, Pending};
 use super::panels::{self, ModuleId};
 use super::status;
 use super::theme::{self, Theme};
@@ -130,13 +130,14 @@ pub struct ViewData {
     pub preview_name: Option<String>,
     pub preview: Option<Arc<Preview>>,
     pub ops: Vec<panels::operations::OpRow>,
+    pub ops_active: bool,
     /// An unmount is visible as transient activity, separate from queue ops.
     pub unmounting: Option<String>,
     /// [`OpId`]s in the same order as [`Self::ops`] -- `OpRow` is a pure
     /// render struct with no id of its own, so this is how a click or a key
     /// on a row finds the [`Op`] it names.
     pub op_ids: Vec<OpId>,
-    /// The running op's `"COPYING ████████░░ 78%"`, for the status row.
+    /// The running op's `"COPYING ███████▊░░ 78.0%"`, for the status row.
     pub running_bar: Option<String>,
     pub has_forward: bool,
     pub trash_available: bool,
@@ -168,6 +169,7 @@ impl ViewData {
             preview_name: None,
             preview: None,
             ops: Vec::new(),
+            ops_active: false,
             unmounting: None,
             op_ids: Vec::new(),
             running_bar: None,
@@ -284,6 +286,7 @@ pub struct App {
     /// Some while `/` is being typed.
     filter: Option<TextInput>,
     g_pending: bool,
+    d_pending: bool,
     note: Option<(String, NoteLevel, Instant)>,
     view: ViewData,
     seen_version: u64,
@@ -295,6 +298,8 @@ pub struct App {
     pdf_requested: Option<(u64, u32)>,
     ops_cursor: usize,
     ops_scroll: usize,
+    prompted_trash_failures: HashSet<OpId>,
+    suppressed_trash_warnings: HashSet<trash_warning::DriveKey>,
     unmount_started: Option<(PathBuf, Instant)>,
     animation_started: Instant,
     /// Every scrollbar the column drew last frame, and the one a press is
@@ -789,6 +794,7 @@ impl App {
             overlays: Overlays::new(),
             filter: None,
             g_pending: false,
+            d_pending: false,
             note: None,
             view: ViewData::empty(),
             // Never equal to a fresh `State`'s starting version, so the
@@ -801,6 +807,8 @@ impl App {
             pdf_requested: None,
             ops_cursor: 0,
             ops_scroll: 0,
+            prompted_trash_failures: HashSet::new(),
+            suppressed_trash_warnings: HashSet::new(),
             unmount_started: None,
             animation_started: Instant::now(),
             bars: Bars::new(),
@@ -887,8 +895,9 @@ impl App {
 
             if event::poll(FRAME)? {
                 // OSC 72 file content arrives in 4 KiB chunks. Drain a
-                // bounded batch before repainting so a large transfer is not
-                // throttled to one chunk per frame.
+                // bounded batch without delaying a repaint for seconds on a
+                // fast stream. More than one chunk still fits in each frame.
+                let batch_started = Instant::now();
                 for _ in 0..2048 {
                     match event::read()? {
                         TermEvent::Key(k) if k.kind == KeyEventKind::Press => self.key(k),
@@ -916,7 +925,9 @@ impl App {
                         TermEvent::FocusGained | TermEvent::FocusLost => {}
                         _ => {}
                     }
-                    if !event::poll(Duration::ZERO)? {
+                    if batch_started.elapsed() >= Duration::from_millis(16)
+                        || !event::poll(Duration::ZERO)?
+                    {
                         break;
                     }
                 }
@@ -935,13 +946,45 @@ impl App {
                     self.note = Some((note.text, note.level, Instant::now()));
                 }
                 Event::Conflicts(op) => self.open_conflicts(op),
+                Event::ImportReady(op) => self.dnd_start_remote(op),
+                Event::Queue(op) if self.dnd.import_op == Some(op) => {
+                    let stopped = self
+                        .core
+                        .state()
+                        .queue
+                        .iter()
+                        .find(|entry| entry.id == op)
+                        .is_some_and(|entry| {
+                            matches!(entry.status, OpStatus::Failed | OpStatus::Cancelled)
+                        });
+                    if stopped {
+                        self.dnd_cancel_choice();
+                    }
+                }
                 // Every other event, `Refresh` included, means only "go
                 // re-read the truth" -- which `refresh` below does anyway,
                 // guarded by the version it already has to check.
                 _ => {}
             }
         }
+        if let Some(op) = self.dnd.import_op {
+            if self.dnd.pending_paths.is_some() {
+                let status = self
+                    .core
+                    .state()
+                    .queue
+                    .iter()
+                    .find(|entry| entry.id == op)
+                    .map(|entry| entry.status);
+                match status {
+                    Some(OpStatus::Running) => self.dnd_start_remote(op),
+                    Some(OpStatus::Failed | OpStatus::Cancelled) | None => self.dnd_cancel_choice(),
+                    _ => {}
+                }
+            }
+        }
         self.refresh();
+        self.offer_trash_fallback();
 
         self.dnd_autoscroll();
 
@@ -972,6 +1015,27 @@ impl App {
         }
     }
 
+    fn offer_trash_fallback(&mut self) {
+        if self.overlays.is_open() {
+            return;
+        }
+        let failure = {
+            let state = self.core.state();
+            let found = state.queue.iter().find_map(|op| {
+                let reason = op.trash_failure.as_ref()?;
+                (!self.prompted_trash_failures.contains(&op.id))
+                    .then(|| (op.id, op.sources[0].clone(), reason.clone()))
+            });
+            found
+        };
+        if let Some((id, path, reason)) = failure {
+            self.prompted_trash_failures.insert(id);
+            self.overlays
+                .open_confirm(Confirm::trash_failed(path, &reason));
+            self.repaint = true;
+        }
+    }
+
     /// Open the conflict overlay for an op whose plan just found one under
     /// `ConflictPolicy::Ask`.
     fn open_conflicts(&mut self, op: OpId) {
@@ -985,6 +1049,9 @@ impl App {
             .map(|p| p.conflicts.clone())
             .unwrap_or_default();
         drop(state);
+        if conflicts.is_empty() {
+            return;
+        }
         self.overlays
             .open_conflict(conflict::Prompt::new(op, conflicts));
         self.repaint = true;
@@ -1006,6 +1073,20 @@ impl App {
                 .load(std::sync::atomic::Ordering::Relaxed)
         });
         if state.version == self.seen_version && search_progress == self.seen_search_progress {
+            // Copy bytes live in atomics, so the state version does not move
+            // for each chunk. Refresh the running row and footer even when
+            // the rest of ViewData can be reused.
+            if let Some(op) = state.queue.running().or_else(|| {
+                state
+                    .queue
+                    .iter()
+                    .find(|op| op.import_sources.is_some() && op.status == OpStatus::Planning)
+            }) {
+                if let Some(index) = self.view.op_ids.iter().position(|id| *id == op.id) {
+                    self.view.ops[index] = build_op_row(op, &state.home, state.queue.is_paused());
+                }
+                self.view.running_bar = Some(op_progress_line(op));
+            }
             return;
         }
         self.seen_version = state.version;
@@ -1214,13 +1295,19 @@ impl App {
         let ops: Vec<panels::operations::OpRow> = state
             .queue
             .iter()
-            .map(|op| build_op_row(op, &state.home))
+            .map(|op| build_op_row(op, &state.home, state.queue.is_paused()))
             .collect();
         let op_ids: Vec<OpId> = state.queue.iter().map(|op| op.id).collect();
         let running_bar = state
             .queue
             .running()
-            .map(|op| op.progress.line(running_verb_upper(op.kind)));
+            .or_else(|| {
+                state
+                    .queue
+                    .iter()
+                    .find(|op| op.import_sources.is_some() && op.status == OpStatus::Planning)
+            })
+            .map(op_progress_line);
 
         self.view = ViewData {
             crumbs: if state.search.is_some() {
@@ -1271,6 +1358,10 @@ impl App {
             preview_name,
             preview,
             ops,
+            ops_active: state
+                .queue
+                .iter()
+                .any(|op| matches!(op.status, OpStatus::Planning | OpStatus::Running)),
             unmounting: unmounting_name,
             op_ids,
             running_bar,
@@ -1422,6 +1513,14 @@ impl App {
             }
             return;
         }
+        if self.d_pending {
+            self.d_pending = false;
+            self.note = None;
+            if let Some(action) = keymap::d_prefix(k) {
+                self.act(action);
+            }
+            return;
+        }
         if self.audio_path.is_some()
             && self.layout.focus() == ModuleId::Preview
             && self.audio_key(k)
@@ -1430,6 +1529,15 @@ impl App {
         }
         if k.modifiers.is_empty() && k.code == KeyCode::Char('g') {
             self.g_pending = true;
+            return;
+        }
+        if k.modifiers.is_empty() && k.code == KeyCode::Char('d') {
+            self.d_pending = true;
+            self.note = Some((
+                "d: press d again to delete".into(),
+                NoteLevel::Info,
+                Instant::now(),
+            ));
             return;
         }
 
@@ -1464,6 +1572,17 @@ impl App {
             Answer::Consumed => {}
             Answer::Closed => self.dnd_cancel_choice(),
             Answer::Confirmed(pending) => self.on_confirmed(pending),
+            Answer::TrashDelete {
+                sources,
+                drive,
+                suppress_for_session,
+            } => {
+                if suppress_for_session {
+                    self.suppressed_trash_warnings.insert(drive);
+                }
+                self.core
+                    .send(Command::QueuePermanentDeleteSources(sources));
+            }
             Answer::Renamed { from, to } => {
                 self.core.send(Command::QueueRename { from, to });
             }
@@ -1483,6 +1602,9 @@ impl App {
             Answer::Policy { op, policy } => {
                 self.core.send(Command::SetPolicy(op, policy));
             }
+            Answer::ConflictNames { op, targets } => {
+                self.core.send(Command::SetConflictNames(op, targets));
+            }
             Answer::Quit => self.quit = true,
         }
         // Closing an overlay can uncover a panel that redraws differently
@@ -1495,9 +1617,12 @@ impl App {
 
     fn on_confirmed(&mut self, pending: Pending) {
         match pending {
-            Pending::DeletePermanently(_) => self.core.send(Command::Run),
+            Pending::DeletePermanently(paths) => {
+                self.core.send(Command::QueuePermanentDeleteSources(paths))
+            }
+            Pending::QueueDelete(sources) => self.core.send(Command::QueueDeleteSources(sources)),
             Pending::ClearQueue => self.core.send(Command::ClearQueue),
-            Pending::CancelRunning(op) => self.core.send(Command::Cancel(op)),
+            Pending::CancelRunning(op) => self.core.send(Command::StopActive(op)),
             Pending::Quit => self.quit = true,
         }
     }
@@ -1624,11 +1749,27 @@ impl App {
             Action::Yank => self.core.send(Command::Yank),
             Action::Paste => self.core.send(Command::PasteHere),
             Action::QueueMove => self.core.send(Command::QueueMoveHere),
-            Action::QueueDelete => self.core.send(Command::QueueDelete),
-            Action::RunQueue | Action::RunOp => self.try_run(),
+            Action::QueueDelete => {
+                let state = self.core.state();
+                let mut sources: Vec<PathBuf> = state
+                    .selection
+                    .paths()
+                    .map(std::path::Path::to_path_buf)
+                    .collect();
+                if sources.is_empty() {
+                    if let Some(entry) = state.cursor_entry() {
+                        sources.push(entry.path.clone());
+                    }
+                }
+                drop(state);
+                if !sources.is_empty() {
+                    self.request_delete(sources, true);
+                }
+            }
+            Action::RunQueue | Action::RunOp => self.core.send(Command::Run),
             Action::CancelRun => {
                 if let Some(id) = self.running_op_id() {
-                    self.core.send(Command::Cancel(id));
+                    self.core.send(Command::StopActive(id));
                 }
             }
             Action::DropOp => {
@@ -1637,13 +1778,7 @@ impl App {
                 }
             }
             Action::ClearQueue => {
-                if self.running_op_id().is_some() {
-                    self.overlays
-                        .open_confirm(Confirm::clear_queue(self.view.ops.len()));
-                    self.repaint = true;
-                } else {
-                    self.core.send(Command::ClearQueue);
-                }
+                self.core.send(Command::ClearQueue);
             }
 
             Action::TogglePreview => {
@@ -1679,14 +1814,18 @@ impl App {
                 self.repaint = true;
             }
             Action::Quit => {
-                if let Some(row) = self
-                    .view
-                    .ops
-                    .iter()
-                    .find(|r| r.tone == panels::operations::Tone::Running)
-                {
+                let active_title = {
+                    let state = self.core.state();
+                    let title = state
+                        .queue
+                        .iter()
+                        .find(|op| matches!(op.status, OpStatus::Planning | OpStatus::Running))
+                        .map(|op| op_title(op, &state.home));
+                    title
+                };
+                if let Some(title) = active_title {
                     self.overlays
-                        .open_confirm(Confirm::quit_with_running(&row.title));
+                        .open_confirm(Confirm::quit_with_running(&title));
                     self.repaint = true;
                 } else {
                     self.quit = true;
@@ -1766,43 +1905,17 @@ impl App {
     }
 
     fn running_op_id(&self) -> Option<OpId> {
-        self.view
-            .op_ids
+        self.core
+            .state()
+            .queue
             .iter()
-            .zip(self.view.ops.iter())
-            .find(|(_, row)| row.tone == panels::operations::Tone::Running)
-            .map(|(id, _)| *id)
+            .find(|op| matches!(op.status, OpStatus::Planning | OpStatus::Running))
+            .map(|op| op.id)
     }
 
-    /// `RunQueue`/`RunOp`: both just start the queue -- `Command::Run` always
-    /// picks the first runnable entry, whichever row the cursor happens to
-    /// be on. If that entry is a permanent delete and `[ops] confirm_delete`
-    /// is set, ask first; `Command::Run` itself is sent only once the answer
-    /// is yes.
+    /// Resume work after Stop; newly requested operations start on their own.
     fn try_run(&mut self) {
-        let state = self.core.state();
-        let candidate = state.queue.iter().find(|op| op.status == OpStatus::Queued);
-        let prompt = self.cfg.ops.confirm_delete
-            && candidate.is_some_and(|op| {
-                matches!(
-                    op.kind,
-                    OpKind::Delete(crate::fold::ops::DeleteHow::Permanent)
-                )
-            });
-        let confirm = prompt.then(|| {
-            let op = candidate.expect("prompt is only true when candidate is Some");
-            (op.id, op.sources.len())
-        });
-        drop(state);
-
-        match confirm {
-            Some((id, n)) => {
-                self.overlays
-                    .open_confirm(Confirm::delete_permanently(id, n));
-                self.repaint = true;
-            }
-            None => self.core.send(Command::Run),
-        }
+        self.core.send(Command::Run);
     }
 
     fn cycle_theme(&mut self, forward: bool) {
@@ -2189,7 +2302,14 @@ impl App {
             return;
         };
         let rect = regions.rect_of(module);
-        let words = panels::words(module);
+        let words = if module == ModuleId::Operations {
+            panels::operations::header_words(
+                self.core.state().queue.is_paused(),
+                self.running_op_id().is_some(),
+            )
+        } else {
+            panels::words(module)
+        };
         if let Some(word) = header::hit(rect, &words, x, y) {
             self.word_click(word);
             return;
@@ -2276,6 +2396,7 @@ impl App {
             panels::Word::Filter => self.act(Action::Filter),
             panels::Word::Actions => self.open_actions_modal(),
             panels::Word::Run => self.try_run(),
+            panels::Word::Cancel => self.act(Action::CancelRun),
             panels::Word::Clear => self.act(Action::ClearQueue),
             panels::Word::Close => self.act(Action::TogglePreview),
         }
@@ -2302,16 +2423,49 @@ impl App {
     }
 
     fn operations_view(&self) -> panels::operations::View<'_> {
+        let incoming = self
+            .dnd
+            .receiving_uri
+            .then(|| self.dnd.choice.as_ref())
+            .flatten()
+            .map(|choice| {
+                let action = if self.dnd.result_kind == Some(OpKind::Move) {
+                    "MOVE"
+                } else {
+                    "COPY"
+                };
+                format!(
+                    "{action} → {}",
+                    home_relative(&choice.dest, &self.view.home)
+                )
+            });
         panels::operations::View {
             theme: &self.theme,
             focused: self.layout.focus() == ModuleId::Operations,
             folded: !self.layout.is_open(ModuleId::Operations),
+            paused: self.core.state().queue.is_paused(),
+            active: self.running_op_id().is_some(),
             rows: &self.view.ops,
             unmounting: self.view.unmounting.as_deref(),
+            incoming,
             spinner: self.unmount_spinner(),
             cursor: self.ops_cursor,
-            scroll: self.ops_scroll,
-            hint: "enter run \u{b7} x drop \u{b7} esc clear",
+            scroll: if self.view.ops_active && self.layout.focus() != ModuleId::Operations {
+                self.view
+                    .ops
+                    .iter()
+                    .position(|row| {
+                        row.tone == panels::operations::Tone::Running || row.status == "planning"
+                    })
+                    .unwrap_or(self.ops_scroll)
+            } else {
+                self.ops_scroll
+            },
+            hint: if self.core.state().queue.is_paused() {
+                "enter resume · ctrl+x cancel · x remove · esc remove waiting"
+            } else {
+                "ctrl+x cancel · x remove · esc remove waiting"
+            },
         }
     }
 
@@ -2348,9 +2502,13 @@ impl App {
                     ("y", "yank"),
                     ("p", "paste"),
                     ("m", "move"),
-                    ("d", "delete"),
+                    ("dd", "delete"),
                 ],
-                ModuleId::Operations => &[("enter", "run"), ("x", "drop"), ("esc", "clear")],
+                ModuleId::Operations => &[
+                    ("ctrl+x", "cancel"),
+                    ("x", "remove"),
+                    ("esc", "remove waiting"),
+                ],
                 ModuleId::Preview if self.audio_path.is_some() => &[
                     ("space", "pause"),
                     ("[/]", "track"),
@@ -2395,9 +2553,14 @@ impl App {
         bars.begin_frame();
 
         let padding = (self.cfg.ui.padding_x, self.cfg.ui.padding_y);
-        let queued =
-            u16::try_from(self.view.ops.len() + usize::from(self.view.unmounting.is_some()))
-                .unwrap_or(u16::MAX);
+        let incoming = self.dnd.receiving_uri && self.dnd.choice.is_some();
+        let queued = u16::try_from(
+            self.view.ops.len()
+                + usize::from(self.view.unmounting.is_some())
+                + usize::from(incoming),
+        )
+        .unwrap_or(u16::MAX);
+        self.layout.ops_active = self.view.ops_active || incoming;
         let Some(regions) = self.layout.regions(area, padding, queued).cloned() else {
             too_small(area, buf, &self.theme);
             self.bars = bars;
@@ -2450,7 +2613,7 @@ impl App {
             }
         }
 
-        if let Some((x, y)) = self.dnd.hover_coords {
+        if let (Some((x, y)), Some(dest)) = (self.dnd.hover_coords, self.dnd.hover.as_ref()) {
             let stack = regions.rect_of(ModuleId::Stack);
             if x >= stack.x && x < stack.right() && y >= stack.y && y < stack.bottom() {
                 let row = if self.commander {
@@ -2458,9 +2621,20 @@ impl App {
                 } else {
                     stack
                 };
-                for cell_x in row.x..row.right() {
-                    let style = buf[(cell_x, y)].style().add_modifier(Modifier::REVERSED);
-                    buf[(cell_x, y)].set_style(style);
+                let content_x = row.x.saturating_add(1);
+                let content_width = row.width.saturating_sub(2);
+                if content_width > 0 {
+                    let style = Style::default()
+                        .fg(panels::rgb(self.theme.row_cursor_fg))
+                        .bg(panels::rgb(self.theme.row_cursor_bg));
+                    buf.set_string(content_x, y, " ".repeat(usize::from(content_width)), style);
+                    let text = drop_target_hint(
+                        self.dnd.offer.as_ref(),
+                        dest,
+                        self.dnd.hover_allowed,
+                        content_width.saturating_sub(2),
+                    );
+                    buf.set_string(content_x + 1, y, text, style.add_modifier(Modifier::BOLD));
                 }
             }
         }
@@ -2524,8 +2698,17 @@ impl App {
             );
         }
         for module in [ModuleId::Preview, ModuleId::Operations] {
-            panels::highlight_header_hotkeys(
+            let word_list = if module == ModuleId::Operations {
+                panels::operations::header_words(
+                    self.core.state().queue.is_paused(),
+                    self.running_op_id().is_some(),
+                )
+            } else {
+                panels::words(module)
+            };
+            panels::highlight_header_hotkeys_for_words(
                 regions.rect_of(module),
+                &word_list,
                 module,
                 buf,
                 &self.theme,
@@ -2649,6 +2832,51 @@ impl App {
         self.seen_version = u64::MAX;
         self.refresh();
     }
+}
+
+fn drop_target_hint(
+    offer: Option<&wire_dnd::Offer>,
+    dest: &Path,
+    allowed: i32,
+    width: u16,
+) -> String {
+    let action = if offer.is_some() || allowed == 3 {
+        "COPY / MOVE"
+    } else if allowed == 2 {
+        "MOVE"
+    } else {
+        "COPY"
+    };
+    let source = match offer.map(|offer| offer.sources.as_slice()) {
+        Some([path]) => path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy()
+            .into_owned(),
+        Some(paths) => format!("{} items", paths.len()),
+        None => "incoming files".to_string(),
+    };
+    let destination = dest
+        .file_name()
+        .unwrap_or(dest.as_os_str())
+        .to_string_lossy();
+    let destination = if dest.file_name().is_some() {
+        format!("{destination}/")
+    } else {
+        destination.into_owned()
+    };
+    let prefix = format!("⇢ {action}  ");
+    let suffix = format!("  →  {destination}");
+    let room = width.saturating_sub(panels::width_of(&prefix) + panels::width_of(&suffix));
+    if room == 0 {
+        return panels::fit(&format!("⇢ {action} → {destination}"), width);
+    }
+    let source = if panels::width_of(&source) > room {
+        panels::fit(&source, room)
+    } else {
+        source
+    };
+    format!("{prefix}{source}{suffix}")
 }
 
 fn reverse_cell(buf: &mut Buffer, area: Rect, x: u16, y: u16) {
@@ -2809,11 +3037,20 @@ fn build_row(
     }
 }
 
-fn build_op_row(op: &Op, home: &std::path::Path) -> panels::operations::OpRow {
+fn build_op_row(op: &Op, home: &std::path::Path, paused: bool) -> panels::operations::OpRow {
     use panels::operations::Tone;
 
     let (status, tone) = match op.status {
-        OpStatus::Queued => ("queued".to_string(), Tone::Pending),
+        OpStatus::Queued => (
+            if paused { "paused" } else { "waiting" }.to_string(),
+            Tone::Pending,
+        ),
+        OpStatus::Planning if op.import_sources.is_some() && op.kind == OpKind::Copy => {
+            ("checking destination names".to_string(), Tone::Running)
+        }
+        OpStatus::Planning if op.import_sources.is_some() => {
+            ("placing received files".to_string(), Tone::Running)
+        }
         OpStatus::Planning => ("planning".to_string(), Tone::Pending),
         OpStatus::NeedsPolicy => {
             let n = op.plan.as_ref().map(|p| p.conflicts.len()).unwrap_or(0);
@@ -2821,11 +3058,7 @@ fn build_op_row(op: &Op, home: &std::path::Path) -> panels::operations::OpRow {
             (format!("waiting: {n} {noun}"), Tone::Conflict)
         }
         OpStatus::Running => {
-            if op.kind == OpKind::Copy
-                && op.plan.is_none()
-                && op.progress.total() == 0
-                && op.dest.is_some()
-            {
+            if op.import_sources.is_some() && op.kind == OpKind::Copy {
                 (
                     format!(
                         "receiving {}",
@@ -2834,9 +3067,16 @@ fn build_op_row(op: &Op, home: &std::path::Path) -> panels::operations::OpRow {
                     Tone::Running,
                 )
             } else {
-                let pct = (op.progress.fraction() * 100.0).round() as u32;
                 (
-                    format!("{} {pct}%", running_verb_lower(op.kind)),
+                    format!(
+                        "{} {}",
+                        if op.import_sources.is_some() {
+                            "copying"
+                        } else {
+                            running_verb_lower(op.kind)
+                        },
+                        op.progress.percent()
+                    ),
                     Tone::Running,
                 )
             }
@@ -2848,8 +3088,18 @@ fn build_op_row(op: &Op, home: &std::path::Path) -> panels::operations::OpRow {
         OpStatus::Failed => ("failed".to_string(), Tone::Failed),
         OpStatus::Cancelled => ("cancelled".to_string(), Tone::Failed),
     };
-    let bar = (matches!(op.status, OpStatus::Running) && op.progress.total() > 0)
-        .then(|| op.progress.bar(10));
+    let bar =
+        if op.import_sources.is_some() && op.status == OpStatus::Running && op.kind == OpKind::Copy
+        {
+            Some(format!(
+                "{} {}",
+                op.progress.receiving_bar(10),
+                crate::fold::format::size(op.progress.done())
+            ))
+        } else {
+            (matches!(op.status, OpStatus::Running | OpStatus::Planning) && op.progress.total() > 0)
+                .then(|| op.progress.bar(10))
+        };
 
     panels::operations::OpRow {
         title: op_title(op, home),
@@ -2868,7 +3118,9 @@ fn op_title(op: &Op, home: &std::path::Path) -> String {
             let verb = op.title();
             let verb = verb.split(" \u{2192} ").next().unwrap_or(&verb).to_string();
             let source = op
-                .sources
+                .import_sources
+                .as_ref()
+                .unwrap_or(&op.sources)
                 .first()
                 .map(|path| home_relative(path, home))
                 .unwrap_or_default();
@@ -2883,6 +3135,22 @@ fn op_title(op: &Op, home: &std::path::Path) -> String {
             )
         }
         None => op.title(),
+    }
+}
+
+fn op_progress_line(op: &Op) -> String {
+    if op.import_sources.is_some() && op.kind == OpKind::Copy && op.status == OpStatus::Running {
+        format!(
+            "RECEIVING {} {}",
+            op.progress.receiving_bar(10),
+            crate::fold::format::size(op.progress.done())
+        )
+    } else {
+        op.progress.line(if op.import_sources.is_some() {
+            "COPYING"
+        } else {
+            running_verb_upper(op.kind)
+        })
     }
 }
 
@@ -2992,6 +3260,8 @@ mod tests {
         );
         app.key(code(KeyCode::Esc));
         app.key(key('d'));
+        app.key(key('d'));
+        app.key(key('y'));
         assert_eq!(
             app.core.state().queue.iter().next().unwrap().expected.len(),
             1
@@ -3002,6 +3272,8 @@ mod tests {
         assert_eq!(app.view.active_dir, original_dir);
         assert_eq!(app.view.cursor_path, original_cursor);
         app.key(key('d'));
+        app.key(key('d'));
+        app.key(key('y'));
         assert_eq!(
             app.core.state().queue.iter().nth(1).unwrap().expected.len(),
             1
@@ -3104,7 +3376,15 @@ mod tests {
         let mut buf = Buffer::empty(area);
         app.draw(area, &mut buf);
         let rect = app.layout.last.as_ref().unwrap().rect_of(module);
-        let (_, slot) = header::slots(rect, &panels::words(module))
+        let words = if module == ModuleId::Operations {
+            panels::operations::header_words(
+                app.core.state().queue.is_paused(),
+                app.running_op_id().is_some(),
+            )
+        } else {
+            panels::words(module)
+        };
+        let (_, slot) = header::slots(rect, &words)
             .into_iter()
             .find(|(w, _)| *w == word)
             .expect("header word is visible");
@@ -3289,18 +3569,10 @@ mod tests {
             header_letter_color(&mut app, ModuleId::Preview, panels::Word::Close),
             bright
         );
-        assert_eq!(
-            header_letter_color(&mut app, ModuleId::Operations, panels::Word::Run),
-            dim
-        );
         app.layout.focus_set(ModuleId::Operations);
         assert_eq!(
             header_letter_color(&mut app, ModuleId::Preview, panels::Word::Close),
             dim
-        );
-        assert_eq!(
-            header_letter_color(&mut app, ModuleId::Operations, panels::Word::Run),
-            bright
         );
     }
 
@@ -3543,6 +3815,31 @@ mod tests {
     }
 
     #[test]
+    fn trash_fallback_is_offered_from_state_once_even_without_an_event() {
+        let (mut app, fake, _dir) = app();
+        let path = fake.fixture.path("blob.bin");
+        app.core
+            .send(Command::QueueDeleteSources(vec![path.clone()]));
+        {
+            let mut state = fake.state_mut();
+            let op = state.queue.iter().next().unwrap().id;
+            let entry = state.queue.get_mut(op).unwrap();
+            entry.status = OpStatus::Failed;
+            entry.trash_failure = Some("trash path is a file".into());
+            state.version += 1;
+        }
+        app.tick();
+        assert!(matches!(
+            app.overlays.current(),
+            Some(Overlay::Confirm(confirm))
+                if matches!(&confirm.pending, Pending::DeletePermanently(paths) if paths == &vec![path.clone()])
+        ));
+        app.key(code(KeyCode::Esc));
+        app.tick();
+        assert!(!app.overlays.is_open());
+    }
+
+    #[test]
     fn yank_then_paste_and_run_copies_the_marked_file_to_the_destination() {
         let (mut app, fk, _dir) = app();
         let idx = row_index(&app, "blob.bin");
@@ -3570,6 +3867,43 @@ mod tests {
         app.tick();
 
         assert!(fk.home().join("empty/blob.bin").exists());
+    }
+
+    #[test]
+    fn dd_confirms_the_captured_file_before_queueing_deletion() {
+        let (mut app, fk, _dir) = app();
+        let source = fk.home().join("blob.bin");
+        let idx = row_index(&app, "blob.bin");
+        app.core.send(Command::CursorTo(idx));
+        fk.pump();
+        app.tick();
+
+        app.key(key('d'));
+        assert!(app.d_pending);
+        assert!(app.core.state().queue.iter().next().is_none());
+        app.key(key('d'));
+        assert!(matches!(
+            app.overlays.current(),
+            Some(Overlay::Confirm(confirm))
+                if matches!(&confirm.pending, Pending::QueueDelete(paths) if paths == &vec![source.clone()])
+        ));
+        app.key(key('n'));
+        fk.pump();
+        assert!(app.core.state().queue.iter().next().is_none());
+
+        app.key(key('d'));
+        app.key(key('d'));
+        app.key(key('y'));
+        fk.pump();
+        let state = app.core.state();
+        let op = state
+            .queue
+            .iter()
+            .next()
+            .expect("confirmed delete is queued");
+        assert!(matches!(op.kind, OpKind::Delete(_)));
+        assert_eq!(op.sources, vec![source.clone()]);
+        assert!(!source.exists(), "confirmed deletion starts without Run");
     }
 
     /// A 60x21 frame gives the stack listing exactly `LIST_ROWS_MIN` (7)
@@ -3715,15 +4049,122 @@ mod tests {
         app.draw(area, &mut buf);
         let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
         let x = stack.x + 4;
-        let y = stack.y + 3;
+        let y = stack.bottom() - 3;
         app.dnd.enabled = true;
         app.repaint = false;
 
         app.dnd_message(&format!("t=m:x={x}:y={y}:o=1:i=1;text/uri-list"));
         assert!(app.dnd.hover.is_some());
         assert!(!app.repaint);
+        let mut hovered = Buffer::empty(area);
+        app.draw(area, &mut hovered);
+        let row: String = (stack.x..stack.right())
+            .map(|cell_x| hovered[(cell_x, y)].symbol().to_string())
+            .collect();
+        assert!(row.contains("COPY"));
+        assert!(row.contains("incoming files"));
         app.dnd_message(&format!("t=m:x={x}:y={}:o=1:i=1;text/uri-list", y + 1));
         assert!(!app.repaint);
+    }
+
+    #[test]
+    fn remote_drop_progress_spans_receipt_and_placement_in_one_row() {
+        let (mut app, fake, _dir) = app();
+        app.core.send(Command::BeginImport {
+            sources: vec![PathBuf::from("/remote/photo.jpg")],
+            dest: fake.home().to_path_buf(),
+        });
+        fake.pump();
+        app.tick();
+        let op = app.core.state().queue.iter().last().unwrap().id;
+        assert!(app.view.ops.last().unwrap().bar.is_some());
+        assert!(app
+            .view
+            .running_bar
+            .as_deref()
+            .unwrap()
+            .starts_with("RECEIVING"));
+
+        app.core
+            .state()
+            .queue
+            .iter()
+            .last()
+            .unwrap()
+            .progress
+            .add(100);
+        app.tick();
+        assert!(app.view.ops.last().unwrap().status.contains("receiving"));
+        assert!(app
+            .view
+            .ops
+            .last()
+            .unwrap()
+            .bar
+            .as_deref()
+            .unwrap()
+            .contains("100"));
+
+        app.core.send(Command::CompleteImport {
+            op,
+            sources: vec![fake.home().join(".starfold-drop/photo.jpg")],
+        });
+        app.tick();
+        let row = app.view.ops.last().unwrap();
+        assert!(row.title.contains("/remote/photo.jpg"), "{}", row.title);
+        assert!(row.bar.as_deref().unwrap().contains("50.0%"));
+        assert!(app
+            .view
+            .running_bar
+            .as_deref()
+            .unwrap()
+            .starts_with("COPYING"));
+        assert_eq!(app.core.state().queue.len(), 1);
+    }
+
+    #[test]
+    fn external_drop_shows_receipt_before_its_uri_list_arrives() {
+        let (mut app, fk, _dir) = app();
+        fk.pump();
+        app.tick();
+        let area = Rect::new(0, 0, 80, 25);
+        app.draw(area, &mut Buffer::empty(area));
+        let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
+        let x = stack.x + 4;
+        let y = stack.bottom() - 3;
+        app.dnd.enabled = true;
+
+        app.dnd_message(&format!("t=M:x={x}:y={y}:o=1:i=1;text/uri-list"));
+        assert!(app.dnd.receiving_uri);
+        assert!(app.core.state().queue.is_empty());
+
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        let rendered = dump(&buf, area);
+        assert!(rendered.contains("waiting for file list"), "{rendered}");
+        assert!(app.layout.ops_active);
+
+        app.dnd_cancel_choice();
+        let mut buf = Buffer::empty(area);
+        app.draw(area, &mut buf);
+        assert!(!dump(&buf, area).contains("waiting for file list"));
+    }
+
+    #[test]
+    fn internal_drop_label_names_source_action_and_destination() {
+        let offer = wire_dnd::Offer {
+            sources: vec![PathBuf::from("/source/movie.mkv")],
+            uri_text: String::new(),
+            source_stack: 1,
+        };
+        assert_eq!(
+            drop_target_hint(Some(&offer), Path::new("/destination/videos"), 1, 80),
+            "⇢ COPY / MOVE  movie.mkv  →  videos/"
+        );
+        assert!(
+            drop_target_hint(Some(&offer), Path::new("/destination/videos"), 1, 32)
+                .ends_with("→  videos/")
+        );
     }
 
     #[test]

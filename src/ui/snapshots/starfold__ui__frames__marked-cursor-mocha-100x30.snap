@@ -28,7 +28,7 @@ expression: dark_frame
 ║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                       run  clear ║
+║                                                                                           remove ║
 ║                                          nothing queued                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  / filter  space mark  enter open  y yank  p paste  m move  d delete   1 marked · 0 B  ~  off
+? help  / filter  space mark  enter open  y yank  p paste  m move  dd delete  1 marked · 0 B  ~  off

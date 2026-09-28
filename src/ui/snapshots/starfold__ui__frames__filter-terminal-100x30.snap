@@ -28,7 +28,7 @@ expression: "render(&mut app, 100, 30)"
 ║ edition = "2021"                                                                                 ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                       run  clear ║
+║                                                                                           remove ║
 ║                                          nothing queued                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  / filter  space mark  enter open  y yank  p paste  m move  d delet  ~/projects/starwire  off
+? help  / filter  space mark  enter open  y yank  p paste  m move  dd dele  ~/projects/starwire  off

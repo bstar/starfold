@@ -5,10 +5,10 @@ expression: "render(&mut app, 100, 30)"
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
 ║                                         ‹  hidden  sort  filter  Bookmark  places  view  actions ║
 ║▸ ~                                                                                        6 items║
-║─ projects/ ── 0 files · 1 dirs · 0 B ────────────────────────────────────────────────────────────║
-║ ○  ▸ starwire/                                                    dir             -  Sep 10      ║
-║                                                                                                  ║
-║                                                                                                  ║
+║─ projects/ ── 1 files · 2 dirs · 92 B ───────────────────────────────────────────────────────────║
+║    ▸ src/                                                         dir             -  2026-09-28  ║
+║    ▸ starwire/                                                    dir             -  Sep 10      ║
+║    λ Cargo.toml                                                   toml         92 B  11:00       ║
 ║                                                                                                  ║
 ║                                                                                                  ║
 ║                                                                                                  ║
@@ -28,7 +28,7 @@ expression: "render(&mut app, 100, 30)"
 ║ ├── ◇ .gitignore                                                                                 ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                       run  clear ║
-║COPY 2 items: ~/projects/sta…re/Cargo.toml +1 → ~/projects queued · enter run · x drop · esc clear║
+║                                                                                           remove ║
+║COPY 2 items: ~/projec…o.toml +1 → ~/projects done · ctrl+x cancel · x remove · esc remove waiting║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  yanked 2 items                                             2 marked · 105 B  ~/projects  off
+? help  yanked 2 items                                                               ~/projects  off

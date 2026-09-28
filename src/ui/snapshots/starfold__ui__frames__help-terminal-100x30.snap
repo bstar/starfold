@@ -28,7 +28,7 @@ expression: "render(&mut app, 100, 30)"
 ║         ║  gh            the home directory                                            ║         ║
 ╚═════════║  gr            the root                                                      ║═════════╝
 ╔═ OPERATI║  o             open externally                                               ║═════════╗
-║         ║  r             rename                                                        ║n  clear ║
+║         ║  r             rename                                                        ║  remove ║
 ║         ║  c             file actions menu                                             ║         ║
 ╚═════════╚══════════════════════════════════════════════════════ more below · esc close ╝═════════╝
-? help  / filter  space mark  enter open  y yank  p paste  m move  d delete                   ~  off
+? help  / filter  space mark  enter open  y yank  p paste  m move  dd delete                  ~  off

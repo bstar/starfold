@@ -131,6 +131,8 @@ pub struct LayoutState {
     /// An embedded terminal editor takes the available vertical room in
     /// Preview while it owns keyboard focus.
     pub editor_active: bool,
+    /// Grow OPERATIONS while a file operation is active without taking focus.
+    pub ops_active: bool,
     /// `[ui] preview_rows`: how far PREVIEW grows when it is open but not
     /// focused.
     pub preview_rows: u16,
@@ -153,6 +155,7 @@ impl LayoutState {
             preview_open: true,
             audio_active: false,
             editor_active: false,
+            ops_active: false,
             preview_rows,
             ops_rows,
             fold_rows,
@@ -201,9 +204,12 @@ impl LayoutState {
         // focusing it is asking to see the queue, and a queue that could not
         // open because the preview had the room was the first thing a real
         // terminal showed to be wrong.
-        let ops_desired = if self.focus == ModuleId::Operations {
+        let ops_desired = if self.focus == ModuleId::Operations || self.ops_active {
             // One entry of the queue already shows on the folded line.
-            queued.min(self.ops_rows).saturating_sub(1)
+            queued
+                .max(if self.ops_active { 2 } else { 1 })
+                .min(self.ops_rows)
+                .saturating_sub(1)
         } else {
             0
         };
@@ -301,7 +307,7 @@ impl LayoutState {
         match m {
             ModuleId::Stack => true,
             ModuleId::Preview => self.preview_open,
-            ModuleId::Operations => self.focus == ModuleId::Operations,
+            ModuleId::Operations => self.focus == ModuleId::Operations || self.ops_active,
         }
     }
 }
@@ -457,7 +463,7 @@ mod tests {
         assert_eq!(STACK_MIN_ROWS, 12);
     }
 
-    /// OPERATIONS only grows while it has focus, whatever else is going on.
+    /// OPERATIONS grows when focused, or when work is active.
     #[test]
     fn operations_grows_only_while_focused() {
         let mut s = state();
@@ -490,6 +496,26 @@ mod tests {
         s.focus_set(ModuleId::Operations);
         let r = s
             .regions(Rect::new(0, 0, 100, 40), (0, 0), 1)
+            .cloned()
+            .unwrap();
+        assert_eq!(r.rect_of(ModuleId::Operations).height, COLLAPSED_ROWS);
+    }
+
+    #[test]
+    fn active_work_expands_operations_without_changing_focus() {
+        let mut s = state();
+        s.ops_active = true;
+        let area = Rect::new(0, 0, 100, 30);
+        let r = s.regions(area, (0, 0), 1).cloned().unwrap();
+        assert_eq!(s.focus(), ModuleId::Stack);
+        assert!(s.is_open(ModuleId::Operations));
+        assert!(r.rect_of(ModuleId::Operations).height > COLLAPSED_ROWS);
+        s.ops_active = false;
+        let r = s.regions(area, (0, 0), 1).cloned().unwrap();
+        assert_eq!(r.rect_of(ModuleId::Operations).height, COLLAPSED_ROWS);
+        s.ops_active = true;
+        let r = s
+            .regions(Rect::new(0, 0, MIN_COLS, MIN_ROWS), (0, 0), 1)
             .cloned()
             .unwrap();
         assert_eq!(r.rect_of(ModuleId::Operations).height, COLLAPSED_ROWS);

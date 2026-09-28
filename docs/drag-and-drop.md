@@ -16,16 +16,32 @@ Empty space or an ordinary file row in a file pane targets that pane's current
 directory. Dragging a marked row carries the marked set. You can also drag
 files to or from desktop applications that provide file URIs. If Copy and Move
 are both available, STAR/FOLD asks which one to perform after the drop.
+The highlighted drop row shows the available action, the dragged file or item
+count, and the destination folder.
 
 During a file drag, the source pane stays still. Hover over the top or bottom
 two rows of another pane to scroll it; incoming desktop drops can scroll a
 destination pane the same way. The mouse wheel is inactive during the drag.
 Dragging a scrollbar moves only that scrollbar and does not start a file drag.
 
-Dropped files enter OPERATIONS and start when the worker is free. Existing
-keyboard-queued entries remain paused. Conflicts still use the usual
+Dropped files enter OPERATIONS after earlier requests and start when the worker
+is free. If the queue is paused, they wait for Resume. Conflicts still use the usual
 overwrite, skip, or rename decision. Cancelling a drop stops the transfer and
 cleans up temporary files.
+Rename opens a name field for each conflict, prefilled with the first free
+numbered name such as `photo (1).jpg`. You can change that name before the
+operation continues.
+
+For SSH drops, STAR/FOLD checks each top-level destination name after receiving
+the file list and before requesting file contents. Existing names open the
+conflict choice at that point. The placement plan checks again after receipt
+in case the destination changed during the transfer. Choosing Skip avoids
+requesting the colliding files over SSH.
+
+For a drop from another app, OPERATIONS shows `waiting for file list` as soon
+as the drop is accepted. That activity becomes a queue entry once the terminal
+supplies the file list. Large SSH transfers continue to repaint the panel
+while file data arrives.
 
 Over SSH, a supported terminal can stream dropped files and directory trees
 through the terminal connection. Dragging out of a remote session is copy-only.

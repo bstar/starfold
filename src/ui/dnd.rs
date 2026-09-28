@@ -219,6 +219,7 @@ pub struct State {
     pub active: Option<Active>,
     pub receiving_uri: bool,
     pub received: Vec<u8>,
+    pub pending_paths: Option<Vec<PathBuf>>,
     pub result_kind: Option<OpKind>,
     pub remote: Option<Remote>,
     pub staged: Option<tempfile::TempDir>,
@@ -401,12 +402,27 @@ impl Remote {
         mime_index: i32,
         progress: Arc<Progress>,
     ) -> io::Result<Self> {
+        Self::new_filtered(dest, paths, mime_index, progress, &[])
+    }
+
+    /// `skip` contains zero-based URI positions; wire requests retain their
+    /// original one-based positions for the remaining roots.
+    pub fn new_filtered(
+        dest: &Path,
+        paths: &[PathBuf],
+        mime_index: i32,
+        progress: Arc<Progress>,
+        skip: &[usize],
+    ) -> io::Result<Self> {
         let stage = tempfile::Builder::new()
             .prefix(".starfold-drop-")
             .tempdir_in(dest)?;
         let mut roots = Vec::new();
         let mut waiting = VecDeque::new();
         for (i, source) in paths.iter().enumerate() {
+            if skip.contains(&i) {
+                continue;
+            }
             let name = source.file_name().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "drop has no file name")
             })?;
@@ -694,6 +710,21 @@ mod tests {
         let messages: Vec<_> = output_rx.try_iter().collect();
         assert!(messages[0].meta.contains("x=1") && messages[0].meta.contains("X=2"));
         assert!(messages[1].meta.contains("x=2") && messages[1].meta.contains("X=3"));
+    }
+
+    #[test]
+    fn skipped_remote_roots_keep_original_wire_indices() {
+        let dest = tempfile::tempdir().unwrap();
+        let paths = vec![
+            PathBuf::from("/remote/a"),
+            PathBuf::from("/remote/b"),
+            PathBuf::from("/remote/c"),
+        ];
+        let remote =
+            Remote::new_filtered(dest.path(), &paths, 1, Arc::new(Progress::new(0)), &[1]).unwrap();
+        assert_eq!(remote.roots.len(), 2);
+        assert_eq!(remote.waiting[0].root_index, 1);
+        assert_eq!(remote.waiting[1].root_index, 3);
     }
 
     #[test]

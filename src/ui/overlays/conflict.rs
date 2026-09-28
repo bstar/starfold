@@ -24,6 +24,7 @@ use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::Style;
 
+use super::rename;
 use crate::fold::ops::{Conflict, ConflictPolicy, OpId};
 use crate::ui::panels::{fit, rgb};
 use crate::ui::theme::Theme;
@@ -83,11 +84,94 @@ impl Prompt {
     }
 }
 
+#[derive(Debug)]
+pub struct RenameSequence {
+    pub op: OpId,
+    pub conflicts: Vec<Conflict>,
+    pub index: usize,
+    pub targets: Vec<(std::path::PathBuf, std::path::PathBuf)>,
+    pub form: rename::Rename,
+}
+
+impl RenameSequence {
+    pub fn new(op: OpId, conflicts: Vec<Conflict>) -> Self {
+        let first = conflicts
+            .first()
+            .expect("rename needs a conflict")
+            .dest
+            .clone();
+        let mut form = rename::Rename::for_conflict(first);
+        form.detail = Some(format!(
+            "1 of {} · {}",
+            conflicts.len(),
+            conflicts[0]
+                .dest
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        ));
+        Self {
+            op,
+            conflicts,
+            index: 0,
+            targets: Vec::new(),
+            form,
+        }
+    }
+
+    fn load_form(&mut self) {
+        let conflict = &self.conflicts[self.index];
+        let mut form = rename::Rename::for_conflict(conflict.dest.clone());
+        form.detail = Some(format!(
+            "{} of {} · {}",
+            self.index + 1,
+            self.conflicts.len(),
+            conflict
+                .dest
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        ));
+        self.form = form;
+    }
+
+    /// Returns all choices after the final item; otherwise advances the editor.
+    pub fn accept(
+        &mut self,
+        target: std::path::PathBuf,
+    ) -> Option<Vec<(std::path::PathBuf, std::path::PathBuf)>> {
+        if self.targets.iter().any(|(_, chosen)| *chosen == target) {
+            self.form.error = Some("name already chosen for this copy");
+            return None;
+        }
+        match std::fs::symlink_metadata(&target) {
+            Ok(_) => {
+                self.form.error = Some("name already exists");
+                return None;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                self.form.error = Some("cannot check that name");
+                return None;
+            }
+        }
+        self.targets
+            .push((self.conflicts[self.index].dest.clone(), target));
+        self.index += 1;
+        if self.index == self.conflicts.len() {
+            Some(std::mem::take(&mut self.targets))
+        } else {
+            self.load_form();
+            None
+        }
+    }
+}
+
 /// The footer's four answers, read out in the order they appear left to
 /// right -- [`layout`] walks this once to place each word's clickable span,
 /// and [`render`] joins the same words with STAR/KIT's own middle dot to draw
 /// the border's footer back.
-const WORDS: [&str; 4] = ["o overwrite", "s skip", "r rename new", "esc leave queued"];
+const WORDS: [&str; 4] = ["o overwrite", "s skip", "r edit name", "esc leave queued"];
 
 /// The footer text, exactly as [`overlay::render`] draws it wrapped in the
 /// bottom border -- a function rather than a constant because [`layout`]

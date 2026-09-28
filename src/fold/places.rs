@@ -41,6 +41,8 @@ pub struct LocationInfo {
     pub transport: Option<String>,
     pub capacity: Option<u64>,
     pub available: Option<u64>,
+    /// This mount explicitly opts out of Trash with a .Trash-UID marker file.
+    pub trash_disabled: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -330,6 +332,7 @@ fn enrich_locations(locations: &mut [Location]) {
         let Some(info) = &mut location.info else {
             continue;
         };
+        info.trash_disabled = trash_disabled_at(&location.path);
         if let Some((capacity, available)) = filesystem_space(&location.path) {
             info.capacity = Some(capacity);
             info.available = Some(available);
@@ -340,6 +343,31 @@ fn enrich_locations(locations: &mut [Location]) {
             apply_block_info(info, &resolved.to_string_lossy(), &devices);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn trash_disabled_at(mount: &Path) -> bool {
+    // SAFETY: getuid reads the current process credentials without pointers.
+    trash_disabled_at_uid(mount, unsafe { libc::getuid() })
+}
+
+#[cfg(target_os = "linux")]
+fn trash_disabled_at_uid(mount: &Path, uid: libc::uid_t) -> bool {
+    let marker = mount.join(format!(".Trash-{uid}"));
+    let Ok(metadata) = std::fs::symlink_metadata(&marker) else {
+        return false;
+    };
+    if !metadata.file_type().is_file() || metadata.len() > 128 {
+        return false;
+    }
+    std::fs::read(&marker).is_ok_and(|contents| {
+        contents == b"Trash is disabled on this archive drive. Use permanent deletion.\n"
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn trash_disabled_at(_mount: &Path) -> bool {
+    false
 }
 
 #[cfg(unix)]
@@ -521,6 +549,24 @@ mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
     use proptest::prelude::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn explicit_trash_disabled_marker_is_detected_without_confusing_a_trash_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join(".Trash-1000");
+        std::fs::write(&marker, "other file").unwrap();
+        assert!(!trash_disabled_at_uid(dir.path(), 1000));
+        std::fs::write(
+            &marker,
+            "Trash is disabled on this archive drive. Use permanent deletion.\n",
+        )
+        .unwrap();
+        assert!(trash_disabled_at_uid(dir.path(), 1000));
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::create_dir(&marker).unwrap();
+        assert!(!trash_disabled_at_uid(dir.path(), 1000));
+    }
 
     #[cfg(unix)]
     #[test]

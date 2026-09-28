@@ -2,8 +2,7 @@
 //!
 //! `run` never re-reads a directory -- everything it touches is already
 //! named in [`super::Plan::items`], in the order `plan` found it. It copies
-//! file by file with `std::fs::copy` (which keeps xattrs and, on APFS,
-//! clones rather than duplicates the data), recreates a symlink rather than
+//! file by file into private staging files, recreates a symlink rather than
 //! following it, renames a top-level source where it can and falls back to
 //! copy-then-delete across a device boundary, and checks
 //! `progress.is_cancelled()` between every item so a running op notices a
@@ -11,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
@@ -34,11 +34,26 @@ pub fn run(
     options: &RunOptions,
     progress: &Progress,
 ) -> Outcome {
+    run_with_names(kind, plan, policy, options, progress, &[])
+}
+
+/// Execute with names chosen in the conflict editor. The mapping key is the
+/// original destination, which stays stable when SSH sources move to staging.
+pub fn run_with_names(
+    kind: OpKind,
+    plan: &Plan,
+    policy: ConflictPolicy,
+    options: &RunOptions,
+    progress: &Progress,
+    rename_targets: &[(PathBuf, PathBuf)],
+) -> Outcome {
     match kind {
-        OpKind::Copy | OpKind::Move => run_copy_move(kind, plan, policy, options, progress),
+        OpKind::Copy | OpKind::Move => {
+            run_copy_move(kind, plan, policy, options, progress, rename_targets)
+        }
         OpKind::Delete(DeleteHow::Trash) => run_trash_delete(plan, progress),
         OpKind::Delete(DeleteHow::Permanent) => run_permanent_delete(plan, progress),
-        OpKind::Rename => run_rename(plan, policy, progress),
+        OpKind::Rename => run_rename(plan, policy, progress, rename_targets),
         OpKind::Compress(_) | OpKind::Extract => {
             crate::fold::archive::operation::run(kind, plan, policy, progress)
         }
@@ -111,6 +126,27 @@ fn first_free_on_disk(dir: &Path, stem: &str, ext: Option<&str>) -> String {
     unreachable!("u64 does not run out of candidates")
 }
 
+pub fn suggested_rename(target: &Path) -> String {
+    let name = target.file_name().unwrap_or_default();
+    let (stem, ext) = stem_and_ext(name);
+    first_free_on_disk(
+        target.parent().unwrap_or_else(|| Path::new(".")),
+        &stem,
+        ext.as_deref(),
+    )
+}
+
+fn checked_custom_target(original: &Path, chosen: &Path) -> Result<PathBuf, String> {
+    if chosen == original || chosen.parent() != original.parent() || chosen.file_name().is_none() {
+        return Err("the new name must be different and stay in this directory".into());
+    }
+    match fs::symlink_metadata(chosen) {
+        Ok(_) => Err(format!("{} already exists", chosen.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(chosen.to_path_buf()),
+        Err(error) => Err(format!("{}: {error}", chosen.display())),
+    }
+}
+
 fn stem_and_ext(name: &std::ffi::OsStr) -> (String, Option<String>) {
     let path = Path::new(name);
     let stem = path
@@ -168,21 +204,7 @@ fn copy_subtree(items: &[Item], options: &RunOptions, progress: &Progress) -> Re
                 }
             }
             ItemKind::File(len) => {
-                fs::copy(&item.from, to).map_err(|e| format!("{}: {e}", item.from.display()))?;
-                if options.preserve_times {
-                    if let Ok(src_meta) = fs::metadata(&item.from) {
-                        if let Ok(modified) = src_meta.modified() {
-                            let accessed = src_meta.accessed().unwrap_or(modified);
-                            let times = fs::FileTimes::new()
-                                .set_modified(modified)
-                                .set_accessed(accessed);
-                            if let Ok(f) = fs::OpenOptions::new().write(true).open(to) {
-                                let _ = f.set_times(times);
-                            }
-                        }
-                    }
-                }
-                progress.add(len);
+                copy_file_staged(&item.from, to, len, options, progress)?;
             }
             ItemKind::Symlink => {
                 let target = fs::read_link(&item.from)
@@ -195,6 +217,88 @@ fn copy_subtree(items: &[Item], options: &RunOptions, progress: &Progress) -> Re
             }
         }
     }
+    Ok(())
+}
+
+/// A private file keeps both an existing destination and the final path
+/// untouched until all bytes and metadata are ready. Dropping it on error or
+/// cancellation removes the incomplete copy.
+fn copy_file_staged(
+    from: &Path,
+    to: &Path,
+    _planned_len: u64,
+    options: &RunOptions,
+    progress: &Progress,
+) -> Result<(), String> {
+    copy_file_staged_inner(from, to, _planned_len, options, progress, || {})
+}
+
+fn copy_file_staged_inner(
+    from: &Path,
+    to: &Path,
+    _planned_len: u64,
+    options: &RunOptions,
+    progress: &Progress,
+    mut after_chunk: impl FnMut(),
+) -> Result<(), String> {
+    let error = |e: std::io::Error| format!("{}: {e}", from.display());
+    let mut source = fs::File::open(from).map_err(error)?;
+    let meta = source.metadata().map_err(error)?;
+    let parent = to
+        .parent()
+        .ok_or_else(|| format!("{}: no parent", to.display()))?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(error)?;
+    let mut buffer = [0u8; 1024 * 1024];
+    loop {
+        if progress.is_cancelled() {
+            return Err("cancelled".into());
+        }
+        let count = source.read(&mut buffer).map_err(error)?;
+        if count == 0 {
+            break;
+        }
+        staged.write_all(&buffer[..count]).map_err(error)?;
+        progress.add(count as u64);
+        after_chunk();
+    }
+    if progress.is_cancelled() {
+        return Err("cancelled".into());
+    }
+    staged
+        .as_file()
+        .set_permissions(meta.permissions())
+        .map_err(error)?;
+    // Extended attributes include user tags and, on some filesystems, ACLs.
+    // A filesystem without xattr support cannot expose a list to preserve.
+    if let Ok(attrs) = xattr::list(from) {
+        for attr in attrs {
+            if let Ok(Some(value)) = xattr::get(from, &attr) {
+                xattr::set(staged.path(), &attr, &value).map_err(error)?;
+            }
+        }
+    }
+    if options.preserve_times {
+        if let Ok(modified) = meta.modified() {
+            let accessed = meta.accessed().unwrap_or(modified);
+            staged
+                .as_file()
+                .set_times(
+                    fs::FileTimes::new()
+                        .set_modified(modified)
+                        .set_accessed(accessed),
+                )
+                .map_err(error)?;
+        }
+    }
+    if progress.is_cancelled() {
+        return Err("cancelled".into());
+    }
+    if fs::symlink_metadata(to).is_ok_and(|existing| existing.is_dir()) {
+        replace_existing(to)?;
+    }
+    staged
+        .persist(to)
+        .map_err(|e| format!("{}: {}", to.display(), e.error))?;
     Ok(())
 }
 
@@ -225,7 +329,10 @@ fn move_subtree(
         .and_then(|it| it.to.clone())
         .ok_or_else(|| format!("{}: no destination", source.display()))?;
 
-    if !options.force_copy {
+    let file_over_directory =
+        matches!(items.first().map(|item| item.kind), Some(ItemKind::File(_)))
+            && fs::symlink_metadata(&target).is_ok_and(|meta| meta.is_dir());
+    if !options.force_copy && !file_over_directory {
         match fs::rename(source, &target) {
             Ok(()) => {
                 let bytes: u64 = items
@@ -259,6 +366,7 @@ fn run_copy_move(
     policy: ConflictPolicy,
     options: &RunOptions,
     progress: &Progress,
+    rename_targets: &[(PathBuf, PathBuf)],
 ) -> Outcome {
     progress.set_total(plan.total_bytes);
     let mut outcome = Outcome::default();
@@ -288,7 +396,37 @@ fn run_copy_move(
 
         let mut owned_items: Option<Vec<Item>> = None;
 
-        if let Some(conflict) = conflict_by_source.get(source.as_path()) {
+        let chosen = (policy == ConflictPolicy::RenameNew)
+            .then(|| {
+                rename_targets
+                    .iter()
+                    .find(|(dest, _)| *dest == target)
+                    .map(|(_, chosen)| chosen)
+            })
+            .flatten();
+        if let Some(chosen) = chosen {
+            if plan.sources.iter().any(|other| {
+                other != source
+                    && other
+                        .file_name()
+                        .is_some_and(|name| plan.dest.join(name) == *chosen)
+            }) {
+                outcome.failed.push((
+                    source.clone(),
+                    format!("{} is another source's destination", chosen.display()),
+                ));
+                continue;
+            }
+            let new_target = match checked_custom_target(&target, chosen) {
+                Ok(target) => target,
+                Err(error) => {
+                    outcome.failed.push((source.clone(), error));
+                    continue;
+                }
+            };
+            owned_items = Some(remap_to(items, &target, &new_target));
+            target = new_target;
+        } else if let Some(conflict) = conflict_by_source.get(source.as_path()) {
             match policy {
                 ConflictPolicy::Ask => {
                     // A conflict is never supposed to reach `exec` under
@@ -306,7 +444,9 @@ fn run_copy_move(
                     continue;
                 }
                 ConflictPolicy::Overwrite => {
-                    if !conflict.both_dirs {
+                    if !conflict.both_dirs
+                        && !matches!(items.first().map(|item| item.kind), Some(ItemKind::File(_)))
+                    {
                         if let Err(e) = replace_existing(&target) {
                             outcome.failed.push((source.clone(), e));
                             continue;
@@ -317,7 +457,7 @@ fn run_copy_move(
                     let file_name = target.file_name().unwrap_or_default().to_os_string();
                     let (stem, ext) = stem_and_ext(&file_name);
                     let new_name = first_free_on_disk(&plan.dest, &stem, ext.as_deref());
-                    let new_target = plan.dest.join(&new_name);
+                    let new_target = plan.dest.join(new_name);
                     owned_items = Some(remap_to(items, &target, &new_target));
                     target = new_target;
                 }
@@ -426,7 +566,12 @@ fn rename_case_only(from: &Path, to: &Path) -> Result<(), String> {
     })
 }
 
-fn run_rename(plan: &Plan, policy: ConflictPolicy, progress: &Progress) -> Outcome {
+fn run_rename(
+    plan: &Plan,
+    policy: ConflictPolicy,
+    progress: &Progress,
+    rename_targets: &[(PathBuf, PathBuf)],
+) -> Outcome {
     progress.set_total(plan.total_items.max(1) as u64);
     let mut outcome = Outcome::default();
 
@@ -447,7 +592,23 @@ fn run_rename(plan: &Plan, policy: ConflictPolicy, progress: &Progress) -> Outco
         return outcome;
     }
 
-    if let Some(conflict) = plan.conflicts.first() {
+    if policy == ConflictPolicy::RenameNew {
+        if let Some((_, chosen)) = rename_targets.iter().find(|(dest, _)| *dest == to) {
+            match checked_custom_target(&to, chosen) {
+                Ok(target) => to = target,
+                Err(error) => {
+                    outcome.failed.push((from, error));
+                    return outcome;
+                }
+            }
+        }
+    }
+
+    if let Some(conflict) = plan
+        .conflicts
+        .first()
+        .filter(|_| item.to.as_ref().is_some_and(|original| to == *original))
+    {
         match policy {
             ConflictPolicy::Ask => {
                 outcome.failed.push((from, "unanswered conflict".into()));
@@ -514,6 +675,34 @@ mod tests {
             preserve_times: true,
             force_copy: false,
         }
+    }
+
+    #[test]
+    fn cancellation_inside_a_file_removes_only_the_unfinished_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        let file = fs::File::create(&source).unwrap();
+        file.set_len(3 * 1024 * 1024).unwrap();
+        fs::write(&target, b"previous version").unwrap();
+        let progress = progress();
+        let result = copy_file_staged_inner(
+            &source,
+            &target,
+            3 * 1024 * 1024,
+            &options(),
+            &progress,
+            || progress.cancel(),
+        );
+        assert!(result.is_err());
+        assert_eq!(progress.done(), 1024 * 1024);
+        assert_eq!(fs::read(&target).unwrap(), b"previous version");
+        assert_eq!(fs::metadata(&source).unwrap().len(), 3 * 1024 * 1024);
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            2,
+            "staging file was removed"
+        );
     }
 
     /// Every regular file's bytes under `dir`, and every mode bit, compared
@@ -651,6 +840,27 @@ mod tests {
     }
 
     #[test]
+    fn overwriting_a_directory_with_a_file_publishes_before_removing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        fs::write(&source, b"new contents").unwrap();
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        fs::create_dir(dest.join("source")).unwrap();
+        let plan = make_plan(OpKind::Move, std::slice::from_ref(&source), Some(&dest)).unwrap();
+        let outcome = run(
+            OpKind::Move,
+            &plan,
+            ConflictPolicy::Overwrite,
+            &options(),
+            &progress(),
+        );
+        assert_eq!(outcome.done, 1, "{outcome:?}");
+        assert!(!source.exists());
+        assert_eq!(fs::read(dest.join("source")).unwrap(), b"new contents");
+    }
+
+    #[test]
     fn a_forced_copy_move_produces_an_identical_tree_and_removes_the_source() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src");
@@ -743,6 +953,67 @@ mod tests {
         assert_eq!(outcome.done, 1);
         assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"already here");
         assert_eq!(fs::read(dest.join("a (1).txt")).unwrap(), b"incoming");
+    }
+
+    #[test]
+    fn conflict_rename_uses_entered_name_without_replacing_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("a.txt"), b"old").unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"new").unwrap();
+        let p = make_plan(OpKind::Copy, &[src.clone()], Some(&dest)).unwrap();
+        let chosen = dest.join("my copy.txt");
+        let names = vec![(dest.join("a.txt"), chosen.clone())];
+        let outcome = run_with_names(
+            OpKind::Copy,
+            &p,
+            ConflictPolicy::RenameNew,
+            &options(),
+            &progress(),
+            &names,
+        );
+        assert_eq!(outcome.done, 1);
+        assert_eq!(fs::read(&chosen).unwrap(), b"new");
+        assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"old");
+
+        let p = make_plan(OpKind::Copy, &[src], Some(&dest)).unwrap();
+        let outcome = run_with_names(
+            OpKind::Copy,
+            &p,
+            ConflictPolicy::RenameNew,
+            &options(),
+            &progress(),
+            &names,
+        );
+        assert_eq!(outcome.done, 0);
+        assert_eq!(outcome.failed.len(), 1);
+        assert_eq!(fs::read(&chosen).unwrap(), b"new");
+    }
+
+    #[test]
+    fn chosen_name_survives_when_original_conflict_disappears() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let src = dir.path().join("a.txt");
+        fs::write(&src, b"new").unwrap();
+        let p = make_plan(OpKind::Copy, &[src], Some(&dest)).unwrap();
+        assert!(p.conflicts.is_empty());
+        let chosen = dest.join("my copy.txt");
+        let names = vec![(dest.join("a.txt"), chosen.clone())];
+        let outcome = run_with_names(
+            OpKind::Copy,
+            &p,
+            ConflictPolicy::RenameNew,
+            &options(),
+            &progress(),
+            &names,
+        );
+        assert_eq!(outcome.done, 1);
+        assert_eq!(fs::read(chosen).unwrap(), b"new");
+        assert!(!dest.join("a.txt").exists());
     }
 
     #[test]

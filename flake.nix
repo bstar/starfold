@@ -101,7 +101,8 @@
 
         # RAR uses bundled UnRAR C++ compiled by unrar_sys. BZip2's
         # libbz2-rs-sys is pure Rust despite its name. No system archive
-        # libraries, bindgen, or runtime conversion commands are needed.
+        # libraries or bindgen are needed. Large image previews optionally
+        # use vipsthumbnail when present on PATH.
         mkStarfold = { pkgsFor ? pkgs }:
           pkgsFor.rustPlatform.buildRustPackage {
             # unrar_sys compiles the bundled RARLAB C++ engine.

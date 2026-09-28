@@ -7,6 +7,7 @@
 
 pub mod app;
 mod audio_graphics;
+mod clipboard;
 #[cfg(test)]
 mod commander_tests;
 pub mod dnd;

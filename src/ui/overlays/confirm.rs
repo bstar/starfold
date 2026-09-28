@@ -22,6 +22,7 @@
 use starkit::chrome::confirm;
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
+use std::path::PathBuf;
 
 use crate::fold::ops::OpId;
 use crate::ui::theme::Theme;
@@ -44,9 +45,46 @@ pub struct Confirm {
 }
 
 impl Confirm {
+    pub fn queue_delete(sources: Vec<PathBuf>, permanent: bool) -> Self {
+        let what = if sources.len() == 1 {
+            sources[0]
+                .file_name()
+                .unwrap_or(sources[0].as_os_str())
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            format!("{} marked items", sources.len())
+        };
+        Self {
+            title: if permanent {
+                "delete permanently"
+            } else {
+                "move to trash"
+            }
+            .into(),
+            body: vec![
+                format!("Delete {what} now?"),
+                if permanent {
+                    "This cannot be undone."
+                } else {
+                    "The operation starts when you confirm."
+                }
+                .into(),
+            ],
+            yes: "delete",
+            no: "keep",
+            pending: if permanent {
+                Pending::DeletePermanently(sources)
+            } else {
+                Pending::QueueDelete(sources)
+            },
+        }
+    }
+
     /// No trash to fall back on, or the trash was bypassed on purpose --
     /// either way, this is the last confirmation before the bytes are gone.
-    pub fn delete_permanently(op: OpId, n_items: usize) -> Self {
+    pub fn delete_permanently(paths: Vec<PathBuf>) -> Self {
+        let n_items = paths.len();
         let noun = if n_items == 1 { "item" } else { "items" };
         Self {
             title: "delete permanently".into(),
@@ -56,7 +94,26 @@ impl Confirm {
             ],
             yes: "delete",
             no: "keep",
-            pending: Pending::DeletePermanently(op),
+            pending: Pending::DeletePermanently(paths),
+        }
+    }
+
+    /// Trash may be unavailable for one mounted volume even though it works
+    /// elsewhere. Never silently turn that failure into a permanent delete.
+    pub fn trash_failed(path: PathBuf, reason: &str) -> Self {
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy();
+        Self {
+            title: "trash unavailable".into(),
+            body: vec![
+                format!("Could not move {name} to Trash: {reason}"),
+                "Permanently delete it instead? This cannot be undone.".into(),
+            ],
+            yes: "delete",
+            no: "keep",
+            pending: Pending::DeletePermanently(vec![path]),
         }
     }
 
@@ -65,9 +122,9 @@ impl Confirm {
     pub fn clear_queue(n: usize) -> Self {
         let noun = if n == 1 { "operation" } else { "operations" };
         Self {
-            title: "clear the queue".into(),
-            body: vec![format!("{n} queued {noun} will be dropped.")],
-            yes: "clear",
+            title: "remove waiting operations".into(),
+            body: vec![format!("{n} waiting {noun} will be removed.")],
+            yes: "remove",
             no: "keep",
             pending: Pending::ClearQueue,
         }
@@ -133,16 +190,19 @@ mod tests {
 
     #[test]
     fn a_single_item_reads_as_singular() {
-        let c = Confirm::delete_permanently(OpId(1), 1);
+        let c = Confirm::delete_permanently(vec![PathBuf::from("/a")]);
         assert!(c.body[0].contains("1 item "), "{:?}", c.body);
-        let c = Confirm::delete_permanently(OpId(1), 3);
+        let c = Confirm::delete_permanently(vec![PathBuf::from("/a"); 3]);
         assert!(c.body[0].contains("3 items "), "{:?}", c.body);
     }
 
     #[test]
     fn each_question_names_its_own_answers() {
-        assert_eq!(Confirm::delete_permanently(OpId(1), 1).yes, "delete");
-        assert_eq!(Confirm::clear_queue(2).yes, "clear");
+        assert_eq!(
+            Confirm::delete_permanently(vec![PathBuf::from("/a")]).yes,
+            "delete"
+        );
+        assert_eq!(Confirm::clear_queue(2).yes, "remove");
         assert_eq!(Confirm::cancel_running(OpId(1), "COPY 1 item").yes, "stop");
         assert_eq!(Confirm::quit_with_running("COPY 1 item").yes, "quit");
     }
@@ -152,7 +212,7 @@ mod tests {
         let t = theme("terminal");
         let area = Rect::new(0, 0, 60, 21);
         let mut buf = Buffer::empty(area);
-        let c = Confirm::delete_permanently(OpId(1), 4);
+        let c = Confirm::delete_permanently(vec![PathBuf::from("/a"); 4]);
         render(area, &mut buf, &t, &c);
         let text: String = (0..area.height)
             .map(|y| {

@@ -130,7 +130,7 @@ pub enum Command {
         sources: Vec<PathBuf>,
         dest: Option<PathBuf>,
     },
-    /// Queue a native drop and run it ahead of untouched manual entries.
+    /// Queue a native drop in request order.
     QueueDrop {
         kind: super::ops::OpKind,
         sources: Vec<PathBuf>,
@@ -144,6 +144,10 @@ pub enum Command {
     BeginImport {
         sources: Vec<PathBuf>,
         dest: PathBuf,
+    },
+    CompleteImport {
+        op: OpId,
+        sources: Vec<PathBuf>,
     },
     FinishImport {
         op: OpId,
@@ -163,18 +167,23 @@ pub enum Command {
     /// nothing is marked.
     QueueDelete,
     QueueDeleteSources(Vec<PathBuf>),
+    /// Explicit permanent delete after a separate confirmation in the UI.
+    QueuePermanentDeleteSources(Vec<PathBuf>),
     QueueRename {
         from: PathBuf,
         to: PathBuf,
     },
     RemoveOp(OpId),
     ClearQueue,
-    /// Run the queue: plan whatever has not been planned, then run whatever
-    /// is runnable.
+    /// Resume a paused queue; new operations normally start automatically.
     Run,
     /// Answer a conflict an op's plan found under `ConflictPolicy::Ask`.
     SetPolicy(OpId, ConflictPolicy),
+    /// Resolve Rename with explicit targets, one for each conflict.
+    SetConflictNames(OpId, Vec<(PathBuf, PathBuf)>),
     Cancel(OpId),
+    /// Stop active work and hold subsequent operations until Run resumes them.
+    StopActive(OpId),
     Preview(PathBuf),
     ClosePreview,
     OpenExternal(PathBuf),
@@ -239,6 +248,8 @@ pub enum Event {
     /// An op's plan found a conflict under `ConflictPolicy::Ask` and is
     /// waiting for `Command::SetPolicy`.
     Conflicts(OpId),
+    /// The remote names were checked and the receiver may request bytes.
+    ImportReady(OpId),
     Note(Note),
     /// Events were dropped. Whatever the UI believes about its incremental
     /// state is now suspect; re-read everything.

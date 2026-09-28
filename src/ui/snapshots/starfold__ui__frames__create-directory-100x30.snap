@@ -28,7 +28,7 @@ expression: "render(&mut app, w, h)"
 ║ Modified: 2026-09-10T12:00:00Z                                                                   ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                       run  clear ║
+║                                                                                           remove ║
 ║                                          nothing queued                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  / filter  space mark  enter open  y yank  p paste  m move  d delete                   ~  off
+? help  / filter  space mark  enter open  y yank  p paste  m move  dd delete                  ~  off

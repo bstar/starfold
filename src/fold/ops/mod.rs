@@ -1,20 +1,14 @@
 //! The operations queue: what will happen to which files, and how far it has
 //! got.
 //!
-//! An [`Op`] is queued the moment `p`, `m` or `d` is pressed -- the queue
-//! *is* the confirmation, the way STAR/CORD's composer holds a draft rather
-//! than sending on every keystroke. Nothing here runs anything: `plan`,
-//! `exec` and `trash`, which turn a queued `Op` into bytes moving on disk,
-//! are Phase 1c's files and are deliberately not declared yet, so that this
-//! module compiles as the vocabulary the UI and the worker are both written
-//! against before either of them exists.
+//! Requests start automatically in serial order. The queue retains their
+//! progress and outcome and can be paused after the active operation stops.
 
 pub mod exec;
 pub mod plan;
 pub mod progress;
 pub mod trash;
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -174,6 +168,8 @@ pub struct Op {
     pub id: OpId,
     pub kind: OpKind,
     pub sources: Vec<PathBuf>,
+    /// Original remote paths, retained while staged sources are moved in.
+    pub import_sources: Option<Vec<PathBuf>>,
     /// Inode identities captured by a search result when this op was queued.
     /// Checked immediately before planning and execution.
     pub expected: Vec<(PathBuf, crate::fold::search::Identity)>,
@@ -181,9 +177,14 @@ pub struct Op {
     pub status: OpStatus,
     pub policy: ConflictPolicy,
     pub plan: Option<Plan>,
+    /// Destination collisions mapped to names chosen in the conflict editor.
+    pub rename_targets: Vec<(PathBuf, PathBuf)>,
     /// Items left at the source by a conflict policy. A drop must never
     /// report a completed Move to the desktop when this is nonzero.
     pub skipped: usize,
+    /// Failure of a single-file trash move under Auto, kept so a dropped
+    /// notification cannot lose the permanent-delete offer.
+    pub trash_failure: Option<String>,
     /// Shared with the ops thread while the op runs: the same `Arc` goes out
     /// in `Job::Run`, and the status row reads the atomics through this one.
     pub progress: Arc<Progress>,
@@ -200,14 +201,18 @@ impl Op {
             };
             return format!("EXPORT {} {noun}", self.sources.len());
         }
-        let verb = match self.kind {
-            OpKind::Copy => "COPY",
-            OpKind::Move => "MOVE",
-            OpKind::Delete(DeleteHow::Trash) => "TRASH",
-            OpKind::Delete(DeleteHow::Permanent) => "DELETE",
-            OpKind::Rename => "RENAME",
-            OpKind::Compress(_) => "COMPRESS",
-            OpKind::Extract => "EXTRACT",
+        let verb = if self.import_sources.is_some() {
+            "COPY"
+        } else {
+            match self.kind {
+                OpKind::Copy => "COPY",
+                OpKind::Move => "MOVE",
+                OpKind::Delete(DeleteHow::Trash) => "TRASH",
+                OpKind::Delete(DeleteHow::Permanent) => "DELETE",
+                OpKind::Rename => "RENAME",
+                OpKind::Compress(_) => "COMPRESS",
+                OpKind::Extract => "EXTRACT",
+            }
         };
         let count = self.sources.len();
         let noun = if count == 1 { "item" } else { "items" };
@@ -233,8 +238,7 @@ impl Op {
 pub struct Queue {
     ops: Vec<Op>,
     next_id: u64,
-    auto_start: HashSet<OpId>,
-    manual_running: bool,
+    paused: bool,
 }
 
 impl Queue {
@@ -255,19 +259,21 @@ impl Queue {
             id,
             kind,
             sources,
+            import_sources: None,
             expected: vec![],
             dest,
             status: OpStatus::Queued,
             policy,
             plan: None,
+            rename_targets: Vec::new(),
             skipped: 0,
+            trash_failure: None,
             progress: Arc::new(Progress::new(0)),
         });
         id
     }
 
-    /// A dropped transfer starts as soon as the operations worker is free.
-    /// Pending manual entries remain drafts until Run is requested again.
+    /// Drops join the same serial queue as keyboard and menu operations.
     pub fn enqueue_drop(
         &mut self,
         kind: OpKind,
@@ -275,10 +281,7 @@ impl Queue {
         dest: PathBuf,
         policy: ConflictPolicy,
     ) -> OpId {
-        let id = self.enqueue(kind, sources, Some(dest), policy);
-        self.auto_start.insert(id);
-        self.manual_running = false;
-        id
+        self.enqueue(kind, sources, Some(dest), policy)
     }
 
     pub fn begin_export(&mut self, sources: Vec<PathBuf>, policy: ConflictPolicy) -> OpId {
@@ -297,22 +300,26 @@ impl Queue {
     ) -> OpId {
         let id = self.enqueue(OpKind::Copy, sources, Some(dest), policy);
         if let Some(op) = self.get_mut(id) {
-            op.status = OpStatus::Running;
+            op.import_sources = Some(op.sources.clone());
+            op.status = OpStatus::Planning;
         }
-        self.manual_running = false;
         id
     }
 
-    pub fn start_manual(&mut self) {
-        self.manual_running = true;
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    pub fn resume(&mut self) {
+        self.paused = false;
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
     }
 
     pub fn next_runnable(&self) -> Option<OpId> {
-        self.ops
-            .iter()
-            .find(|op| op.status == OpStatus::Queued && self.auto_start.contains(&op.id))
-            .map(|op| op.id)
-            .or_else(|| self.manual_running.then(|| self.first_runnable()).flatten())
+        (!self.paused).then(|| self.first_runnable()).flatten()
     }
 
     /// One entry by id, to be changed in place: its status, its policy, its
@@ -327,17 +334,14 @@ impl Queue {
     pub fn remove(&mut self, id: OpId) -> bool {
         let before = self.ops.len();
         self.ops.retain(|op| op.id != id);
-        self.auto_start.remove(&id);
         self.ops.len() != before
     }
 
-    /// `esc` on the queue: drop everything that has not started. A running
-    /// op is left to finish, or to be stopped with `Command::Cancel`.
+    /// `esc` on the queue: drop waiting work, leaving planning and running
+    /// work in place until the worker reports its result.
     pub fn clear_pending(&mut self) {
-        self.ops.retain(|op| !op.is_pending());
-        self.auto_start
-            .retain(|id| self.ops.iter().any(|op| op.id == *id));
-        self.manual_running = false;
+        self.ops
+            .retain(|op| !matches!(op.status, OpStatus::Queued | OpStatus::NeedsPolicy));
     }
 
     /// The next queued entry the worker should start, in queue order. Skips
@@ -377,12 +381,15 @@ mod tests {
             id: OpId(id),
             kind: OpKind::Copy,
             sources: vec!["/a".into()],
+            import_sources: None,
             expected: vec![],
             dest: Some("/dest".into()),
             status,
             policy: ConflictPolicy::Ask,
             plan: None,
+            rename_targets: Vec::new(),
             skipped: 0,
+            trash_failure: None,
             progress: Arc::new(Progress::new(0)),
         }
     }

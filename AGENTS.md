@@ -168,12 +168,12 @@ for a worker to do it.
 
 ## Operations are transactional
 
-Nothing is copied, moved or deleted until the operations queue is run. `y`
-saves paths for later pastes; `p`, `m` and `d` add to the queue; `enter` or `X`
-runs it; `esc` clears whatever
-has not started (a running op is left to finish, or is stopped with
-`ctrl+x`). A delete goes to the trash where the platform has one, and a
-permanent delete asks first. `plan` never follows a symlink, and a conflict
+Operations start when requested, in serial queue order. `y` saves paths for
+later pastes; `p` and `m` start work, and `dd` confirms once before deletion.
+`ctrl+x` stops active work and pauses later requests; `enter` or `X` resumes.
+`esc` clears whatever has not started. A delete goes to the trash where the
+platform has one, and the actions menu asks before permanent deletion when
+configured. `plan` never follows a symlink, and a conflict
 is decided by comparing `dev` and `ino`, not by whether a path merely exists
 — a case-insensitive filesystem can otherwise see a file collide with itself.
 
@@ -181,17 +181,15 @@ An `Op`'s `progress: Arc<ops::progress::Progress>` (three atomics: done,
 total, cancelled) is the one piece of an `Op` shared with the thread actually
 running it — the same `Arc` goes out in `Job::Run` and back through
 `state.queue`, so the status row reads live numbers without taking the write
-lock, and `Command::Cancel` sets the flag without waiting for the ops thread
-to notice. The ops thread checks it between items, not mid-file: a large file
-already being copied by `std::fs::copy` finishes before a cancel takes
-effect.
+lock, and `Command::StopActive` pauses the queue and sets the cancellation
+flag without waiting for the ops thread. The ops thread checks it between
+items and between bounded file chunks.
 
-`std::fs::copy` is what actually moves bytes, once per file — it keeps
-xattrs, and on APFS it clones rather than duplicates the data. There is no
-intra-file progress: the status bar's number moves file by file, not byte by
-byte within one very large file, because `std::fs::copy` gives nothing to
-poll partway through. Chunked copying for progress inside a single huge file
-is a later milestone's question, not this one's.
+Copies stream into private files in the destination directory, with byte
+progress and cancellation checks. An incomplete file is removed when work
+stops; a completed file is published by rename. Permissions, optional file
+times, and extended attributes are copied before publication. This forgoes
+the APFS clone optimization of `std::fs::copy` so a large file can be stopped.
 
 A rename to a name that differs only in case, on a filesystem where that is
 not a different name at all, cannot go through a direct `rename(2)` — the
@@ -297,6 +295,11 @@ cache keyed by path, device/inode, size, mtime and ctime, and a disposable
 `starfold --preview-worker` child. Cancellation and deadlines kill/reap the child;
 closing Preview releases the session. The UI keeps at most 24 PDF pages and can
 request evicted pages again. Backend APIs never reach the renderer.
+
+Large raster images can use `vipsthumbnail` as an optional preview fallback.
+It runs with a deadline and its output is decoded under the bounded preview
+size. Ordinary images decode in process, so the helper is not needed for
+normal camera photos.
 
 `fold::archive` is independent of preview presentation. It owns archive entries,
 formats, validation and codec adapters. `archive::operation` plans source trees

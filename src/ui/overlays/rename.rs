@@ -38,6 +38,7 @@ pub struct Rename {
     pub input: TextInput,
     /// Why the last submission was refused.
     pub error: Option<&'static str>,
+    pub detail: Option<String>,
 }
 
 impl Rename {
@@ -53,7 +54,19 @@ impl Rename {
             from,
             input,
             error: None,
+            detail: None,
         }
+    }
+
+    /// Conflict Rename starts at the familiar numbered suggestion, editable
+    /// before any copy or move begins.
+    pub fn for_conflict(dest: PathBuf) -> Self {
+        let suggestion = crate::fold::ops::exec::suggested_rename(&dest);
+        let split = extension_cursor(&suggestion);
+        let mut form = Self::new(dest);
+        form.input = TextInput::single().with_text(suggestion);
+        form.input.set_cursor(split);
+        form
     }
 
     pub fn handle(&mut self, key: KeyEvent) -> Action {
@@ -126,8 +139,12 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, r: &mut Rename) -> Op
         buf,
         &overlay::Overlay {
             theme: core,
-            title: "rename",
-            detail: None,
+            title: if r.detail.is_some() {
+                "rename conflict"
+            } else {
+                "rename"
+            },
+            detail: r.detail.as_deref(),
             footer: Some("enter rename \u{b7} esc cancel"),
         },
     );
@@ -231,6 +248,19 @@ mod tests {
             r.handle(key(KeyCode::Enter)),
             Action::Renamed(PathBuf::from("/tmp/b.txt"))
         );
+    }
+
+    #[test]
+    fn conflict_rename_prefills_the_first_free_numbered_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("photo.jpg");
+        std::fs::write(&dest, b"old").unwrap();
+        assert_eq!(
+            Rename::for_conflict(dest.clone()).input.text(),
+            "photo (1).jpg"
+        );
+        std::fs::write(dir.path().join("photo (1).jpg"), b"old 1").unwrap();
+        assert_eq!(Rename::for_conflict(dest).input.text(), "photo (2).jpg");
     }
 
     #[test]

@@ -19,7 +19,7 @@ expression: "render(&mut app, 60, 21)"
 ║                    nothing to preview                    ║
 ╚══════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════╗
-║                                               run  clear ║
+║                                                   remove ║
 ║                      nothing queued                      ║
 ╚══════════════════════════════════════════════════════════╝
 ? help  / filter  space mark  enter open  y yank  p   ~  off

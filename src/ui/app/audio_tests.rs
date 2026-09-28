@@ -481,9 +481,11 @@ fn player_styles_are_scoped_to_preview_and_profile_is_capability_gated() {
     });
     app.key(alt('1'));
     app.key(key(KeyCode::Char('d')));
+    app.key(key(KeyCode::Char('d')));
+    app.key(key(KeyCode::Char('y')));
     assert!(
         !fake.state().queue.is_empty(),
-        "browser d still queues delete when Stack has focus"
+        "browser dd queues delete after confirmation when Stack has focus"
     );
 
     let (mut old_app, old_fake, _selected, _other) = media_app();
@@ -606,7 +608,7 @@ fn synthetic_frame_draws_at_floor_and_roomy_sizes_and_resizes_discard_old_cells(
     app.audio_frame = Some(fake_frame(&roomy, "#"));
     assert!(draw(&mut app, 100, 30).contains("####"));
 
-    app.key(key(KeyCode::Char('t')));
+    app.key(alt('t'));
     draw(&mut app, 100, 30);
     let recolored = app.audio_presentation.clone().unwrap();
     assert_ne!(recolored.theme, roomy.theme);

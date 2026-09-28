@@ -29,15 +29,16 @@ active scan and then closes results; `h` closes results immediately. The
 original directory and cursor return when results close.
 
 `s` or the `sort` heading opens the sort picker. Choose name, extension,
-type, size, modified, created, or accessed time. The picker also toggles
-reverse order and directories first; `S` reverses the current order directly.
+type, size, modified, created, or accessed time. Its direction row toggles
+Low → High or High → Low for size, with corresponding labels for other keys;
+`S` toggles direction directly. The picker also toggles directories first.
 Timestamp sorts show newest first by default, with unavailable dates last.
 
 In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
 the active pane; `alt+2` and `alt+3` reach preview and operations. `y` (or
 `yy`) saves the marked entries or highlighted file; `p` queues a copy into
 the active pane's directory. `m` queues a move into the opposite pane's
-directory. `v` switches views, `b`
+directory. `dd` asks for confirmation before queuing deletion. `v` switches views, `b`
 opens Places, and `B` bookmarks the current directory. In Places, type to
 search, use arrows and `enter` to open a location, `F2` to rename a bookmark,
 `F3` to inspect the selected place, `delete` to remove one after confirmation,
@@ -104,8 +105,8 @@ _everywhere_
 | `y`            | yank marked/cursor |
 | `p`            | paste yanked here |
 | `m`            | move marked here |
-| `d`            | delete marked |
-| `X`            | run the queue |
+| `dd`           | delete (confirm) |
+| `X`            | resume queue |
 | `ctrl+x`       | stop the running op |
 
 ## queue
@@ -114,9 +115,9 @@ _in operations_
 
 | key | what it does |
 |---|---|
-| `enter/r`      | run it |
-| `x/delete`     | drop one |
-| `esc/c`        | clear the queue |
+| `enter/r`      | resume paused queue |
+| `x/delete`     | remove one |
+| `esc/c`        | remove waiting |
 
 ## preview
 
@@ -138,7 +139,7 @@ _everywhere_
 | `i`            | show, fold preview |
 | `./n`          | hidden files |
 | `s`            | choose sort order |
-| `S`            | reverse the sort |
+| `S`            | toggle direction |
 | `f, /`         | filter this level |
 | `z`            | picture scale |
 
@@ -148,8 +149,8 @@ _everywhere_
 
 | key | what it does |
 |---|---|
-| `t`            | next theme |
-| `T`            | previous theme |
+| `alt+t`        | next theme |
+| `alt+shift+t`  | previous theme |
 
 ## application
 

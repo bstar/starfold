@@ -1,6 +1,6 @@
 # Status
 
-As of 2026-09-26, STAR/FOLD is a working terminal file manager with Fold and
+As of 2026-09-27, STAR/FOLD is a working terminal file manager with Fold and
 Commander views. [The file manager roadmap](file-manager-roadmap.md) tracks the
 remaining daily-work features and gives each one an acceptance check. The
 [milestone 0 baseline](baseline-validation.md) records how to test the current
@@ -17,7 +17,7 @@ covers text-content search.
 | File and directory creation | Implemented with immediate worker dispatch, no overwrite, listing refresh, and cursor selection; automated Fold and Commander checks cover the main path. Permission errors need a manual check in an unwritable directory. |
 | Recursive filename search | Implemented with bounded worker traversal, cancellation, hidden-path control, result actions, and identity checks before queued actions run. Automated tests cover nested matches, symlink loops, UI actions, and stale replacements. Large-tree cancellation and unreadable paths need hands-on checks. |
 | Text-content search | Implemented in the same results view. It scans regular UTF-8 files up to 1 MiB each and 64 MiB total, skips binary and oversized files visibly, shows a matching line, and retains real paths and identity checks for actions. Automated checks cover matches, skips, limits, cancellation, UI frames, and queued copies. Desktop validation remains. |
-| Copy, move, trash/delete, rename, conflicts, cancellation, and the inspectable operations queue | Implemented and tested with temporary trees. Real Trash and cross-device behavior need separate platform checks. |
+| Copy, move, trash/delete, rename, conflicts, cancellation, and the inspectable operations queue | Operations start automatically, Stop pauses later work, and file copies can be stopped within a file. Automated tests cover these paths; real Trash, cross-device moves, and macOS copy performance need platform checks. |
 | Commander and Places | Implemented. Two panes, mounted-location discovery, searchable bookmarks, drive details, and local-drive unmount have tests. Linux PTY checks covered browsing, Places, and session restore. Physical devices and network mounts need hands-on checks. |
 | Previews, file icons, and archive actions | Implemented. Text, images, directories, audio/video tags, PDF pages, archive inspection, compression, and extraction have automated coverage. Terminal graphics and complex real-world files need broader manual checks. |
 | Native drag and drop, embedded STAR/AMP | Implemented with PTY or process tests on Linux. Desktop terminal combinations and macOS embedding need hands-on checks. |
@@ -43,8 +43,8 @@ desktop file actions follow in the roadmap's stated order.
   file contents, switched with Tab in the search prompt.
 - There is no bulk rename, Trash browser or restore action, shell picker output,
   or multi-tab session yet.
-- `std::fs::copy` reports progress between files and checks cancellation
-  between files, not partway through one large file.
+- Copies report byte progress within a file and can be stopped between
+  chunks. A stopped copy removes its incomplete destination file.
 - Places discovers mounted network locations; it does not establish network
   connections, mount drives, or physically eject them.
 - STAR/FOLD's isolated PTY tests do not prove graphics, Trash, or removable
