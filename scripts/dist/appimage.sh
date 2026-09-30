@@ -20,6 +20,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
+appimage_arch=$(uname -m)
+case "$appimage_arch" in
+  x86_64|aarch64) ;;
+  *) echo "unsupported AppImage architecture: $appimage_arch" >&2; exit 1 ;;
+esac
+
 . scripts/dist/deps-debian.sh
 . "$HOME/.cargo/env"
 apt-get install -y -qq --no-install-recommends patchelf squashfs-tools
@@ -111,12 +117,15 @@ chmod +x "$appdir/AppRun"
 #
 # To move it: pick a tag from
 # https://github.com/AppImage/type2-runtime/releases, download its
-# runtime-x86_64, and put its `sha256sum` here.
+# runtimes for both architectures, and put their `sha256sum` here.
 runtime_tag=20251108
-runtime_sha256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+case "$appimage_arch" in
+  x86_64) runtime_sha256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d ;;
+  aarch64) runtime_sha256=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444 ;;
+esac
 
 curl -fsSL -o "$work/runtime" \
-  "https://github.com/AppImage/type2-runtime/releases/download/$runtime_tag/runtime-x86_64"
+  "https://github.com/AppImage/type2-runtime/releases/download/$runtime_tag/runtime-$appimage_arch"
 echo "$runtime_sha256  $work/runtime" | sha256sum -c -
 chmod +x "$work/runtime"
 
@@ -124,7 +133,7 @@ chmod +x "$work/runtime"
 # this file is meant for the machines we have not thought of.
 mksquashfs "$appdir" "$work/fs.squashfs" -root-owned -noappend -comp gzip -no-progress
 
-target="$out/starfold-$ver-x86_64.AppImage"
+target="$out/starfold-$ver-$appimage_arch.AppImage"
 cat "$work/runtime" "$work/fs.squashfs" > "$target"
 chmod +x "$target"
 ls -la "$target"

@@ -347,5 +347,8 @@ Do not restore Debian or standalone Linux binary tarball build jobs.
 Arch packaging builds the current sources with the locked dependencies as an
 unprivileged user, runs tests and verifies installation in a fresh container.
 The generated PKGBUILD and checksummed source archive accompany the package.
+AppImages build natively on x86_64 and ARM64 Linux, with separate checked
+runtime hashes and matching smoke/FUSE tests. Do not mix architectures in the
+AppImage target cache or artifact names.
 Branch release dispatches build artifacts without publishing, while version
 tags create a draft release.

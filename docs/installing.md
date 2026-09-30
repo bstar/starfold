@@ -63,8 +63,12 @@ chmod +x starfold-*-x86_64.AppImage
 > On a distribution that no longer ships libfuse2, run it as
 > `./starfold-*.AppImage --appimage-extract-and-run`.
 
-Each release's AppImage is started on eight distributions in CI before the
-release is drafted, so "it runs on yours" is tested rather than hoped for.
+Choose `x86_64` for Intel/AMD Linux or `aarch64` for ARM64 Linux; replace
+`x86_64` with `aarch64` in the commands above for ARM64. Both are built
+natively against Debian Bullseye's glibc floor and use an architecture-matched,
+checksummed AppImage runtime. CI starts the x86_64 AppImage on eight distributions
+and the ARM64 AppImage on seven before the release is drafted. Both also get
+a native FUSE launch test.
 
 
 

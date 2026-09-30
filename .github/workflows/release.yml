@@ -49,7 +49,15 @@ jobs:
 
   appimage:
     needs: guard
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     container: debian:bullseye-slim
     steps:
       # Frozen Bullseye repositories keep the AppImage on its older glibc floor.
@@ -63,8 +71,8 @@ jobs:
         run: ./scripts/dist/appimage.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: starfold-appimage
-          path: dist/*.AppImage
+          name: starfold-appimage-${{ matrix.arch }}
+          path: dist/*-${{ matrix.arch }}.AppImage
           if-no-files-found: error
 
   # The one claim the AppImage makes is "download it and run it, on whatever
@@ -77,10 +85,11 @@ jobs:
   # whole binary has been loaded and relocated.
   verify-appimage:
     needs: appimage
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
       matrix:
+        arch: [x86_64, aarch64]
         image:
           - ubuntu:20.04
           - ubuntu:22.04
@@ -90,11 +99,16 @@ jobs:
           - fedora:41
           - rockylinux:9
           - archlinux:latest
+        # The official Arch image is x86_64 only. ARM64 is tested on the
+        # seven other distributions using their native ARM64 images.
+        exclude:
+          - arch: aarch64
+            image: archlinux:latest
     container: ${{ matrix.image }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: starfold-appimage
+          name: starfold-appimage-${{ matrix.arch }}
       - name: Run it, with nothing installed
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -102,17 +116,28 @@ jobs:
           chmod +x starfold-*.AppImage
           app=$(ls starfold-*.AppImage)
           ./"$app" --version
+          mkdir -p /tmp/starfold-smoke
+          printf 'AppImage smoke test\n' > /tmp/starfold-smoke/hello.txt
+          ./"$app" list /tmp/starfold-smoke | grep -F hello.txt
 
   # Separately, once, with real FUSE: extract-and-run masks the exact failure
   # most users hit on a distribution that no longer ships libfuse2.
   verify-appimage-fuse:
     needs: appimage
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: starfold-appimage
-      - run: sudo apt-get update && sudo apt-get install -y libfuse2
+          name: starfold-appimage-${{ matrix.arch }}
+      - run: sudo apt-get update && sudo apt-get install -y libfuse2t64
       - run: |
           chmod +x starfold-*.AppImage
           app=$(ls starfold-*.AppImage)
@@ -135,7 +160,7 @@ jobs:
       - name: Collect what actually ships
         run: |
           mkdir -p dist
-          cp staging/starfold-appimage/*.AppImage dist/
+          cp staging/starfold-appimage-*/*.AppImage dist/
           cp staging/starfold-macos/*-aarch64-apple-darwin.tar.gz dist/
           cp staging/starfold-arch/*.pkg.tar.zst dist/
           cp staging/starfold-arch/PKGBUILD dist/

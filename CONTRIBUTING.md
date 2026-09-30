@@ -72,7 +72,8 @@ case-insensitive filesystem can otherwise see a file collide with itself.
 
 ## Packaging
 
-Release targets are Linux Nix, Linux AppImage and Arch packages (x86_64), and a native macOS
+Release targets are Linux Nix, Linux AppImage (x86_64 and ARM64), Arch packages
+(x86_64), and a native macOS
 Apple Silicon archive. `scripts/build-dist.sh nix` builds the Nix package;
 `./scripts/build-dist.sh appimage` uses Docker or Podman with an isolated
 old-glibc build directory; `./scripts/build-dist.sh macos` runs on a Mac.

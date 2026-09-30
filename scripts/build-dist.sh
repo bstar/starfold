@@ -35,7 +35,7 @@ if [ "$target" = arch ]; then
 fi
 "$CONTAINER" run --rm \
   -v "$PWD:/src" -w /src \
-  -v starfold-target-appimage:/build/target \
+  -v "starfold-target-appimage-$(uname -m):/build/target" \
   -v starfold-cargo:/root/.cargo \
   -e CARGO_TARGET_DIR=/build/target -e CARGO_HOME=/root/.cargo \
   -e DIST_UID="$(id -u)" -e DIST_GID="$(id -g)" \
