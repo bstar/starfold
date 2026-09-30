@@ -2,6 +2,7 @@
 
 [![ci](https://github.com/bstar/starfold/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bstar/starfold/actions/workflows/ci.yml)
 [![nix](https://github.com/bstar/starfold/actions/workflows/nix.yml/badge.svg?branch=main)](https://github.com/bstar/starfold/actions/workflows/nix.yml)
+[![arch](https://github.com/bstar/starfold/actions/workflows/arch.yml/badge.svg?branch=main)](https://github.com/bstar/starfold/actions/workflows/arch.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A terminal file manager in the STAR family. The directories you drill through
@@ -16,7 +17,7 @@ Unfold your filesystem.
 
 ## Get it
 
-Linux releases use Nix and AppImage. Apple Silicon macOS builds are available
+Linux releases use Nix, AppImage and native Arch packages. Apple Silicon macOS builds are available
 on the [releases page](https://github.com/bstar/starfold/releases/latest).
 
 ```sh

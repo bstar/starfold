@@ -149,12 +149,11 @@ mod tests {
         assert!(!picker.choose(KEYS.len() + 1).unwrap().dirs_first);
         picker.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         assert_eq!(picker.cursor, ROWS - 1);
-        assert_eq!(
-            picker
+        assert!(
+            !picker
                 .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
                 .unwrap()
-                .dirs_first,
-            false
+                .dirs_first
         );
     }
 

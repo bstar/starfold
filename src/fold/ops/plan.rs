@@ -53,7 +53,7 @@ pub enum PlanError {
 /// Work out `Plan` for `kind` over `sources` into `dest`.
 pub fn plan(kind: OpKind, sources: &[PathBuf], dest: Option<&Path>) -> Result<Plan, PlanError> {
     match kind {
-        OpKind::Copy | OpKind::Move => plan_copy_move(kind, sources, dest),
+        OpKind::Copy | OpKind::Move => plan_copy_move(sources, dest),
         OpKind::Delete(DeleteHow::Permanent) if dest.is_some() => {
             let mount = dest.expect("checked above");
             crate::fold::places::validate_drive_trash(mount, sources)
@@ -239,11 +239,7 @@ fn walk(
     }
 }
 
-fn plan_copy_move(
-    kind: OpKind,
-    sources: &[PathBuf],
-    dest: Option<&Path>,
-) -> Result<Plan, PlanError> {
+fn plan_copy_move(sources: &[PathBuf], dest: Option<&Path>) -> Result<Plan, PlanError> {
     let dest = dest.ok_or(PlanError::NoDestination)?;
     let mut plan = Plan {
         dest: dest.to_path_buf(),

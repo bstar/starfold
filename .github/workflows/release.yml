@@ -29,6 +29,9 @@ jobs:
   nix:
     needs: guard
     uses: ./.github/workflows/nix.yml
+  arch:
+    needs: guard
+    uses: ./.github/workflows/arch.yml
   macos:
     needs: guard
     runs-on: macos-14
@@ -118,7 +121,7 @@ jobs:
   publish:
     # A branch dispatch builds artifacts for review; only tags create releases.
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [ci, nix, macos, verify-appimage, verify-appimage-fuse]
+    needs: [ci, nix, arch, macos, verify-appimage, verify-appimage-fuse]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -134,6 +137,9 @@ jobs:
           mkdir -p dist
           cp staging/starfold-appimage/*.AppImage dist/
           cp staging/starfold-macos/*-aarch64-apple-darwin.tar.gz dist/
+          cp staging/starfold-arch/*.pkg.tar.zst dist/
+          cp staging/starfold-arch/PKGBUILD dist/
+          cp staging/starfold-arch/starfold-*.tar.gz dist/
           # Hashes taken here, over the bytes that are about to be uploaded,
           # rather than trusting what each job thought it produced.
           cd dist && sha256sum -- * | sort -k2 > SHA256SUMS

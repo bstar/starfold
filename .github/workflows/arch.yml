@@ -1,0 +1,64 @@
+name: arch
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: &docs
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'LICENSES/**'
+      - '.editorconfig'
+      - '.github/ISSUE_TEMPLATE/**'
+  pull_request:
+    paths-ignore: *docs
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install the native Arch toolchain
+        run: pacman -Syu --needed --noconfirm base-devel rust git
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prepare an unprivileged builder
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Build and test the pacman package
+        run: runuser -u builder -- ./scripts/dist/arch.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: starfold-arch
+          path: |
+            dist/*.pkg.tar.zst
+            dist/PKGBUILD
+            dist/starfold-*.tar.gz
+          if-no-files-found: error
+
+  install:
+    needs: package
+    runs-on: ubuntu-latest
+    # A fresh container verifies runtime dependencies rather than inheriting
+    # the compiler and libraries installed on the package builder.
+    container: archlinux:latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: starfold-arch
+      - name: Install and run the package
+        run: |
+          pacman -Syu --noconfirm
+          pacman -U --noconfirm ./*.pkg.tar.zst
+          starfold --version
+          mkdir -p /tmp/starfold-smoke
+          printf 'Arch package smoke test\n' > /tmp/starfold-smoke/hello.txt
+          starfold list /tmp/starfold-smoke | grep -F hello.txt
+          test -f /usr/share/applications/starfold.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/starfold.svg
+          test -f /usr/share/licenses/starfold/UnRAR.txt

@@ -238,9 +238,11 @@ impl Picker {
     }
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let r = Self::rect(area);
-        if self.menu.is_some() && !self.menu_from_list {
-            self.menu.as_mut().unwrap().render(area, buf, theme);
-            return;
+        if !self.menu_from_list {
+            if let Some(menu) = &mut self.menu {
+                menu.render(area, buf, theme);
+                return;
+            }
         }
         Clear.render(r, buf);
         let inner = overlay::render(

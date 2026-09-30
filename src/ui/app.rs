@@ -2750,7 +2750,7 @@ impl App {
         let incoming = self
             .dnd
             .receiving_uri
-            .then(|| self.dnd.choice.as_ref())
+            .then_some(self.dnd.choice.as_ref())
             .flatten()
             .map(|choice| {
                 let action = if self.dnd.result_kind == Some(OpKind::Move) {
@@ -3404,9 +3404,7 @@ fn build_row(
 fn operations_report(queue: &crate::fold::ops::Queue, home: &Path) -> Option<String> {
     use std::fmt::Write as _;
 
-    if queue.iter().next().is_none() {
-        return None;
-    }
+    queue.iter().next()?;
     let mut report = String::from("STAR/FOLD OPERATIONS\n");
     for (index, op) in queue.iter().enumerate() {
         let status = build_op_row(op, home, queue.is_paused()).status;

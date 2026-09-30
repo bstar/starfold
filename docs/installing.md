@@ -8,6 +8,7 @@ route that matches your machine.
 | --- | --- | --- |
 | [Nix](#nix-and-nixos) | NixOS, or Nix on Linux or macOS | Nix with flakes |
 | [AppImage](#appimage) | any desktop Linux | nothing |
+| [Arch package](#arch-linux) | Arch Linux and derivatives, x86_64 | pacman |
 | [macOS](#macos) | Apple Silicon | release archive or Nix |
 | [From source](#from-source) | anything else | a Rust toolchain |
 
@@ -68,6 +69,26 @@ release is drafted, so "it runs on yours" is tested rather than hoped for.
 
 
 
+## Arch Linux
+
+Download `starfold-<version>-1-x86_64.pkg.tar.zst` from the release assets and
+install it with pacman:
+
+```sh
+sudo pacman -U ./starfold-*-x86_64.pkg.tar.zst
+starfold --version
+```
+
+This installs the executable, desktop entry, icons and license notices. Pacman
+tracks upgrades and removal. Arch builds are also downloadable from the `arch`
+workflow's `starfold-arch` artifact before a release is published.
+
+To build the supplied sources, put the release's `PKGBUILD` and matching
+`starfold-<version>.tar.gz` in the same directory, then run `makepkg -si` as an
+ordinary user. Install `base-devel` first. The recipe verifies the source
+checksum, fetches the locked Rust dependencies, builds and runs the test suite.
+This is a native pacman package; no AUR submission is required or implied.
+
 ## macOS
 
 Download `starfold-<version>-aarch64-apple-darwin.tar.gz` from the releases page,
@@ -123,7 +144,8 @@ image.
 | foot | yes, sixel |
 | iTerm2 | yes |
 | xterm with sixel enabled | yes |
-| Alacritty, GNOME Terminal, Konsole | half-blocks |
+| Konsole (recent versions) | yes, Kitty protocol or Sixel |
+| Alacritty, GNOME Terminal | half-blocks |
 | inside tmux | half-blocks |
 
 tmux is on that list for a reason that is not a shortcoming in tmux: a
@@ -133,3 +155,6 @@ appears. Half-blocks are drawn out of ordinary characters and survive it.
 
 [Configuration](configuration.md) has the `[ui] graphics` setting for insisting
 on a protocol the detection could not see, which is what you want over ssh.
+
+The [README terminal compatibility chart](../README.md#terminal-compatibility)
+also covers synchronized redraws, clipboard access and native drag and drop.

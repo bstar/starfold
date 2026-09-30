@@ -340,8 +340,12 @@ resize and clean exit on a PTY that never answers terminal queries.
 
 ## Release targets
 
-Release Linux through Nix and AppImage, and macOS through the native Apple
-Silicon archive (Nix remains available there too). Do not restore Debian, Arch
-or standalone Linux tarball build jobs. `scripts/build-dist.sh` accepts only
-`nix`, `appimage` and `macos`; branch release dispatches build artifacts without
-publishing, while version tags create a draft release.
+Release Linux through Nix, AppImage and native Arch pacman packages, and macOS
+through the native Apple Silicon archive (Nix remains available there too).
+Do not restore Debian or standalone Linux binary tarball build jobs.
+`scripts/build-dist.sh` accepts `nix`, `appimage`, `arch` and `macos`.
+Arch packaging builds the current sources with the locked dependencies as an
+unprivileged user, runs tests and verifies installation in a fresh container.
+The generated PKGBUILD and checksummed source archive accompany the package.
+Branch release dispatches build artifacts without publishing, while version
+tags create a draft release.

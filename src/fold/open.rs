@@ -6,11 +6,13 @@
 //! single argument, not a chance to inject one.
 
 use std::ffi::{OsStr, OsString};
+#[cfg(target_os = "linux")]
 use std::io;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::OpenConfig;
+#[cfg(target_os = "linux")]
 use crate::fold::file_type::{self, FileType};
 
 /// The argv `open_external` would run, without running it -- so the choice of

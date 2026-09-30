@@ -359,7 +359,7 @@ mod tests {
             f.home().to_path_buf(),
             true,
         );
-        listed(&mut state, &f.home());
+        listed(&mut state, f.home());
         (f, state)
     }
     #[test]
@@ -435,7 +435,7 @@ mod tests {
         send(&mut state, Command::StartSearch("star".into()));
         let generation = state.search.as_ref().unwrap().generation;
         let found = Arc::new(search::scan(
-            &f.home(),
+            f.home(),
             "star",
             false,
             &search::Progress::default(),
@@ -558,7 +558,7 @@ mod tests {
         let missing = state.active_frame().dir.clone();
         listed(&mut state, &missing);
         assert_eq!(state.active_frame().dir, missing);
-        assert!(state.active_frame().loading == false);
+        assert!(!state.active_frame().loading);
     }
     #[test]
     fn reordering_preserves_active_identity_and_closed_history_is_bounded() {

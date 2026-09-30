@@ -115,14 +115,16 @@ impl Session {
     }
 }
 
+type PendingSession = (
+    std::sync::Mutex<(Option<Session>, bool)>,
+    std::sync::Condvar,
+);
+
 /// A private, process-lifetime lock and a coalescing writer. Other windows
 /// may read the workspace but cannot overwrite its owner's saved tabs.
 pub struct Writer {
     _lock: std::fs::File,
-    pending: std::sync::Arc<(
-        std::sync::Mutex<(Option<Session>, bool)>,
-        std::sync::Condvar,
-    )>,
+    pending: std::sync::Arc<PendingSession>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 

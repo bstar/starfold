@@ -1040,7 +1040,7 @@ mod tests {
         fs::write(dest.join("a.txt"), b"old").unwrap();
         let src = dir.path().join("a.txt");
         fs::write(&src, b"new").unwrap();
-        let p = make_plan(OpKind::Copy, &[src.clone()], Some(&dest)).unwrap();
+        let p = make_plan(OpKind::Copy, std::slice::from_ref(&src), Some(&dest)).unwrap();
         let chosen = dest.join("my copy.txt");
         let names = vec![(dest.join("a.txt"), chosen.clone())];
         let outcome = run_with_names(

@@ -72,11 +72,16 @@ case-insensitive filesystem can otherwise see a file collide with itself.
 
 ## Packaging
 
-Release targets are Linux Nix, Linux AppImage (x86_64), and a native macOS
+Release targets are Linux Nix, Linux AppImage and Arch packages (x86_64), and a native macOS
 Apple Silicon archive. `scripts/build-dist.sh nix` builds the Nix package;
 `./scripts/build-dist.sh appimage` uses Docker or Podman with an isolated
 old-glibc build directory; `./scripts/build-dist.sh macos` runs on a Mac.
-Debian, Arch and standalone Linux tarballs are no longer release targets.
+`./scripts/build-dist.sh arch` builds and tests in an isolated Arch container.
+On Arch with `base-devel`, `rust` and `git` installed, an ordinary user can run
+`./scripts/dist/arch.sh` directly. The package, generated PKGBUILD and
+checksummed source archive go to `dist/`. CI installs the package in a fresh
+Arch container and checks the executable, a directory listing and desktop assets.
+Debian packages and standalone Linux binary tarballs are not release targets.
 
 ## Taking a new STAR/KIT
 
@@ -113,7 +118,8 @@ taken the new tag.
    devshell; run `./scripts/check-version.sh` there too.
 2. Add the release to `CHANGELOG.md` and run the checks above.
 3. Commit, tag `vX.Y.Z`, and push. The release workflow validates Nix, builds
-   the AppImage and macOS archive, and verifies the AppImage across distributions.
+   the AppImage, Arch package and macOS archive, and verifies the AppImage across distributions
+   and the Arch package after installation.
 4. Review the draft release with its checksums and provenance before publishing.
 
 A manual dispatch on `main` creates downloadable workflow artifacts without a

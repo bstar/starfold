@@ -7,12 +7,32 @@ target=${1:-$(if [ "$(uname -s)" = Darwin ]; then echo macos; else echo appimage
 case "$target" in
   nix) exec nix build .#default --print-build-logs ;;
   macos) exec scripts/dist/macos.sh ;;
+  arch) ;;
   appimage) ;;
-  *) echo "usage: $0 [nix|appimage|macos]" >&2; exit 2 ;;
+  *) echo "usage: $0 [nix|appimage|macos|arch]" >&2; exit 2 ;;
 esac
 CONTAINER=${CONTAINER:-$(command -v docker || command -v podman || true)}
 [ -n "$CONTAINER" ] || { echo "need docker or podman" >&2; exit 1; }
 mkdir -p dist
+if [ "$target" = arch ]; then
+  exec "$CONTAINER" run --rm \
+    -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
+    -e DIST_UID="$(id -u)" -e DIST_GID="$(id -g)" \
+    archlinux:latest bash -c '
+      set -euo pipefail
+      pacman -Syu --needed --noconfirm base-devel rust git
+      useradd --create-home builder
+      mkdir /home/builder/starfold
+      tar -C /src -cf - Cargo.toml Cargo.lock flake.nix flake.lock src tests \
+        testdata vendor packaging scripts docs .github README.md LICENSE LICENSES \
+        | tar -C /home/builder/starfold -xf -
+      chown -R builder:builder /home/builder/starfold /out
+      cleanup() { chown -R "$DIST_UID:$DIST_GID" /out; }
+      trap cleanup EXIT
+      cd /home/builder/starfold
+      runuser -u builder -- env DIST_DIR=/out ./scripts/dist/arch.sh
+    '
+fi
 "$CONTAINER" run --rm \
   -v "$PWD:/src" -w /src \
   -v starfold-target-appimage:/build/target \
