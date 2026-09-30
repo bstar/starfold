@@ -10,9 +10,7 @@ A terminal file manager in the STAR family. The directories you drill through
 stack up behind you, the files you mark stay marked wherever you go, and
 nothing is copied, moved or deleted until you run the queue.
 
-<!-- The screenshot goes here, as docs/screenshot.png, the way STAR/AMP's
-     README carries one. There is no picture yet: the window is still being
-     built, and one of a half-drawn window would be retaken every week. -->
+![STAR/FOLD showing two directory panes, an image preview, and the operations queue](docs/screenshot.png)
 
 [Status](docs/status.md) says how much of that is built today, area by area.
 
