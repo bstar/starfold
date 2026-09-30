@@ -362,8 +362,11 @@ mod tests {
         handle.send(Command::PasteHere);
         assert_eq!(fake.state().queue.iter().next().unwrap().expected.len(), 1);
 
-        std::fs::remove_file(&source).unwrap();
-        std::fs::write(&source, "replacement").unwrap();
+        // Create the replacement while the original still exists so even
+        // filesystems that immediately reuse deleted inodes distinguish them.
+        let replacement = source.with_extension("replacement");
+        std::fs::write(&replacement, "replacement").unwrap();
+        std::fs::rename(&replacement, &source).unwrap();
         handle.send(Command::Run);
         fake.pump();
 

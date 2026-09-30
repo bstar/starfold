@@ -123,7 +123,7 @@ type PendingSession = (
 /// A private, process-lifetime lock and a coalescing writer. Other windows
 /// may read the workspace but cannot overwrite its owner's saved tabs.
 pub struct Writer {
-    _lock: std::fs::File,
+    lock: std::fs::File,
     pending: std::sync::Arc<PendingSession>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -172,7 +172,7 @@ impl Writer {
                 }
             })?;
         Ok(Some(Self {
-            _lock: lock,
+            lock,
             pending,
             thread: Some(thread),
         }))
@@ -192,6 +192,12 @@ impl Drop for Writer {
         ready.notify_one();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+        // A concurrently spawned child may briefly inherit the descriptor
+        // before exec. Release ownership explicitly after flushing instead
+        // of waiting for every inherited descriptor to close.
+        if let Err(error) = self.lock.unlock() {
+            tracing::warn!("could not release workspace lock: {error}");
         }
     }
 }
@@ -263,6 +269,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.toml");
         let writer = Writer::acquire(path.clone()).unwrap().unwrap();
+        // Model a descriptor inherited by a child during process startup.
+        let inherited_lock = writer.lock.try_clone().unwrap();
         assert!(Writer::acquire(path.clone()).unwrap().is_none());
         for n in 0..25 {
             writer.save(Session {
@@ -301,6 +309,7 @@ mod tests {
             0o600
         );
         assert!(Writer::acquire(path).unwrap().is_some());
+        drop(inherited_lock);
     }
     #[test]
     fn legacy_session_migrates_without_requiring_workspace_fields() {

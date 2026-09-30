@@ -675,7 +675,8 @@ mod tests {
         while handle.state().loading && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(handle.state().listing_of(fixture.home()).is_some());
+        let resolved_home = fixture.home().canonicalize().unwrap();
+        assert!(handle.state().listing_of(&resolved_home).is_some());
     }
 
     #[test]
