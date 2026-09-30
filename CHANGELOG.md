@@ -5,6 +5,27 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-09-30
+
+### Added
+
+- Native ARM64 (`aarch64`) AppImages alongside x86_64, verified across seven
+  ARM64 and eight x86_64 Linux distributions, with FUSE launch checks for both.
+- Arch Linux packages, with source archives, PKGBUILDs and installation checks.
+- Persistent workspace tabs with independent browsing sessions, tab actions
+  and keyboard shortcuts.
+- Recursive filename search, file and directory creation, and improved file
+  actions and context menus.
+- Storage usage bars, copy speed and completion estimates, and improved
+  operations reporting and remote drag-and-drop feedback.
+- A terminal compatibility chart and updated installation documentation.
+
+### Fixed
+
+- Menu flicker, marked-file cursor visibility, and drag-and-drop interactions.
+- Linux and macOS build checks and portable terminal test fixtures.
+- Workspace locks now release explicitly after the session writer finishes.
+
 ## [0.0.1] - 2026-09-23
 
 ### Added
