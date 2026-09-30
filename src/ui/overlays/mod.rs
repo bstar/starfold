@@ -27,6 +27,7 @@ pub mod confirm;
 pub mod conflict;
 pub mod context;
 pub mod create;
+pub mod failure;
 pub mod rename;
 pub mod search;
 pub mod sort;
@@ -51,7 +52,9 @@ use crate::ui::Bars;
 /// the caller learns it again only once the answer is yes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pending {
+    CloseTab(crate::fold::tab::TabId),
     DeletePermanently(Vec<PathBuf>),
+    ElevatedDelete(OpId),
     QueueDelete(Vec<PathBuf>),
     ClearQueue,
     CancelRunning(OpId),
@@ -66,6 +69,7 @@ pub enum Overlay {
     Drop(context::Menu),
     Destination(context::Destination),
     Help { scroll: u16 },
+    Failure(failure::Failure),
     Confirm(confirm::Confirm),
     TrashWarning(trash_warning::Prompt),
     Create(create::Create),
@@ -96,6 +100,8 @@ pub enum Answer {
     Closed,
     /// `y`/`enter` on a [`confirm::Confirm`].
     Confirmed(Pending),
+    RetryFailedDelete(Vec<PathBuf>),
+    RetryFailedDeleteWithSudo(OpId),
     TrashDelete {
         sources: Vec<PathBuf>,
         drive: trash_warning::DriveKey,
@@ -154,6 +160,10 @@ impl Overlays {
     /// for why there is never more than one.
     pub fn open_help(&mut self) {
         self.current = Some(Overlay::Help { scroll: 0 });
+    }
+
+    pub fn open_failure(&mut self, failure: failure::Failure) {
+        self.current = Some(Overlay::Failure(failure));
     }
 
     pub fn open_sort(&mut self, order: SortOrder) {
@@ -272,6 +282,39 @@ impl Overlays {
                 // Anything else closes it, `?`/`F1` included -- the help
                 // overlay has no other use for a key.
                 _ => (true, Answer::Closed),
+            },
+            Overlay::Failure(failure) => match k.code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    failure.scroll = failure
+                        .scroll
+                        .saturating_add(1)
+                        .min(failure.lines.len().saturating_sub(1));
+                    (false, Answer::Consumed)
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    failure.scroll = failure.scroll.saturating_sub(1);
+                    (false, Answer::Consumed)
+                }
+                KeyCode::PageDown => {
+                    failure.scroll = failure
+                        .scroll
+                        .saturating_add(10)
+                        .min(failure.lines.len().saturating_sub(1));
+                    (false, Answer::Consumed)
+                }
+                KeyCode::PageUp => {
+                    failure.scroll = failure.scroll.saturating_sub(10);
+                    (false, Answer::Consumed)
+                }
+                KeyCode::Char('r') => match &failure.retry {
+                    Some(paths) => (true, Answer::RetryFailedDelete(paths.clone())),
+                    None => (false, Answer::Consumed),
+                },
+                KeyCode::Char('s') => match failure.sudo_retry {
+                    Some(id) => (true, Answer::RetryFailedDeleteWithSudo(id)),
+                    None => (false, Answer::Consumed),
+                },
+                _ => (false, Answer::Consumed),
             },
             Overlay::Confirm(c) => match starkit::chrome::confirm::answer(k) {
                 starkit::chrome::confirm::Answer::Yes => {
@@ -412,6 +455,13 @@ impl Overlays {
                     (true, Answer::Closed)
                 }
             }
+            Overlay::Failure(_) => {
+                if inside(failure::rect(area), x, y) {
+                    (false, Answer::Consumed)
+                } else {
+                    (true, Answer::Closed)
+                }
+            }
             Overlay::Confirm(c) => match confirm::layout(area, c) {
                 Some(l) if !inside(l.rect, x, y) => (true, Answer::Closed),
                 Some(l) if in_word(l.yes, l.footer_y, x, y) => {
@@ -525,6 +575,16 @@ impl Overlays {
                     scroll.saturating_add(3)
                 };
             }
+            Some(Overlay::Failure(failure)) => {
+                failure.scroll = if up {
+                    failure.scroll.saturating_sub(3)
+                } else {
+                    failure
+                        .scroll
+                        .saturating_add(3)
+                        .min(failure.lines.len().saturating_sub(1))
+                };
+            }
             Some(Overlay::Conflict(p)) => {
                 p.scroll = if up {
                     p.scroll.saturating_sub(3)
@@ -570,6 +630,10 @@ impl Overlays {
                     title: "keys",
                 }
                 .render(area, buf);
+                None
+            }
+            Overlay::Failure(failure) => {
+                failure::render(area, buf, theme, failure);
                 None
             }
             Overlay::Confirm(c) => {

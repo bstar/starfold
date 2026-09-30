@@ -13,7 +13,7 @@ use std::fs;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
-use super::{Conflict, Item, ItemKind, OpKind, Plan};
+use super::{Conflict, DeleteHow, Item, ItemKind, OpKind, Plan};
 
 /// How deep a directory tree is walked before `plan` stops descending.
 ///
@@ -40,6 +40,8 @@ pub enum PlanError {
     NoDestination,
     #[error("{0}")]
     Archive(String),
+    #[error("{0}")]
+    DriveTrash(String),
     #[error("{path}: {source}")]
     Io {
         path: PathBuf,
@@ -52,6 +54,27 @@ pub enum PlanError {
 pub fn plan(kind: OpKind, sources: &[PathBuf], dest: Option<&Path>) -> Result<Plan, PlanError> {
     match kind {
         OpKind::Copy | OpKind::Move => plan_copy_move(kind, sources, dest),
+        OpKind::Delete(DeleteHow::Permanent) if dest.is_some() => {
+            let mount = dest.expect("checked above");
+            crate::fold::places::validate_drive_trash(mount, sources)
+                .map_err(PlanError::DriveTrash)?;
+            let mut plan = plan_delete(sources);
+            let drive_dev = fs::metadata(mount)
+                .map_err(|error| io_err(mount, error))?
+                .dev();
+            for item in &plan.items {
+                let meta =
+                    fs::symlink_metadata(&item.from).map_err(|error| io_err(&item.from, error))?;
+                if meta.dev() != drive_dev {
+                    return Err(PlanError::DriveTrash(format!(
+                        "{} is on a different mounted filesystem",
+                        item.from.display()
+                    )));
+                }
+            }
+            plan.dest = mount.to_path_buf();
+            Ok(plan)
+        }
         OpKind::Delete(_) => Ok(plan_delete(sources)),
         OpKind::Rename => plan_rename(sources, dest),
         OpKind::Compress(_) | OpKind::Extract => crate::fold::archive::operation::plan(

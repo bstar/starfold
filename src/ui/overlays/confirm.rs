@@ -98,6 +98,19 @@ impl Confirm {
         }
     }
 
+    pub fn elevated_delete(op: OpId) -> Self {
+        Self {
+            title: "delete as administrator".into(),
+            body: vec![
+                "Retry the permission-denied delete with administrator rights?".into(),
+                "This permanently deletes the failed item(s).".into(),
+            ],
+            yes: "delete",
+            no: "keep",
+            pending: Pending::ElevatedDelete(op),
+        }
+    }
+
     /// Trash may be unavailable for one mounted volume even though it works
     /// elsewhere. Never silently turn that failure into a permanent delete.
     pub fn trash_failed(path: PathBuf, reason: &str) -> Self {

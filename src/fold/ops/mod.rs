@@ -165,8 +165,14 @@ pub enum OpStatus {
 
 /// One entry in the queue: what to do, to which files, and how it is going.
 pub struct Op {
+    pub origin_tab: Option<super::tab::TabId>,
+    pub origin_name: String,
     pub id: OpId,
     pub kind: OpKind,
+    /// This retry is authorized by a failed permanent delete and `sudo -v`.
+    pub elevated: bool,
+    /// Optional label for a drive-specific queue action.
+    pub label: Option<String>,
     pub sources: Vec<PathBuf>,
     /// Original remote paths, retained while staged sources are moved in.
     pub import_sources: Option<Vec<PathBuf>>,
@@ -185,6 +191,10 @@ pub struct Op {
     /// Failure of a single-file trash move under Auto, kept so a dropped
     /// notification cannot lose the permanent-delete offer.
     pub trash_failure: Option<String>,
+    /// Last failure reason, kept visible in OPERATIONS after the note expires.
+    pub failure: Option<String>,
+    /// Per-item failures from a completed operation, for a durable summary.
+    pub failed: Vec<(PathBuf, String)>,
     /// Shared with the ops thread while the op runs: the same `Arc` goes out
     /// in `Job::Run`, and the status row reads the atomics through this one.
     pub progress: Arc<Progress>,
@@ -193,6 +203,9 @@ pub struct Op {
 impl Op {
     /// `COPY 14 files → ~/Archive`, the line the OPERATIONS panel draws.
     pub fn title(&self) -> String {
+        if let Some(label) = &self.label {
+            return label.clone();
+        }
         if self.kind == OpKind::Copy && self.dest.is_none() {
             let noun = if self.sources.len() == 1 {
                 "item"
@@ -208,6 +221,7 @@ impl Op {
                 OpKind::Copy => "COPY",
                 OpKind::Move => "MOVE",
                 OpKind::Delete(DeleteHow::Trash) => "TRASH",
+                OpKind::Delete(DeleteHow::Permanent) if self.elevated => "DELETE AS ADMIN",
                 OpKind::Delete(DeleteHow::Permanent) => "DELETE",
                 OpKind::Rename => "RENAME",
                 OpKind::Compress(_) => "COMPRESS",
@@ -256,8 +270,12 @@ impl Queue {
         let id = OpId(self.next_id);
         self.next_id += 1;
         self.ops.push(Op {
+            origin_tab: None,
+            origin_name: String::new(),
             id,
             kind,
+            elevated: false,
+            label: None,
             sources,
             import_sources: None,
             expected: vec![],
@@ -268,6 +286,8 @@ impl Queue {
             rename_targets: Vec::new(),
             skipped: 0,
             trash_failure: None,
+            failure: None,
+            failed: Vec::new(),
             progress: Arc::new(Progress::new(0)),
         });
         id
@@ -359,6 +379,10 @@ impl Queue {
         self.ops.iter().find(|op| op.status == OpStatus::Running)
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Op> {
+        self.ops.iter_mut()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &Op> {
         self.ops.iter()
     }
@@ -378,8 +402,12 @@ mod tests {
 
     fn op(id: u64, status: OpStatus) -> Op {
         Op {
+            origin_tab: None,
+            origin_name: String::new(),
             id: OpId(id),
             kind: OpKind::Copy,
+            elevated: false,
+            label: None,
             sources: vec!["/a".into()],
             import_sources: None,
             expected: vec![],
@@ -390,6 +418,8 @@ mod tests {
             rename_targets: Vec::new(),
             skipped: 0,
             trash_failure: None,
+            failure: None,
+            failed: Vec::new(),
             progress: Arc::new(Progress::new(0)),
         }
     }

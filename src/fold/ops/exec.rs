@@ -376,6 +376,27 @@ fn run_copy_move(
         .map(|c| (c.source.as_path(), c))
         .collect();
 
+    // Files are staged beside their final destination. A conflict-free batch
+    // needs room for all payload bytes; overwrites also need the new bytes
+    // before old files are replaced. Check once before writing any source so
+    // a large batch cannot fill the drive and then vanish from the listing.
+    if kind == OpKind::Copy {
+        if let Some((_, available)) = crate::fold::places::filesystem_space(&plan.dest) {
+            if let Some(reason) = copy_space_error(plan, policy, available) {
+                for source in &plan.sources {
+                    if policy == ConflictPolicy::Skip
+                        && conflict_by_source.contains_key(source.as_path())
+                    {
+                        outcome.skipped += 1;
+                    } else {
+                        outcome.failed.push((source.clone(), reason.clone()));
+                    }
+                }
+                return outcome;
+            }
+        }
+    }
+
     for i in 0..plan.sources.len() {
         if progress.is_cancelled() {
             outcome.cancelled = true;
@@ -491,6 +512,33 @@ fn run_copy_move(
     outcome
 }
 
+fn copy_space_error(plan: &Plan, policy: ConflictPolicy, available: u64) -> Option<String> {
+    let skipped: std::collections::HashSet<&Path> = if policy == ConflictPolicy::Skip {
+        plan.conflicts
+            .iter()
+            .map(|conflict| conflict.source.as_path())
+            .collect()
+    } else {
+        Default::default()
+    };
+    let needed = (0..plan.sources.len())
+        .filter(|&i| !skipped.contains(plan.sources[i].as_path()))
+        .filter_map(|i| subtree_range(plan, i))
+        .flat_map(|(start, end)| &plan.items[start..end])
+        .filter_map(|item| match item.kind {
+            ItemKind::File(len) => Some(len),
+            _ => None,
+        })
+        .fold(0u64, u64::saturating_add);
+    (needed > available).then(|| {
+        format!(
+            "not enough space: need {}, {} free",
+            crate::fold::format::size(needed),
+            crate::fold::format::size(available)
+        )
+    })
+}
+
 fn run_trash_delete(plan: &Plan, progress: &Progress) -> Outcome {
     progress.set_total(plan.total_items as u64);
     let mut outcome = Outcome::default();
@@ -523,6 +571,12 @@ fn run_trash_delete(plan: &Plan, progress: &Progress) -> Outcome {
 fn run_permanent_delete(plan: &Plan, progress: &Progress) -> Outcome {
     progress.set_total(plan.total_items as u64);
     let mut outcome = Outcome::default();
+    if !plan.dest.as_os_str().is_empty() {
+        if let Err(reason) = crate::fold::places::validate_drive_trash(&plan.dest, &plan.sources) {
+            outcome.failed.push((plan.dest.clone(), reason));
+            return outcome;
+        }
+    }
     outcome.skipped += plan.missing.len();
 
     for i in 0..plan.sources.len() {
@@ -675,6 +729,29 @@ mod tests {
             preserve_times: true,
             force_copy: false,
         }
+    }
+
+    #[test]
+    fn copy_space_check_counts_marked_files_and_excludes_skipped_conflicts() {
+        let root = tempfile::tempdir().unwrap();
+        let sources = root.path().join("sources");
+        let dest = root.path().join("dest");
+        fs::create_dir(&sources).unwrap();
+        fs::create_dir(&dest).unwrap();
+        let a = sources.join("a");
+        let b = sources.join("b");
+        fs::write(&a, b"123456").unwrap();
+        fs::write(&b, b"12345678").unwrap();
+        fs::write(dest.join("a"), b"old").unwrap();
+        let plan = make_plan(OpKind::Copy, &[a, b], Some(&dest)).unwrap();
+
+        assert_eq!(
+            copy_space_error(&plan, ConflictPolicy::Overwrite, 10).as_deref(),
+            Some("not enough space: need 14 B, 10 B free")
+        );
+        assert_eq!(copy_space_error(&plan, ConflictPolicy::Skip, 10), None);
+        assert_eq!(fs::read(dest.join("a")).unwrap(), b"old");
+        assert!(!dest.join("b").exists());
     }
 
     #[test]

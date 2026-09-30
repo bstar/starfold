@@ -145,7 +145,7 @@ up, moved, or deleted by moving one folder:
 ~/.local/starfold/
 ├── config.toml        your settings (0644)
 ├── bookmarks.toml     named Places directories (0600)
-├── session.toml       Fold and Commander locations, view, hidden and sort state (0600)
+├── session.toml       Fold and Commander locations, view, hidden and per-pane sort state (0600)
 ├── themes/            your own themes
 └── cache/             the log. Safe to delete
     └── starfold.log

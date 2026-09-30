@@ -17,7 +17,7 @@ expression: "render(&mut app, 100, 30)"
 ║                                                                                                  ║
 ║                     ╔═ QUIT ═══════════════════════════════════════════════╗                     ║
 ║                     ║ COPY 1 item: ~/blob.bin → ~/empty is still running.  ║                     ║
-╚═════════════════════║ It will be stopped.                                  ║═════════════════════╝
+╚═■■■■■■■■■■■■ 125.0 G║ It will be stopped.                                  ║═════════════════════╝
 ╔═ PREVIEW — ◇ blob.bi╚═════════════════════════════════════ y quit · n stay ╝═════════════════════╗
 ║                                                                                            close ║
 ║                                                                                    File metadata ║

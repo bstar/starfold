@@ -80,6 +80,8 @@ pub struct View<'a> {
     pub filter: Option<&'a str>,
     pub error: Option<&'a str>,
     pub truncated: bool,
+    /// Filesystem capacity and bytes available to this user.
+    pub space: Option<(u64, u64)>,
 }
 
 /// Below this many list rows the crumb trail gives up its own height and
@@ -245,6 +247,61 @@ pub fn render_named(
     // next frame has something to answer to.
     let track = scrollbar::track(area, s.list);
     bars.draw(bar, track, buf, t, v.rows.len() as u32, v.scroll as u32);
+    render_space(area, buf, t, v.space);
+}
+
+/// A filesystem's used fraction and free/total values on this pane's lower
+/// border. Keeping it on the border preserves every file row, including at
+/// the minimum terminal height and in Commander's two narrow panes.
+fn render_space(area: Rect, buf: &mut Buffer, theme: &Theme, space: Option<(u64, u64)>) {
+    let Some((total, available)) = space.filter(|(total, _)| *total > 0) else {
+        return;
+    };
+    let width = area.width.saturating_sub(3) as usize;
+    if area.height < 2 || width < 12 {
+        return;
+    }
+    let available = available.min(total);
+    let short = |bytes| crate::fold::format::size(bytes).replace(' ', "");
+    let full_label = format!(
+        "{} free / {} total",
+        crate::fold::format::size(available),
+        crate::fold::format::size(total)
+    );
+    let compact_label = format!("{} free / {}", short(available), short(total));
+    let smallest_label = format!("{}/{}", short(available), short(total));
+    let label = [&full_label, &compact_label, &smallest_label]
+        .into_iter()
+        .find(|label| width >= label.len() + 5)
+        .unwrap_or(&smallest_label);
+    let label_width = label.len().min(width.saturating_sub(5));
+    let label = fit(label, label_width as u16);
+    let bar_width = width.saturating_sub(label_width + 2).min(12);
+    if bar_width == 0 {
+        return;
+    }
+    let used = total - available;
+    let filled = ((u128::from(used) * bar_width as u128) / u128::from(total)) as usize;
+    let used_fg = if u128::from(available) * 10 < u128::from(total) {
+        theme.fold.error_fg
+    } else if u128::from(available) * 5 < u128::from(total) {
+        theme.fold.conflict_fg
+    } else {
+        theme.fold.progress_fg
+    };
+    let y = area.bottom() - 1;
+    let x = area.x + 2;
+    // Color distinguishes used space from available space.
+    buf.set_string(x, y, "■".repeat(filled), Style::default().fg(rgb(used_fg)));
+    buf.set_string(
+        x + filled as u16,
+        y,
+        "■".repeat(bar_width - filled),
+        Style::default().fg(rgb(theme.dim)),
+    );
+    let label_style = Style::default().fg(rgb(theme.dim));
+    buf.set_string(x + bar_width as u16, y, " ", label_style);
+    buf.set_string(x + bar_width as u16 + 1, y, label, label_style);
 }
 
 fn render_squeezed(area: Rect, buf: &mut Buffer, t: &Theme, crumbs: &[Crumb]) {
@@ -662,7 +719,48 @@ mod tests {
             filter: None,
             error: None,
             truncated: false,
+            space: None,
         }
+    }
+
+    #[test]
+    fn storage_bar_shows_free_and_total_without_using_a_file_row() {
+        let theme = crate::ui::theme::registry().resolve_named("terminal").0;
+        let area = Rect::new(0, 0, 40, 12);
+        let mut buf = Buffer::empty(area);
+        let mut v = view(&theme, &[], &[]);
+        v.space = Some((100_000_000_000, 25_000_000_000));
+        render(area, &mut buf, &v, &mut Bars::new());
+        let bottom = line(&buf, area.bottom() - 1);
+        assert!(bottom.contains("25.0 GB free / 100.0 GB total"), "{bottom}");
+        assert!(!bottom.contains('█') && !bottom.contains('░'), "{bottom}");
+        assert_eq!(buf[(area.x + 1, area.bottom() - 1)].symbol(), "═");
+        assert_eq!(buf[(area.x + 2, area.bottom() - 1)].symbol(), "■");
+        assert_eq!(buf[(area.x + 7, area.bottom() - 1)].symbol(), "■");
+        assert!(bottom.chars().filter(|c| *c == '■').count() <= 12);
+        assert_eq!(
+            buf[(area.x + 2, area.bottom() - 1)].fg,
+            rgb(theme.fold.progress_fg)
+        );
+        assert_eq!(buf[(area.x + 7, area.bottom() - 1)].fg, rgb(theme.dim));
+        assert_eq!(
+            split(frame::body(area, &words(ModuleId::Stack)), 0, 6)
+                .list
+                .bottom(),
+            area.bottom() - 1
+        );
+    }
+
+    #[test]
+    fn storage_line_stays_short_in_a_wide_pane() {
+        let theme = crate::ui::theme::registry().resolve_named("terminal").0;
+        let area = Rect::new(0, 0, 100, 20);
+        let mut buf = Buffer::empty(area);
+        let mut v = view(&theme, &[], &[]);
+        v.space = Some((100_000_000_000, 25_000_000_000));
+        render(area, &mut buf, &v, &mut Bars::new());
+        let bottom = line(&buf, area.bottom() - 1);
+        assert_eq!(bottom.chars().filter(|c| *c == '■').count(), 12);
     }
 
     #[test]

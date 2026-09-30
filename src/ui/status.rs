@@ -168,6 +168,24 @@ pub struct Fields {
     pub location: Rect,
 }
 
+fn right_field(area: Rect, help_w: u16, v: &View<'_>) -> (String, String) {
+    let available = area.width.saturating_sub(help_w + 2);
+    let (middle, kind) = v.middle();
+    let expanded_progress = matches!(kind, MiddleKind::Progress) && width_of(&middle) > MIDDLE_MIN;
+    let max_right = if expanded_progress {
+        // Copy speed and ETA take precedence over the path in narrow windows.
+        available.saturating_sub(width_of(&middle) + 2)
+    } else {
+        available.saturating_sub(MIDDLE_MIN).max(available / 2)
+    };
+    let right = v.right(max_right);
+    if expanded_progress && width_of(&right.0) > max_right {
+        (String::new(), String::new())
+    } else {
+        right
+    }
+}
+
 pub fn fields(area: Rect, v: &View<'_>) -> Fields {
     let empty_at = |r: Rect| Rect {
         width: 0,
@@ -190,12 +208,7 @@ pub fn fields(area: Rect, v: &View<'_>) -> Fields {
         height: 1,
     };
 
-    let max_right = area
-        .width
-        .saturating_sub(help_w + 2)
-        .saturating_sub(MIDDLE_MIN)
-        .max(area.width.saturating_sub(help_w + 2) / 2);
-    let (right, drawn_location) = v.right(max_right);
+    let (right, drawn_location) = right_field(area, help_w, v);
     let right_w = width_of(&right).min(area.width.saturating_sub(help_w + 2));
     let right_x = area.x + area.width - right_w;
 
@@ -263,12 +276,7 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>) {
 
     let f = fields(area, v);
     let (middle_text, kind) = v.middle();
-    let max_right = area
-        .width
-        .saturating_sub(f.help.width + 2)
-        .saturating_sub(MIDDLE_MIN)
-        .max(area.width.saturating_sub(f.help.width + 2) / 2);
-    let (right, _) = v.right(max_right);
+    let (right, _) = right_field(area, f.help.width, v);
 
     if f.help.width > 0 {
         buf.set_string(
@@ -487,5 +495,24 @@ mod tests {
         let v = view(&t, None, Instant::now());
         let area = Rect::new(0, 0, 80, 1);
         assert_eq!(hit(area, &v, 0, 0), Some(Hit::Help));
+    }
+
+    #[test]
+    fn copy_rate_and_estimate_take_priority_over_a_long_path() {
+        let t = theme("terminal");
+        let mut v = view(&t, None, Instant::now());
+        v.progress = Some("COPYING ████▏░░░░░ 42.0% · 24.8 MB/s · ~3m 20s left");
+        for width in [60, 100] {
+            let area = Rect::new(0, 0, width, 1);
+            let mut buf = Buffer::empty(area);
+            render(area, &mut buf, &v);
+            let text: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+            assert!(text.contains("24.8 MB/s"), "{text}");
+            assert!(text.contains("~3m 20s left"), "{text}");
+            assert_eq!(
+                hit(area, &v, fields(area, &v).middle.x, 0),
+                Some(Hit::Progress)
+            );
+        }
     }
 }

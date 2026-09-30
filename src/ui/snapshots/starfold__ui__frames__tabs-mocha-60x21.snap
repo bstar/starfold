@@ -1,25 +1,25 @@
 ---
 source: src/ui/frames.rs
-expression: "render(&mut app, 60, 21)"
+expression: frame
 ---
+[7 ~             ][8 ~             ]‹ › … [+]───────────────
 ╔═ S T A R / F O L D ══════════════════════════════ stack ═╗
 ║ ‹  hidden  sort  filter  Bookmark  places  view  actions ║
 ║─ ~ ── 3 files · 3 dirs · 290 B ──────────────────────────║
-║    ▸ empty/                               -  Sep 10      ║
+║›   ▸ empty/                               -  Sep 10      ║
 ║    ▸ pictures/                            -  Sep 10      ║
 ║    ▸ projects/                            -  Sep 10      ║
 ║    ◇ blob.bin                         256 B  Sep 10      ║
 ║    ↗ dangling                           7 B  Sep 10      ║
 ║    ↗ notes.txt                         27 B  Sep 10      ║
 ║                                                          ║
-║                                                          ║
 ╚═■■■■■■■■■■■■ 125.0 GB free / 500.0 GB total══════════════╝
-╔═ PREVIEW — ▸ projects ═══════════════════════════════════╗
+╔═ PREVIEW — ▸ empty ══════════════════════════════════════╗
 ║                                                    close ║
-║ └── ▸ starwire/                                          █
+║ Empty directory                                          ║
 ╚══════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════╗
 ║                                                   remove ║
 ║                      nothing queued                      ║
 ╚══════════════════════════════════════════════════════════╝
-? help  j/k scroll  i fold  z scale                   ~  off
+? help  / filter  space mark  enter open  y yank  p   ~  off

@@ -42,8 +42,20 @@ directory. `dd` asks for confirmation before queuing deletion. `v` switches view
 opens Places, and `B` bookmarks the current directory. In Places, type to
 search, use arrows and `enter` to open a location, `F2` to rename a bookmark,
 `F3` to inspect the selected place, `delete` to remove one after confirmation,
-`F5` to rescan mounts, and `F6` to unmount a selected local drive after
-confirmation.
+`F5` to rescan mounts, `F6` to unmount a selected local drive, and `F7` to
+empty its trash after confirmation.
+
+## tabs
+
+_everywhere_
+
+| key | what it does |
+|---|---|
+| `ctrl+t`       | new tab |
+| `ctrl+w`       | close tab |
+| `ctrl+pgdn`    | next tab |
+| `ctrl+pgup`    | previous tab |
+| `ctrl+p`       | tabs and actions |
 
 ## navigation
 
@@ -115,9 +127,11 @@ _in operations_
 
 | key | what it does |
 |---|---|
-| `enter/r`      | resume paused queue |
+| `enter/r`      | details / resume |
+| `s`            | retry as admin |
 | `x/delete`     | remove one |
 | `esc/c`        | remove waiting |
+| `C`            | copy operations |
 
 ## preview
 

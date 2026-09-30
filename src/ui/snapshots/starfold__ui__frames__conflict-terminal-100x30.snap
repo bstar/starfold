@@ -18,7 +18,7 @@ expression: "render(&mut app, 100, 30)"
 ║              ║blob.bin                                                            ║              ║
 ║              ║                                                                    ║              ║
 ║              ║                                                                    ║              ║
-╚══════════════╚═════════════ o overwrite · s skip · r edit name · esc leave queued ╝══════════════╝
+╚═■■■■■■■■■■■■ ╚═════════════ o overwrite · s skip · r edit name · esc leave queued ╝══════════════╝
 ╔═ PREVIEW — ◇ blob.bin ═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
 ║                                                                                    File metadata ║

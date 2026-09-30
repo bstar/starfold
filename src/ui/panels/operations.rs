@@ -57,13 +57,16 @@ pub struct View<'a> {
     pub hint: &'a str,
 }
 
-pub fn header_words(paused: bool, active: bool) -> Vec<super::Word> {
+pub fn header_words(paused: bool, active: bool, focused: bool) -> Vec<super::Word> {
     let mut result = Vec::new();
     if active {
         result.push(super::Word::Cancel);
     }
     if paused {
         result.push(super::Word::Run);
+    }
+    if focused {
+        result.push(super::Word::Copy);
     }
     result.push(super::Word::Clear);
     result
@@ -87,6 +90,7 @@ fn running<'a>(v: &View<'a>) -> Option<&'a OpRow> {
 }
 
 pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
+    let failed = v.rows.iter().filter(|row| row.tone == Tone::Failed).count();
     let detail = v
         .unmounting
         .map(|_| activity_status(v).to_string())
@@ -95,8 +99,9 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
                 .as_ref()
                 .map(|_| "waiting for file list".to_string())
         })
-        .or_else(|| running(v).map(|r| r.status.clone()));
-    let word_list = header_words(v.paused, v.active);
+        .or_else(|| running(v).map(|r| r.status.clone()))
+        .or_else(|| (failed > 0).then(|| format!("{failed} failed · enter details")));
+    let word_list = header_words(v.paused, v.active, v.focused);
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
     let core: &starkit::theme::Theme = v.theme;
@@ -151,7 +156,9 @@ fn render_folded(area: Rect, buf: &mut Buffer, v: &View<'_>) {
         );
         return;
     }
-    let row = running(v).or_else(|| v.rows.iter().find(|r| r.tone == Tone::Pending));
+    let row = running(v)
+        .or_else(|| v.rows.iter().find(|r| r.tone == Tone::Pending))
+        .or_else(|| v.rows.iter().rev().find(|r| r.tone == Tone::Failed));
     match row {
         Some(r) => {
             // The status is the part worth reading on a folded row; a long
@@ -235,14 +242,15 @@ fn render_open(outer: Rect, area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &m
         }
 
         let mut right = row.bar.clone().unwrap_or_else(|| row.status.clone());
-        if cursor && !v.hint.is_empty() {
+        if cursor && !v.hint.is_empty() && width_of(&right) < area.width / 3 {
             right = format!("{right} \u{b7} {}", v.hint);
         }
-        let right_w = width_of(&right).min(area.width);
+        let title_min = if row.bar.is_some() { 12 } else { 16 };
+        let right_w = width_of(&right).min(area.width.saturating_sub(title_min));
         let left_w = area.width.saturating_sub(right_w + 1);
         buf.set_string(area.x, y, elide_middle(&row.title, left_w), style);
         let rx = area.x + area.width.saturating_sub(right_w);
-        buf.set_string(rx, y, &right, style);
+        buf.set_string(rx, y, elide_middle(&right, right_w), style);
     }
 
     let track = scrollbar::track(outer, area);
@@ -312,6 +320,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn copy_action_is_visible_in_the_operations_header() {
+        for (paused, active) in [(false, false), (true, false), (false, true)] {
+            assert!(header_words(paused, active, true).contains(&super::super::Word::Copy));
+            assert!(!header_words(paused, active, false).contains(&super::super::Word::Copy));
+        }
+    }
+
+    #[test]
+    fn copy_rate_and_time_remaining_fit_in_a_narrow_operations_panel() {
+        let theme = theme("terminal");
+        let area = Rect::new(0, 0, 60, 8);
+        let mut buf = Buffer::empty(area);
+        let mut copy = row("COPY 2 items → ~/Archive", "copying 42.0%", Tone::Running);
+        copy.bar = Some("████▏░░░░░ 42.0% · 24.8 MB/s · ~3m 20s left".to_string());
+        let rows = [copy];
+        render(area, &mut buf, &view(&theme, &rows), &mut Bars::new());
+        let text = dump(&buf, area);
+        assert!(text.contains("24.8 MB/s"), "{text}");
+        assert!(text.contains("~3m 20s left"), "{text}");
+    }
+
     /// The whole buffer, row by row -- row-major, so a horizontal run of
     /// text stays contiguous rather than being interleaved with the column
     /// below it.
@@ -362,6 +392,27 @@ mod tests {
         let mut buf2 = Buffer::empty(area);
         render(area, &mut buf2, &v2, &mut Bars::new());
         assert!(dump(&buf2, area).contains("nothing queued"));
+    }
+
+    #[test]
+    fn a_failed_operation_remains_visible_when_the_queue_is_folded() {
+        let t = theme("terminal");
+        let rows = vec![
+            row("COPY old", "done", Tone::Done),
+            row(
+                "DELETE ~/USB/archive",
+                "1/1 failed: Permission denied",
+                Tone::Failed,
+            ),
+        ];
+        let mut v = view(&t, &rows);
+        v.folded = true;
+        let area = Rect::new(0, 0, 72, 4);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v, &mut Bars::new());
+        let screen = dump(&buf, area);
+        assert!(screen.contains("Permission denied"), "{screen}");
+        assert!(screen.contains("1 failed"), "{screen}");
     }
 
     #[test]

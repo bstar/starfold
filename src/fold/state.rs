@@ -33,7 +33,8 @@ use super::selection::Selection;
 use super::sort::{self, SortOrder};
 use super::stack::{Frame, ParentMove, Stack};
 use super::summary::DirSummary;
-use super::tab::Tabs;
+use super::tab::{Context as TabContext, Tab, TabId, Tabs};
+mod workspace;
 use super::worker::{Done, Job};
 use super::{FoldConfig, TrashMode};
 
@@ -43,6 +44,9 @@ pub struct State {
     pub commander: bool,
     pub commander_pane: usize,
     parked_selections: [Selection; 3],
+    closed_tabs: Vec<crate::session::TabSession>,
+    durable_tabs: bool,
+    pending_search: Option<crate::session::SearchSession>,
     pub tabs: Tabs,
     /// Every directory read so far, keyed by path. A frame's own listing is
     /// looked up here rather than carried on the frame, so two frames open on
@@ -66,6 +70,8 @@ pub struct State {
     /// rather than trusted.
     pub preview: Option<(PathBuf, Arc<Preview>)>,
     pub sort: SortOrder,
+    /// Commander panes keep independent ordering from Fold and each other.
+    pub pane_sorts: [SortOrder; 2],
     pub show_hidden: bool,
     /// Probed once at [`Handle::spawn`](super::handle::Handle::spawn); a
     /// delete's confirmation and the trash-or-permanent question both read
@@ -112,6 +118,9 @@ impl State {
             commander: false,
             commander_pane: 0,
             parked_selections: Default::default(),
+            closed_tabs: Vec::new(),
+            durable_tabs: false,
+            pending_search: None,
             tabs: Tabs::single(Stack::new(start)),
             listings: HashMap::new(),
             selection: Selection::default(),
@@ -123,6 +132,7 @@ impl State {
             queue: Queue::new(),
             preview: None,
             sort: cfg.list.sort,
+            pane_sorts: [cfg.list.sort; 2],
             show_hidden: cfg.list.show_hidden,
             trash_available,
             trash: cfg.trash,
@@ -137,6 +147,10 @@ impl State {
 
     pub fn active_frame(&self) -> &Frame {
         self.tabs.active().active_stack().active()
+    }
+
+    pub fn active_sort(&self) -> SortOrder {
+        sort_for_stack(self.tabs.active().active_stack, self.sort, self.pane_sorts)
     }
 
     pub fn active_frame_mut(&mut self) -> &mut Frame {
@@ -245,10 +259,12 @@ pub struct Effects {
 /// question asked twice, and it is cheaper to ask it once here than to have
 /// every arm below decide for itself.
 pub fn apply(state: &mut State, change: Change) -> Effects {
+    let old_tab = state.tabs.active().id;
     let old_stack = state.tabs.active().active_stack;
     let old_dir = state.active_frame().dir.clone();
     let effects = apply_inner(state, change);
     if state.commander
+        && old_tab == state.tabs.active().id
         && old_stack == state.tabs.active().active_stack
         && old_dir != state.active_frame().dir
     {
@@ -256,6 +272,13 @@ pub fn apply(state: &mut State, change: Change) -> Effects {
             state.marked_search_identities.remove(path);
         }
         state.selection.forget();
+    }
+    let origin_name = state.tab_label(old_tab);
+    for op in state.queue.iter_mut() {
+        if op.origin_tab.is_none() {
+            op.origin_tab = Some(old_tab);
+            op.origin_name = origin_name.clone();
+        }
     }
     if !effects.events.is_empty() {
         state.version += 1;
@@ -328,8 +351,71 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             events: vec![Event::Note(Note::warning("startup", message))],
             ..Effects::default()
         },
+        Command::RememberTabScroll { tab, rows } => {
+            let search = if tab == state.tabs.active().id {
+                state.search.as_mut()
+            } else {
+                state
+                    .tabs
+                    .tabs
+                    .iter_mut()
+                    .find(|t| t.id == tab)
+                    .and_then(|t| t.context.as_mut())
+                    .and_then(|c| c.search.as_mut())
+            };
+            if let Some(search) = search {
+                if let Some((_, _, scroll)) = rows
+                    .iter()
+                    .find(|(stack, frame, _)| *stack == 3 && frame.0 == search.generation)
+                {
+                    search.view = *scroll;
+                }
+            }
+            if let Some(tab) = state.tabs.tabs.iter_mut().find(|t| t.id == tab) {
+                for (stack, frame, scroll) in rows {
+                    if let Some(frame) = tab
+                        .stacks
+                        .get_mut(stack)
+                        .and_then(|s| s.frames_mut().find(|f| f.id == frame))
+                    {
+                        frame.view = scroll;
+                    }
+                }
+            }
+            Effects::default()
+        }
+        Command::NewTab { duplicate } => workspace::new_tab(state, duplicate),
+        Command::SwitchTab(id) => workspace::switch_tab(state, id),
+        Command::CloseTab(id) => workspace::close_tab(state, id),
+        Command::RenameTab(id, name) => {
+            if let Some(tab) = state.tabs.tabs.iter_mut().find(|t| t.id == id) {
+                tab.name = bookmark_name(name);
+            }
+            Effects {
+                jobs: vec![],
+                events: vec![Event::Stack],
+            }
+        }
+        Command::MoveTab(id, delta) => {
+            if let Some(index) = state.tabs.tabs.iter().position(|t| t.id == id) {
+                let active = state.tabs.active().id;
+                let target = (index as i64 + i64::from(delta))
+                    .clamp(0, state.tabs.tabs.len() as i64 - 1)
+                    as usize;
+                state.tabs.tabs.swap(index, target);
+                let active_index = state.tabs.tabs.iter().position(|t| t.id == active).unwrap();
+                state.tabs.activate(active_index);
+            }
+            Effects {
+                jobs: vec![],
+                events: vec![Event::Stack],
+            }
+        }
+        Command::ReopenTab => workspace::reopen_tab(state),
+        Command::RestoreTabs(tabs, active) => workspace::restore_tabs(state, tabs, active),
         Command::ToggleView => {
             if state.tabs.active().stacks.len() == 1 {
+                state.pane_sorts = [state.sort; 2];
                 let dir = state.active_frame().dir.clone();
                 let loading = !state.listings.contains_key(&dir);
                 state
@@ -364,6 +450,7 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             active,
             enabled,
         } => {
+            state.pane_sorts = [state.sort; 2];
             state.tabs.active_mut().stacks.truncate(1);
             state
                 .tabs
@@ -389,6 +476,11 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
                     jobs: vec![],
                     events: vec![Event::Note(Note::error("create", error))],
                 };
+            }
+            if let Some(effects) =
+                copy_lock_note(copy_lock_conflict_paths(state, &[], &[dir.join(&name)]))
+            {
+                return effects;
             }
             let tab = state.tabs.active();
             let origin = CreateOrigin {
@@ -428,6 +520,17 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         }
         Command::CloseSearch => close_search(state),
         Command::SetSort(order) => cmd_set_sort(state, order),
+        Command::RestoreSorts { fold, panes } => {
+            if let Some(order) = fold {
+                state.sort = order;
+            }
+            state.pane_sorts = panes.map(|order| order.unwrap_or(state.sort));
+            rebuild_all_frames(state);
+            Effects {
+                jobs: Vec::new(),
+                events: vec![Event::Stack],
+            }
+        }
         Command::SetHidden(hidden) => cmd_set_hidden(state, hidden),
         Command::ToggleMark => cmd_toggle_mark(state),
         Command::ToggleMarkPath(path) => {
@@ -468,6 +571,11 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             if sources.is_empty() {
                 return Effects::default();
             }
+            if let Some(effects) =
+                copy_lock_note(copy_lock_conflict(state, kind, &sources, dest.as_deref()))
+            {
+                return effects;
+            }
             let id = state
                 .queue
                 .enqueue(kind, sources.clone(), dest, state.conflicts);
@@ -482,6 +590,11 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             if sources.is_empty() || !matches!(kind, OpKind::Copy | OpKind::Move) {
                 return Effects::default();
             }
+            if let Some(effects) =
+                copy_lock_note(copy_lock_conflict(state, kind, &sources, Some(&dest)))
+            {
+                return effects;
+            }
             let id = state
                 .queue
                 .enqueue_drop(kind, sources.clone(), dest, state.conflicts);
@@ -491,6 +604,9 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::BeginExport(sources) => {
             if sources.is_empty() {
                 return Effects::default();
+            }
+            if let Some(effects) = copy_lock_note(copy_lock_conflict_paths(state, &sources, &[])) {
+                return effects;
             }
             let id = state.queue.begin_export(sources, state.conflicts);
             Effects {
@@ -513,6 +629,10 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::BeginImport { sources, dest } => {
             if sources.is_empty() {
                 return Effects::default();
+            }
+            let targets = copy_targets(&sources, &dest);
+            if let Some(effects) = copy_lock_note(copy_lock_conflict_paths(state, &[], &targets)) {
+                return effects;
             }
             let id = state
                 .queue
@@ -596,6 +716,7 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             }
             Effects {
                 jobs: vec![Job::PreviewPage {
+                    tab: state.tabs.active().id,
                     path,
                     generation,
                     page,
@@ -611,6 +732,8 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::QueuePermanentDeleteSources(sources) => {
             queue_delete_sources_with_how(state, sources, DeleteHow::Permanent)
         }
+        Command::QueueElevatedDelete(id) => cmd_queue_elevated_delete(state, id),
+        Command::EmptyDriveTrash(path) => cmd_empty_drive_trash(state, &path),
         Command::QueueRename { from, to } => cmd_queue_rename(state, from, to),
         Command::RemoveOp(id) => cmd_remove_op(state, id),
         Command::ClearQueue => cmd_clear_queue(state),
@@ -655,6 +778,20 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             events: Vec::new(),
         },
         Command::Shutdown => {
+            for tab in &state.tabs.tabs {
+                if let Some(search) = tab.context.as_ref().and_then(|c| c.search.as_ref()) {
+                    search
+                        .progress
+                        .cancel
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            if let Some(search) = &state.search {
+                search
+                    .progress
+                    .cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             state.preview_generation += 1;
             for op in state.queue.iter() {
                 op.progress.cancel();
@@ -787,7 +924,7 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
             notice,
         } => {
             let actual = listing.dir.clone();
-            if requested != actual {
+            if requested != actual && !state.durable_tabs {
                 for tab in &mut state.tabs.tabs {
                     for stack in &mut tab.stacks {
                         // A user may have navigated away while a drive woke
@@ -807,11 +944,64 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
             effects
         }
         Done::Listed(listing) => done_listed(state, listing),
-        Done::Searched { generation, found } => {
+        Done::Searched {
+            tab,
+            generation,
+            found,
+        } => {
+            if tab != state.tabs.active().id {
+                let Some(context) = state
+                    .tabs
+                    .tabs
+                    .iter_mut()
+                    .find(|t| t.id == tab)
+                    .and_then(|t| t.context.as_mut())
+                else {
+                    return Effects::default();
+                };
+                let sort = sort_for_stack(
+                    if context.commander {
+                        context.commander_pane + 1
+                    } else {
+                        0
+                    },
+                    context.sort,
+                    context.pane_sorts,
+                );
+                let Some(search) = context
+                    .search
+                    .as_mut()
+                    .filter(|s| s.generation == generation)
+                else {
+                    return Effects::default();
+                };
+                let indices = sort::order(&found.entries, sort, true);
+                search.results = indices
+                    .into_iter()
+                    .map(|i| found.entries[i].clone())
+                    .collect();
+                search.identities = found.identities.clone();
+                search.excerpts = found.excerpts.clone();
+                search.skipped_binary = found.skipped_binary;
+                search.skipped_large = found.skipped_large;
+                search.cursor = search
+                    .restore_cursor_path
+                    .take()
+                    .and_then(|path| search.results.iter().position(|entry| entry.path == path))
+                    .unwrap_or(search.cursor)
+                    .min(search.results.len().saturating_sub(1));
+                search.status = found.status;
+                search.errors = found.errors.clone();
+                return Effects {
+                    jobs: vec![],
+                    events: vec![Event::Stack],
+                };
+            }
+            let active_sort = state.active_sort();
             let Some(search) = state.search.as_mut().filter(|s| s.generation == generation) else {
                 return Effects::default();
             };
-            let indices = sort::order(&found.entries, state.sort, true);
+            let indices = sort::order(&found.entries, active_sort, true);
             search.results = indices
                 .into_iter()
                 .map(|i| found.entries[i].clone())
@@ -820,7 +1010,12 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
             search.excerpts = found.excerpts.clone();
             search.skipped_binary = found.skipped_binary;
             search.skipped_large = found.skipped_large;
-            search.cursor = 0;
+            search.cursor = search
+                .restore_cursor_path
+                .take()
+                .and_then(|path| search.results.iter().position(|entry| entry.path == path))
+                .unwrap_or(search.cursor)
+                .min(search.results.len().saturating_sub(1));
             search.status = found.status;
             search.errors = found.errors.clone();
             let mut events = vec![Event::Stack];
@@ -843,10 +1038,17 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
         } => done_created(state, path, kind, origin, result),
         Done::Summarized { dir, summary } => done_summarized(state, dir, summary),
         Done::Previewed {
+            tab,
             path,
             generation,
             preview,
-        } => done_previewed(state, path, generation, preview),
+        } => {
+            if tab == state.tabs.active().id {
+                done_previewed(state, path, generation, preview)
+            } else {
+                Effects::default()
+            }
+        }
         Done::Planned { op, result } => done_planned(state, op, result),
         Done::ImportChecked { op, result } => done_import_checked(state, op, result),
         Done::Finished { op, outcome } => done_finished(state, op, outcome),
@@ -1010,7 +1212,7 @@ fn sync_cursor_name(frame: &mut Frame, listing: &Listing) {
 /// nothing" is this function finding the listing already in `state.listings`.
 fn populate_active_frame(state: &mut State) -> Vec<Job> {
     let dir = state.active_frame().dir.clone();
-    let sort = state.sort;
+    let sort = state.active_sort();
     let hidden = state.show_hidden;
     match state.listings.get(&dir).cloned() {
         Some(listing) => {
@@ -1047,7 +1249,7 @@ fn ensure_listed(state: &mut State) -> Vec<Job> {
 /// looked at can have its filter changed.
 fn rebuild_active(state: &mut State, landing: Landing) {
     let dir = state.active_frame().dir.clone();
-    let sort = state.sort;
+    let sort = state.active_sort();
     let hidden = state.show_hidden;
     if let Some(listing) = state.listings.get(&dir).cloned() {
         let frame = state.active_frame_mut();
@@ -1056,8 +1258,8 @@ fn rebuild_active(state: &mut State, landing: Landing) {
 }
 
 /// Rebuild every frame's rows, in every stack of every tab, against whatever
-/// listing each one's own directory has cached -- `SetSort` and `SetHidden`
-/// change how *every* level reads, not just the active one.
+/// listing each one's own directory has cached. `SetHidden` and session
+/// restoration use this; ordinary sort changes rebuild one stack only.
 ///
 /// The listings map is cloned up front (an `Arc` clone per entry, not a deep
 /// copy of any `Listing`) rather than looked up per frame while `state.tabs`
@@ -1066,16 +1268,42 @@ fn rebuild_active(state: &mut State, landing: Landing) {
 /// three nested loops mutating the other is more ceremony than a cheap clone
 /// is worth.
 fn rebuild_all_frames(state: &mut State) {
-    let sort = state.sort;
+    let fold_sort = state.sort;
+    let pane_sorts = state.pane_sorts;
     let hidden = state.show_hidden;
     let listings = state.listings.clone();
     for tab in &mut state.tabs.tabs {
-        for stack in &mut tab.stacks {
+        let (fold_sort, pane_sorts, hidden) = tab
+            .context
+            .as_ref()
+            .map(|c| (c.sort, c.pane_sorts, c.show_hidden))
+            .unwrap_or((fold_sort, pane_sorts, hidden));
+        for (index, stack) in tab.stacks.iter_mut().enumerate() {
+            let sort = sort_for_stack(index, fold_sort, pane_sorts);
             for frame in stack.frames_mut() {
                 if let Some(listing) = listings.get(&frame.dir) {
                     rebuild_rows(frame, listing, sort, hidden, Landing::Refind);
                 }
             }
+        }
+    }
+}
+
+fn sort_for_stack(index: usize, fold: SortOrder, panes: [SortOrder; 2]) -> SortOrder {
+    match index {
+        1 => panes[0],
+        2 => panes[1],
+        _ => fold,
+    }
+}
+
+fn rebuild_current_stack(state: &mut State) {
+    let sort = state.active_sort();
+    let hidden = state.show_hidden;
+    let listings = state.listings.clone();
+    for frame in state.tabs.active_mut().active_stack_mut().frames_mut() {
+        if let Some(listing) = listings.get(&frame.dir) {
+            rebuild_rows(frame, listing, sort, hidden, Landing::Refind);
         }
     }
 }
@@ -1141,13 +1369,15 @@ fn leave_unmounted_place(state: &mut State, mount: &Path) -> Vec<Job> {
         state.preview_generation += 1;
         state.preview = None;
     }
-    let sort = state.sort;
+    let fold_sort = state.sort;
+    let pane_sorts = state.pane_sorts;
     let hidden = state.show_hidden;
     let mut jobs = Vec::new();
     for destination in destinations {
         if let Some(listing) = state.listings.get(&destination).cloned() {
             for tab in &mut state.tabs.tabs {
-                for stack in &mut tab.stacks {
+                for (index, stack) in tab.stacks.iter_mut().enumerate() {
+                    let sort = sort_for_stack(index, fold_sort, pane_sorts);
                     if stack.active().dir == destination {
                         let frame = stack.active_mut();
                         frame.loading = false;
@@ -1391,6 +1621,8 @@ fn cmd_start_search(state: &mut State, query: String, mode: search::Mode) -> Eff
         skipped_binary: 0,
         skipped_large: 0,
         cursor: 0,
+        view: 0,
+        restore_cursor_path: None,
         status: SearchStatus::Running,
         errors: vec![],
         progress: Arc::clone(&progress),
@@ -1399,6 +1631,7 @@ fn cmd_start_search(state: &mut State, query: String, mode: search::Mode) -> Eff
     state.preview = None;
     Effects {
         jobs: vec![Job::Search {
+            tab: state.tabs.active().id,
             generation,
             root,
             query,
@@ -1445,8 +1678,11 @@ fn cmd_clear_filter(state: &mut State) -> Effects {
 }
 
 fn cmd_set_sort(state: &mut State, order: SortOrder) -> Effects {
-    state.sort = order;
-    rebuild_all_frames(state);
+    match state.tabs.active().active_stack {
+        0 => state.sort = order,
+        index => state.pane_sorts[index - 1] = order,
+    }
+    rebuild_current_stack(state);
     if let Some(search) = state.search.as_mut() {
         let selected = search
             .results
@@ -1595,6 +1831,14 @@ fn cmd_paste_here(state: &mut State) -> Effects {
     }
     let sources = state.yanked.clone();
     let dest = state.active_frame().dir.clone();
+    if let Some(effects) = copy_lock_note(copy_lock_conflict(
+        state,
+        OpKind::Copy,
+        &sources,
+        Some(&dest),
+    )) {
+        return effects;
+    }
     let id = state
         .queue
         .enqueue(OpKind::Copy, sources.clone(), Some(dest), state.conflicts);
@@ -1631,6 +1875,14 @@ fn cmd_queue_move(state: &mut State) -> Effects {
     } else {
         state.active_frame().dir.clone()
     };
+    if let Some(effects) = copy_lock_note(copy_lock_conflict(
+        state,
+        OpKind::Move,
+        &sources,
+        Some(&dest),
+    )) {
+        return effects;
+    }
     let id = state
         .queue
         .enqueue(OpKind::Move, sources.clone(), Some(dest), state.conflicts);
@@ -1677,6 +1929,14 @@ fn queue_delete_sources_with_how(
     if sources.is_empty() {
         return Effects::default();
     }
+    if let Some(effects) = copy_lock_note(copy_lock_conflict(
+        state,
+        OpKind::Delete(how),
+        &sources,
+        None,
+    )) {
+        return effects;
+    }
     let id = state
         .queue
         .enqueue(OpKind::Delete(how), sources.clone(), None, state.conflicts);
@@ -1684,7 +1944,102 @@ fn queue_delete_sources_with_how(
     queued_effects(state, id)
 }
 
+fn cmd_queue_elevated_delete(state: &mut State, failed_id: OpId) -> Effects {
+    let Some(failed) = state.queue.iter().find(|op| op.id == failed_id) else {
+        return Effects::default();
+    };
+    if failed.status != OpStatus::Failed
+        || failed.kind != OpKind::Delete(DeleteHow::Permanent)
+        || failed.label.is_some()
+    {
+        return Effects::default();
+    }
+    let sources: Vec<PathBuf> = failed
+        .failed
+        .iter()
+        .filter(|(path, reason)| {
+            failed.sources.contains(path) && super::elevated::is_permission_error(reason)
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    if sources.is_empty() {
+        return Effects::default();
+    }
+    if let Some(effects) = copy_lock_note(copy_lock_conflict(
+        state,
+        OpKind::Delete(DeleteHow::Permanent),
+        &sources,
+        None,
+    )) {
+        return effects;
+    }
+    let id = state.queue.enqueue(
+        OpKind::Delete(DeleteHow::Permanent),
+        sources,
+        None,
+        state.conflicts,
+    );
+    state.queue.get_mut(id).expect("just enqueued").elevated = true;
+    queued_effects(state, id)
+}
+
+fn cmd_empty_drive_trash(state: &mut State, mount: &Path) -> Effects {
+    let Some(location) = state
+        .places
+        .locations
+        .iter()
+        .find(|location| location.path == mount && location.info.is_some())
+    else {
+        return Effects {
+            jobs: Vec::new(),
+            events: vec![Event::Note(Note::warning(
+                "drive-trash",
+                "drive is no longer available",
+            ))],
+        };
+    };
+    if location
+        .info
+        .as_ref()
+        .is_some_and(|info| info.trash_disabled)
+    {
+        return Effects {
+            jobs: Vec::new(),
+            events: vec![Event::Note(Note::warning(
+                "drive-trash",
+                "Trash is disabled on this drive",
+            ))],
+        };
+    }
+    let label = format!("EMPTY TRASH: {}", location.name);
+    let sources = places::drive_trash_paths(mount);
+    if let Some(effects) = copy_lock_note(copy_lock_conflict(
+        state,
+        OpKind::Delete(DeleteHow::Permanent),
+        &sources,
+        None,
+    )) {
+        return effects;
+    }
+    let id = state.queue.enqueue(
+        OpKind::Delete(DeleteHow::Permanent),
+        sources,
+        Some(mount.to_path_buf()),
+        state.conflicts,
+    );
+    state.queue.get_mut(id).expect("just enqueued").label = Some(label);
+    queued_effects(state, id)
+}
+
 fn cmd_queue_rename(state: &mut State, from: PathBuf, to: PathBuf) -> Effects {
+    if let Some(effects) = copy_lock_note(copy_lock_conflict(
+        state,
+        OpKind::Rename,
+        std::slice::from_ref(&from),
+        Some(&to),
+    )) {
+        return effects;
+    }
     let id = state.queue.enqueue(
         OpKind::Rename,
         vec![from.clone()],
@@ -1693,6 +2048,105 @@ fn cmd_queue_rename(state: &mut State, from: PathBuf, to: PathBuf) -> Effects {
     );
     record_search_expectations(state, id, &[from]);
     queued_effects(state, id)
+}
+
+/// A copy reads its sources and may replace each named destination. Keep
+/// conflicting writes out of every entry point, including the IO worker's
+/// separate create path and remote drag and drop. The queue's own jobs run in
+/// series, but a newly requested action should not silently wait and then
+/// change a file the user saw being copied.
+fn copy_lock_conflict(
+    state: &State,
+    kind: OpKind,
+    sources: &[PathBuf],
+    dest: Option<&Path>,
+) -> Option<PathBuf> {
+    let mut reads = Vec::new();
+    let mut writes = Vec::new();
+    match kind {
+        OpKind::Copy => reads.extend_from_slice(sources),
+        OpKind::Move | OpKind::Delete(_) | OpKind::Rename => writes.extend_from_slice(sources),
+        OpKind::Compress(_) | OpKind::Extract => reads.extend_from_slice(sources),
+    }
+    if let Some(dest) = dest {
+        match kind {
+            OpKind::Copy | OpKind::Move => writes.extend(copy_targets(sources, dest)),
+            OpKind::Rename | OpKind::Compress(_) | OpKind::Extract => {
+                writes.push(dest.to_path_buf())
+            }
+            OpKind::Delete(_) => {}
+        }
+    }
+    copy_lock_conflict_paths(state, &reads, &writes)
+}
+
+fn copy_targets(sources: &[PathBuf], dest: &Path) -> Vec<PathBuf> {
+    sources
+        .iter()
+        .map(|source| {
+            source
+                .file_name()
+                .map_or_else(|| dest.to_path_buf(), |name| dest.join(name))
+        })
+        .collect()
+}
+
+fn paths_overlap(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+fn copy_lock_conflict_paths(
+    state: &State,
+    reads: &[PathBuf],
+    writes: &[PathBuf],
+) -> Option<PathBuf> {
+    for op in state.queue.iter().filter(|op| {
+        (op.kind == OpKind::Copy || op.import_sources.is_some())
+            && matches!(
+                op.status,
+                OpStatus::Planning | OpStatus::NeedsPolicy | OpStatus::Running
+            )
+    }) {
+        let source_locks = if op.import_sources.is_some() {
+            &[][..]
+        } else {
+            op.sources.as_slice()
+        };
+        let targets = op
+            .dest
+            .as_deref()
+            .map(|dest| copy_targets(op.import_sources.as_deref().unwrap_or(&op.sources), dest))
+            .unwrap_or_default();
+        let targets = targets
+            .into_iter()
+            .chain(op.rename_targets.iter().map(|(_, target)| target.clone()))
+            .collect::<Vec<_>>();
+        if let Some(path) = writes.iter().find(|path| {
+            source_locks
+                .iter()
+                .chain(targets.iter())
+                .any(|locked| paths_overlap(path, locked))
+        }) {
+            return Some(path.clone());
+        }
+        if let Some(path) = reads
+            .iter()
+            .find(|path| targets.iter().any(|locked| paths_overlap(path, locked)))
+        {
+            return Some(path.clone());
+        }
+    }
+    None
+}
+
+fn copy_lock_note(path: Option<PathBuf>) -> Option<Effects> {
+    path.map(|path| Effects {
+        jobs: Vec::new(),
+        events: vec![Event::Note(Note::warning(
+            "copy-locked",
+            format!("Copy in progress: {} is locked", path.display()),
+        ))],
+    })
 }
 
 fn queued_effects(state: &mut State, id: OpId) -> Effects {
@@ -1804,6 +2258,19 @@ fn run_next(state: &mut State) -> Effects {
         return Effects::default();
     };
 
+    if op.elevated {
+        op.status = OpStatus::Running;
+        op.progress.set_total(op.sources.len() as u64);
+        return Effects {
+            jobs: vec![Job::RunElevated {
+                op: id,
+                sources: op.sources.clone(),
+                progress: Arc::clone(&op.progress),
+            }],
+            events: vec![Event::Queue(id)],
+        };
+    }
+
     // A `Queued` op with a `Plan` already on it was `NeedsPolicy` a moment
     // ago: `plan` was worked out before the conflict was found, and
     // `Command::SetPolicy` is what moved it back to `Queued`. Re-planning it
@@ -1885,6 +2352,7 @@ fn cmd_preview(state: &mut State, path: PathBuf) -> Effects {
     state.preview = Some((path.clone(), Arc::new(Preview::Document(loading))));
     Effects {
         jobs: vec![Job::Preview {
+            tab: state.tabs.active().id,
             path,
             generation: state.preview_generation,
         }],
@@ -1926,9 +2394,18 @@ fn done_created(
     if path
         .file_name()
         .is_some_and(|name| name.to_string_lossy().starts_with('.'))
-        && !state.show_hidden
     {
-        state.show_hidden = true;
+        if origin.tab == state.tabs.active().id {
+            state.show_hidden = true;
+        } else if let Some(context) = state
+            .tabs
+            .tabs
+            .iter_mut()
+            .find(|t| t.id == origin.tab)
+            .and_then(|t| t.context.as_mut())
+        {
+            context.show_hidden = true;
+        }
         rebuild_all_frames(state);
         events.push(Event::Stack);
     }
@@ -1964,10 +2441,17 @@ fn done_listed(state: &mut State, listing: Listing) -> Effects {
     let listing = Arc::new(listing);
     state.listings.insert(dir.clone(), Arc::clone(&listing));
 
-    let sort = state.sort;
+    let fold_sort = state.sort;
+    let pane_sorts = state.pane_sorts;
     let hidden = state.show_hidden;
     for tab in &mut state.tabs.tabs {
-        for stack in &mut tab.stacks {
+        let (fold_sort, pane_sorts, hidden) = tab
+            .context
+            .as_ref()
+            .map(|c| (c.sort, c.pane_sorts, c.show_hidden))
+            .unwrap_or((fold_sort, pane_sorts, hidden));
+        for (index, stack) in tab.stacks.iter_mut().enumerate() {
+            let sort = sort_for_stack(index, fold_sort, pane_sorts);
             for frame in stack.frame_mut_by_dir(&dir) {
                 frame.loading = false;
                 rebuild_rows(frame, &listing, sort, hidden, Landing::Refind);
@@ -1990,7 +2474,7 @@ fn done_listed(state: &mut State, listing: Listing) -> Effects {
             // merely unreadable -- a permission wall still draws a frame for
             // the directory the user is looking at, but a directory that no
             // longer exists cannot be looked at at all.
-            if !state.commander && err.to_lowercase().contains("no such") {
+            if !state.durable_tabs && !state.commander && err.to_lowercase().contains("no such") {
                 let popped = state.tabs.active_mut().active_stack_mut().pop();
                 if popped {
                     events.push(Event::Stack);
@@ -2007,6 +2491,18 @@ fn done_listed(state: &mut State, listing: Listing) -> Effects {
 
 fn done_summarized(state: &mut State, dir: PathBuf, summary: DirSummary) -> Effects {
     let mut events = Vec::new();
+    for tab in &mut state.tabs.tabs {
+        if let Some(c) = &mut tab.context {
+            if c.selection.is_marked(&dir) {
+                c.selection.sized(&dir, summary.bytes);
+            }
+            for selection in &mut c.parked_selections {
+                if selection.is_marked(&dir) {
+                    selection.sized(&dir, summary.bytes);
+                }
+            }
+        }
+    }
     if state.selection.is_marked(&dir) {
         state.selection.sized(&dir, summary.bytes);
         events.push(Event::Selection);
@@ -2101,6 +2597,7 @@ fn done_import_checked(
     match result {
         Err(error) => {
             op.status = OpStatus::Failed;
+            op.failure = Some(error.clone());
             Effects {
                 jobs: vec![],
                 events: vec![
@@ -2158,6 +2655,7 @@ fn done_planned(
         Err(message) => {
             if let Some(op) = state.queue.get_mut(op_id) {
                 op.status = OpStatus::Failed;
+                op.failure = Some(message.clone());
             }
             let mut effects = run_next(state);
             effects.events.insert(0, Event::Queue(op_id));
@@ -2218,11 +2716,10 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
 
         if op.status == OpStatus::Failed {
             let total = outcome.done + outcome.skipped + outcome.failed.len();
-            let detail = if outcome.failed.len() == 1 {
-                format!(": {}", outcome.failed[0].1)
-            } else {
-                String::new()
-            };
+            let reason = outcome.failed.first().map(|(_, reason)| reason.clone());
+            op.failure = reason.clone();
+            op.failed = outcome.failed.clone();
+            let detail = reason.map_or_else(String::new, |reason| format!(": {reason}"));
             events.push(Event::Note(Note::error(
                 "op-failed",
                 format!("{} of {} failed{detail}", outcome.failed.len(), total),
@@ -2269,6 +2766,17 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
     }
 
     if !moved_or_deleted.is_empty() {
+        for tab in &mut state.tabs.tabs {
+            if let Some(context) = &mut tab.context {
+                context.selection.forget_paths(&moved_or_deleted);
+                for selection in &mut context.parked_selections {
+                    selection.forget_paths(&moved_or_deleted);
+                }
+                for path in &moved_or_deleted {
+                    context.marked_search_identities.remove(path);
+                }
+            }
+        }
         state.selection.forget_paths(&moved_or_deleted);
         for selection in &mut state.parked_selections {
             selection.forget_paths(&moved_or_deleted);
@@ -2544,6 +3052,7 @@ mod tests {
             truncated: false,
             error: None,
             dir_mtime: None,
+            space: None,
         }
     }
 
@@ -2811,6 +3320,201 @@ mod tests {
     }
 
     #[test]
+    fn commander_panes_keep_distinct_sorts_and_filters_on_a_shared_listing() {
+        let mut state = state_at("/home");
+        apply(
+            &mut state,
+            Change::Command(Command::RestoreCommander {
+                dirs: ["/home".into(), "/home".into()],
+                active: 0,
+                enabled: true,
+            }),
+        );
+        apply(
+            &mut state,
+            Change::Done(Done::Listed(listing_at(
+                "/home",
+                vec![
+                    entry_named("/home", "apple.txt", EntryKind::File),
+                    entry_named("/home", "banana.txt", EntryKind::File),
+                    entry_named("/home", "cherry.txt", EntryKind::File),
+                ],
+            ))),
+        );
+        let visible = |state: &State, index: usize| -> Vec<String> {
+            state
+                .rows(state.tabs.active().stacks[index].active())
+                .iter()
+                .map(|entry| entry.display.clone())
+                .collect()
+        };
+        let reversed = SortOrder {
+            reverse: true,
+            ..SortOrder::default()
+        };
+        apply(&mut state, Change::Command(Command::SetSort(reversed)));
+        assert_eq!(
+            visible(&state, 1),
+            ["cherry.txt", "banana.txt", "apple.txt"]
+        );
+        assert_eq!(
+            visible(&state, 2),
+            ["apple.txt", "banana.txt", "cherry.txt"]
+        );
+
+        apply(
+            &mut state,
+            Change::Command(Command::SetFilter("app".into())),
+        );
+        assert_eq!(visible(&state, 1), ["apple.txt"]);
+        assert_eq!(visible(&state, 2).len(), 3);
+        apply(&mut state, Change::Command(Command::FocusPane(1)));
+        assert_eq!(state.active_sort(), SortOrder::default());
+        apply(
+            &mut state,
+            Change::Command(Command::SetFilter("ban".into())),
+        );
+        assert_eq!(visible(&state, 1), ["apple.txt"]);
+        assert_eq!(visible(&state, 2), ["banana.txt"]);
+        apply(&mut state, Change::Command(Command::ClearFilter));
+        assert_eq!(visible(&state, 1), ["apple.txt"]);
+        assert_eq!(
+            visible(&state, 2),
+            ["apple.txt", "banana.txt", "cherry.txt"]
+        );
+
+        apply(&mut state, Change::Command(Command::FocusPane(0)));
+        apply(&mut state, Change::Command(Command::ClearFilter));
+        apply(
+            &mut state,
+            Change::Done(Done::Listed(listing_at(
+                "/home",
+                vec![
+                    entry_named("/home", "apple.txt", EntryKind::File),
+                    entry_named("/home", "banana.txt", EntryKind::File),
+                    entry_named("/home", "cherry.txt", EntryKind::File),
+                ],
+            ))),
+        );
+        assert_eq!(
+            visible(&state, 1),
+            ["cherry.txt", "banana.txt", "apple.txt"]
+        );
+        assert_eq!(
+            visible(&state, 2),
+            ["apple.txt", "banana.txt", "cherry.txt"]
+        );
+
+        assert_eq!(state.active_sort(), reversed);
+        assert_eq!(state.active_frame().filter, "");
+        apply(&mut state, Change::Command(Command::ToggleView));
+        assert_eq!(state.active_sort(), SortOrder::default());
+        apply(&mut state, Change::Command(Command::ToggleView));
+        assert_eq!(state.active_sort(), reversed);
+        assert_eq!(
+            visible(&state, 1),
+            ["cherry.txt", "banana.txt", "apple.txt"]
+        );
+    }
+
+    #[test]
+    fn restored_commander_sort_orders_are_independent() {
+        let mut state = state_at("/home");
+        apply(
+            &mut state,
+            Change::Command(Command::RestoreCommander {
+                dirs: ["/left".into(), "/right".into()],
+                active: 1,
+                enabled: true,
+            }),
+        );
+        let fold = SortOrder::default();
+        let left = SortOrder {
+            reverse: true,
+            ..fold
+        };
+        let right = SortOrder {
+            key: super::super::sort::SortKey::Size,
+            ..fold
+        };
+        apply(
+            &mut state,
+            Change::Command(Command::RestoreSorts {
+                fold: Some(fold),
+                panes: [Some(left), Some(right)],
+            }),
+        );
+        assert_eq!(state.active_sort(), right);
+        apply(&mut state, Change::Command(Command::FocusPane(0)));
+        assert_eq!(state.active_sort(), left);
+        apply(&mut state, Change::Command(Command::ToggleView));
+        assert_eq!(state.active_sort(), fold);
+    }
+
+    #[test]
+    fn active_copy_blocks_changes_to_its_source_tree_and_target() {
+        let mut state = state_at("/home");
+        let id = state.queue.enqueue(
+            OpKind::Copy,
+            vec!["/home/source".into()],
+            Some("/backup".into()),
+            ConflictPolicy::Ask,
+        );
+        state.queue.get_mut(id).unwrap().status = OpStatus::Running;
+
+        let blocked = [
+            Command::QueueDeleteSources(vec!["/home/source/child".into()]),
+            Command::QueueRename {
+                from: "/home".into(),
+                to: "/renamed".into(),
+            },
+            Command::QueueOperation {
+                kind: OpKind::Move,
+                sources: vec!["/backup/source".into()],
+                dest: Some("/elsewhere".into()),
+            },
+            Command::QueueDrop {
+                kind: OpKind::Copy,
+                sources: vec!["/other/source".into()],
+                dest: "/backup".into(),
+            },
+            Command::Create {
+                dir: "/backup".into(),
+                kind: CreateKind::File,
+                name: "source".into(),
+            },
+            Command::BeginImport {
+                sources: vec!["/remote/source".into()],
+                dest: "/backup".into(),
+            },
+            Command::BeginExport(vec!["/backup/source".into()]),
+        ];
+        for command in blocked {
+            let effects = apply(&mut state, Change::Command(command));
+            assert!(effects.jobs.is_empty());
+            assert!(
+                matches!(effects.events.as_slice(), [Event::Note(note)] if note.key == Some("copy-locked"))
+            );
+            assert_eq!(state.queue.len(), 1);
+        }
+
+        let unrelated = apply(
+            &mut state,
+            Change::Command(Command::QueueDeleteSources(vec!["/backup/other".into()])),
+        );
+        assert!(matches!(unrelated.events.first(), Some(Event::Queue(_))));
+        assert_eq!(state.queue.len(), 2);
+
+        state.queue.get_mut(id).unwrap().status = OpStatus::Done;
+        let after = apply(
+            &mut state,
+            Change::Command(Command::QueueDeleteSources(vec!["/home/source".into()])),
+        );
+        assert!(matches!(after.events.first(), Some(Event::Queue(_))));
+        assert_eq!(state.queue.len(), 3);
+    }
+
+    #[test]
     fn togglemark_marks_the_cursor_entry_and_moves_down() {
         let mut s = state_at("/home");
         apply(
@@ -2975,6 +3679,30 @@ mod tests {
         );
         assert!(matches!(effects.jobs.as_slice(), [Job::Run { .. }]));
         assert_eq!(s.queue.iter().next().unwrap().status, OpStatus::Running);
+    }
+
+    #[test]
+    fn sudo_retry_only_enqueues_failed_permission_delete_sources() {
+        let mut s = state_at("/home");
+        let original = s.queue.enqueue(
+            OpKind::Delete(DeleteHow::Permanent),
+            vec!["/home/denied".into(), "/home/other".into()],
+            None,
+            ConflictPolicy::Ask,
+        );
+        let op = s.queue.get_mut(original).unwrap();
+        op.status = OpStatus::Failed;
+        op.failed = vec![("/home/denied".into(), "Permission denied".into())];
+        let effects = apply(
+            &mut s,
+            Change::Command(Command::QueueElevatedDelete(original)),
+        );
+        assert!(
+            matches!(effects.jobs.as_slice(), [Job::RunElevated { sources, .. }] if sources == &vec![PathBuf::from("/home/denied")])
+        );
+        let retry = s.queue.iter().last().unwrap();
+        assert!(retry.elevated);
+        assert_eq!(retry.status, OpStatus::Running);
     }
 
     #[test]
@@ -3188,6 +3916,7 @@ mod tests {
             s.queue.get_mut(id).unwrap().trash_failure.as_deref(),
             Some("trash directory is unavailable")
         );
+        assert_eq!(s.queue.get_mut(id).unwrap().failed.len(), 1);
         assert!(s.selection.is_marked(&source));
 
         apply(
@@ -3224,6 +3953,28 @@ mod tests {
     }
 
     #[test]
+    fn empty_drive_trash_queues_only_this_users_trash() {
+        let mut state = state_at("/home");
+        let mount = PathBuf::from("/run/media/me/USB");
+        state.places.locations.push(super::super::places::Location {
+            name: "USB".into(),
+            path: mount.clone(),
+            kind: super::super::places::LocationKind::Device,
+            unmount_source: Some("/dev/sdb1".into()),
+            info: Some(super::super::places::LocationInfo::default()),
+        });
+        apply(
+            &mut state,
+            Change::Command(Command::EmptyDriveTrash(mount.clone())),
+        );
+        let op = state.queue.iter().next().expect("queued drive trash");
+        assert_eq!(op.title(), "EMPTY TRASH: USB");
+        assert_eq!(op.kind, OpKind::Delete(DeleteHow::Permanent));
+        assert_eq!(op.sources, places::drive_trash_paths(&mount));
+        assert!(!op.sources.iter().any(|path| path == &mount.join(".Trash")));
+    }
+
+    #[test]
     fn a_marked_directory_size_does_not_replace_its_tree() {
         let mut s = state_at("/home");
         let path = PathBuf::from("/home/folder");
@@ -3231,6 +3982,7 @@ mod tests {
         apply(
             &mut s,
             Change::Done(Done::Previewed {
+                tab: TabId(0),
                 path: path.clone(),
                 generation: 1,
                 preview: Preview::Dir(super::super::preview::directory::Tree {
@@ -3269,6 +4021,7 @@ mod tests {
         let effects = apply(
             &mut s,
             Change::Done(Done::Previewed {
+                tab: TabId(0),
                 path: "/home/a.txt".into(),
                 generation: 1,
                 preview: Preview::Empty,

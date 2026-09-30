@@ -107,6 +107,7 @@ impl Senders {
             Job::CheckImport { .. }
             | Job::Plan { .. }
             | Job::Run { .. }
+            | Job::RunElevated { .. }
             | Job::UnmountPlace { .. } => &self.ops,
             _ => &self.io,
         };
@@ -140,6 +141,7 @@ pub enum Job {
     },
     List(PathBuf),
     Search {
+        tab: super::tab::TabId,
         generation: u64,
         root: PathBuf,
         query: String,
@@ -155,11 +157,13 @@ pub enum Job {
     },
     Summarize(PathBuf),
     PreviewPage {
+        tab: super::tab::TabId,
         path: PathBuf,
         generation: u64,
         page: u32,
     },
     Preview {
+        tab: super::tab::TabId,
         path: PathBuf,
         generation: u64,
     },
@@ -189,6 +193,11 @@ pub enum Job {
         rename_targets: Vec<(PathBuf, PathBuf)>,
         progress: Arc<Progress>,
         expected: Vec<(PathBuf, search::Identity)>,
+    },
+    RunElevated {
+        op: OpId,
+        sources: Vec<PathBuf>,
+        progress: Arc<Progress>,
     },
     Shutdown,
 }
@@ -223,6 +232,7 @@ pub enum Done {
     },
     Listed(Listing),
     Searched {
+        tab: super::tab::TabId,
         generation: u64,
         found: Arc<search::Found>,
     },
@@ -237,6 +247,7 @@ pub enum Done {
         summary: DirSummary,
     },
     Previewed {
+        tab: super::tab::TabId,
         path: PathBuf,
         generation: u64,
         preview: Preview,
@@ -288,7 +299,8 @@ pub fn read_startup(location: StartupLocation, cfg: &ListConfig) -> Done {
             None,
         )
     };
-    let listing = listing::read(&actual, cfg);
+    let mut listing = listing::read(&actual, cfg);
+    listing.space = places::filesystem_space(&actual);
     Done::StartupListed {
         requested,
         listing,
@@ -296,23 +308,15 @@ pub fn read_startup(location: StartupLocation, cfg: &ListConfig) -> Done {
     }
 }
 
-/// Every directory currently open in any frame of any stack of any tab, with
-/// no duplicates -- what the mtime poll watches.
-///
-/// Milestone 1 is one tab and one stack, but this walks the whole of `State`
-/// rather than assuming that, so a later tab or a forked stack is watched for
-/// free. `Stack::frames` is *every* level the stack remembers, not only the
-/// crumb trail up to the active one: a directory `jump_to` stepped away from
-/// (but `forward` could still step back into) is still on screen nowhere,
-/// but it is one `alt+down` from being drawn again, and a change to it while
-/// it is out of view should not go unnoticed until then.
+/// Poll only the visible workspace. Switching tabs revalidates its cached
+/// listings, so unavailable background volumes cannot block active browsing.
 fn watched_dirs(state: &Arc<RwLock<State>>) -> Vec<PathBuf> {
     let s = state.read().unwrap_or_else(|e| e.into_inner());
     let mut dirs: Vec<PathBuf> = s
         .tabs
-        .tabs
+        .active()
+        .stacks
         .iter()
-        .flat_map(|tab| tab.stacks.iter())
         .flat_map(|stack| stack.frames().iter().map(|frame| frame.dir.clone()))
         .collect();
     dirs.sort();
@@ -329,6 +333,15 @@ fn watched_dirs(state: &Arc<RwLock<State>>) -> Vec<PathBuf> {
 fn is_stale_preview(state: &Arc<RwLock<State>>, generation: u64) -> bool {
     let s = state.read().unwrap_or_else(|e| e.into_inner());
     generation < s.preview_generation
+}
+
+fn is_stale_tab_preview(
+    state: &Arc<RwLock<State>>,
+    tab: super::tab::TabId,
+    generation: u64,
+) -> bool {
+    let s = state.read().unwrap_or_else(|e| e.into_inner());
+    s.tabs.active().id != tab || generation < s.preview_generation
 }
 
 /// Fold one [`Done`] into `state` and dispatch whatever it implies, taking
@@ -394,10 +407,12 @@ pub fn perform_io(
             result: places::save_bookmarks(&path, &bookmarks),
         }),
         Job::List(dir) => {
-            let listing = listing::read(&dir, &cfg.list);
+            let mut listing = listing::read(&dir, &cfg.list);
+            listing.space = places::filesystem_space(&dir);
             IoOutcome::Done(Done::Listed(listing))
         }
         Job::Search {
+            tab,
             generation,
             root,
             query,
@@ -405,6 +420,7 @@ pub fn perform_io(
             include_hidden,
             progress,
         } => IoOutcome::Done(Done::Searched {
+            tab,
             generation,
             found: Arc::new(search::scan_mode(
                 &root,
@@ -433,28 +449,34 @@ pub fn perform_io(
             let summary = summary::summarize(&dir, &budget, cancel);
             IoOutcome::Done(Done::Summarized { dir, summary })
         }
-        Job::Preview { path, generation } => {
+        Job::Preview {
+            tab,
+            path,
+            generation,
+        } => {
             // Builds are synchronous on this one thread, so a preview cannot
             // be cancelled *mid*-build the way a running op can be; what
             // matters is not starting a build for a file the cursor has
             // already left, which this check catches before any bytes are
             // read.
-            if is_stale_preview(state, generation) {
+            if is_stale_tab_preview(state, tab, generation) {
                 return IoOutcome::None;
             }
             let preview = preview::build(&path, &cfg.preview, cancel);
             IoOutcome::Done(Done::Previewed {
+                tab,
                 path,
                 generation,
                 preview,
             })
         }
         Job::PreviewPage {
+            tab,
             path,
             generation,
             page,
         } => {
-            if is_stale_preview(state, generation) {
+            if is_stale_tab_preview(state, tab, generation) {
                 return IoOutcome::None;
             }
             let mut head = [0; 512];
@@ -466,6 +488,7 @@ pub fn perform_io(
                 .map(Preview::Document)
                 .unwrap_or(Preview::Empty);
             IoOutcome::Done(Done::Previewed {
+                tab,
                 path,
                 generation,
                 preview,
@@ -487,6 +510,7 @@ pub fn perform_io(
         | Job::CheckImport { .. }
         | Job::Plan { .. }
         | Job::Run { .. }
+        | Job::RunElevated { .. }
         | Job::UnmountPlace { .. } => IoOutcome::None,
     }
 }
@@ -581,8 +605,19 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
                 &progress,
                 &rename_targets,
             );
+            for (path, reason) in &outcome.failed {
+                tracing::warn!(operation = ?kind, path = %path.display(), %reason, "file operation failed");
+            }
             Some(Done::Finished { op, outcome })
         }
+        Job::RunElevated {
+            op,
+            sources,
+            progress,
+        } => Some(Done::Finished {
+            op,
+            outcome: super::elevated::run(&sources, &progress),
+        }),
         Job::UnmountPlace { path, source } => Some(Done::PlaceUnmounted {
             result: places::unmount_location(&path, &source),
             path,
@@ -630,6 +665,32 @@ pub fn spawn_io(
                 stop.clone(),
             );
 
+            // Searches retain their owning tab, but do not hold up directory
+            // reads or operation requests when the user switches workspaces.
+            let (search_tx, search_rx) = crossbeam_channel::bounded::<Job>(256);
+            let search_state = state.clone();
+            let search_events = events.clone();
+            let search_senders = senders.clone();
+            let search_cfg = cfg.clone();
+            let search_stop = stop.clone();
+            let search_thread = std::thread::Builder::new()
+                .name("starfold-search".into())
+                .spawn(move || {
+                    while let Ok(job) = search_rx.recv() {
+                        if search_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        match perform_io(job, &search_cfg, &search_state, &search_stop) {
+                            IoOutcome::Done(done) => {
+                                finish(done, &search_state, &search_events, &search_senders)
+                            }
+                            IoOutcome::Note(note) => search_events.send(Event::Note(note)),
+                            IoOutcome::None => {}
+                        }
+                    }
+                })
+                .expect("spawning search thread");
+
             loop {
                 let job = match jobs.recv_timeout(POLL) {
                     Ok(job) => job,
@@ -664,6 +725,41 @@ pub fn spawn_io(
 
                 match job {
                     Job::Shutdown => break,
+                    job @ Job::Search { .. } => {
+                        if let Err(error) = search_tx.try_send(job) {
+                            if let Job::Search {
+                                tab,
+                                generation,
+                                progress,
+                                ..
+                            } = error.into_inner()
+                            {
+                                progress
+                                    .cancel
+                                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                                finish(
+                                    Done::Searched {
+                                        tab,
+                                        generation,
+                                        found: Arc::new(search::Found {
+                                            entries: vec![],
+                                            identities: Default::default(),
+                                            excerpts: Default::default(),
+                                            skipped_binary: 0,
+                                            skipped_large: 0,
+                                            status: search::Status::Cancelled,
+                                            errors: vec![
+                                                "Search queue is full; retry the search".into()
+                                            ],
+                                        }),
+                                    },
+                                    &state,
+                                    &events,
+                                    &senders,
+                                );
+                            }
+                        }
+                    }
                     job @ (Job::Preview { .. } | Job::PreviewPage { .. } | Job::ClosePreview) => {
                         // Obsolete requests are skipped by the preview worker.
                         if let Err(crossbeam_channel::TrySendError::Full(job)) =
@@ -676,6 +772,7 @@ pub fn spawn_io(
                     other @ (Job::CheckImport { .. }
                     | Job::Plan { .. }
                     | Job::Run { .. }
+                    | Job::RunElevated { .. }
                     | Job::UnmountPlace { .. }) => {
                         // `Senders::dispatch` always routes these to `ops`;
                         // arriving here would mean something upstream sent a
@@ -694,7 +791,26 @@ pub fn spawn_io(
                 }
             }
             stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            {
+                let state = state.read().unwrap_or_else(|e| e.into_inner());
+                if let Some(search) = &state.search {
+                    search
+                        .progress
+                        .cancel
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                for tab in &state.tabs.tabs {
+                    if let Some(search) = tab.context.as_ref().and_then(|c| c.search.as_ref()) {
+                        search
+                            .progress
+                            .cancel
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+            drop(search_tx);
             drop(preview_tx);
+            let _ = search_thread.join();
             let _ = preview_thread.join();
         })
         .expect("spawning the io thread")
@@ -720,22 +836,28 @@ fn spawn_preview(
                     connection.close();
                     continue;
                 }
-                let (path, generation, page) = match job {
-                    Job::Preview { path, generation } => (path, generation, 1),
+                let (tab, path, generation, page) = match job {
+                    Job::Preview {
+                        tab,
+                        path,
+                        generation,
+                    } => (tab, path, generation, 1),
                     Job::PreviewPage {
+                        tab,
                         path,
                         generation,
                         page,
-                    } => (path, generation, page),
+                    } => (tab, path, generation, page),
                     _ => continue,
                 };
                 let stale = || {
                     stop.load(std::sync::atomic::Ordering::Relaxed)
-                        || is_stale_preview(&state, generation)
+                        || is_stale_tab_preview(&state, tab, generation)
                 };
                 if let Some(preview) = connection.build(&path, page, &cfg, &stale) {
                     finish(
                         Done::Previewed {
+                            tab,
                             path,
                             generation,
                             preview,
@@ -767,6 +889,7 @@ pub fn spawn_ops(
                     other @ (Job::CheckImport { .. }
                     | Job::Plan { .. }
                     | Job::Run { .. }
+                    | Job::RunElevated { .. }
                     | Job::UnmountPlace { .. }) => {
                         if let Some(done) = perform_ops(other, &cfg) {
                             finish(done, &state, &events, &senders);
@@ -990,6 +1113,15 @@ mod tests {
              until it is real this stays empty"
         );
         assert!(
+            state
+                .read()
+                .unwrap()
+                .listing_of(dir.path())
+                .and_then(|listing| listing.space)
+                .is_some_and(|(total, available)| total > 0 && available <= total),
+            "a listed pane receives its filesystem capacity"
+        );
+        assert!(
             matches!(event_rx.try_recv(), Ok(Event::Listing(_))),
             "state::apply (Phase 1b) is what emits Event::Listing"
         );
@@ -1025,6 +1157,7 @@ mod tests {
         senders.dispatch(Job::Summarize("/a".into()));
         senders.dispatch(Job::Open("/a".into()));
         senders.dispatch(Job::Preview {
+            tab: super::super::tab::TabId(0),
             path: "/a".into(),
             generation: 0,
         });

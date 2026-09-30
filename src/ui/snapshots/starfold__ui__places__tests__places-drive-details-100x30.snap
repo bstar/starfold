@@ -27,5 +27,5 @@ expression: "drawn(&mut drive, 100, 30)"
   ║                                                    │                                         ║
   ║                                                    │                                         ║
   ║                                                    │                                         ║
-  ║F2 edit  del remove  F5 scan  F6 unmount  F3 info                                             ║
-  ╚═════════ enter open · F2 rename · F3 info · del remove · F5 refresh · F6 unmount · esc close ╝
+  ║F2 edit  del remove  F5 scan  F6 unmount  F3 info  F7 empty trash                             ║
+  ╚═══════ enter open · F2 rename · F3 info · del remove · F5 scan · F6 unmount · F7 trash · esc ╝

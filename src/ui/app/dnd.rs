@@ -45,11 +45,10 @@ impl App {
             (Bar::Stack, 0)
         };
         if self.dnd.drag_active
-            && self
-                .dnd
-                .offer
-                .as_ref()
-                .is_some_and(|offer| offer.source_stack == stack_index)
+            && self.dnd.offer.as_ref().is_some_and(|offer| {
+                offer.source_stack == stack_index
+                    && offer.source_tab == self.core.state().tabs.active().id
+            })
         {
             self.dnd_edge = None;
             return;
@@ -243,6 +242,7 @@ impl App {
             sources,
             uri_text: uri_text.clone(),
             source_stack,
+            source_tab: self.core.state().tabs.active().id,
         });
         self.dnd.drag_active = true;
         // SSH exports are copy-only. In-window Move remains possible through
@@ -439,17 +439,19 @@ impl App {
                     self.dnd_error();
                     return;
                 };
+                let previous = self.core.state().queue.iter().last().map(|op| op.id);
                 self.core.send(Command::BeginImport {
                     sources: paths.clone(),
                     dest: choice.dest.clone(),
                 });
                 let latest = {
                     let state = self.core.state();
-                    let id = state.queue.iter().last().map(|op| op.id);
-                    id
+                    state.queue.iter().last().map(|op| op.id)
                 };
-                let Some(op_id) = latest else {
-                    self.dnd_error();
+                let Some(op_id) =
+                    latest.filter(|id| previous.is_none_or(|previous| *id > previous))
+                else {
+                    self.dnd_error_with("copy in progress; destination is locked");
                     return;
                 };
                 self.dnd.import_op = Some(op_id);
@@ -575,9 +577,17 @@ impl App {
         };
         let Some(offer) = &self.dnd.offer else { return };
         if self.dnd.export_op.is_none() {
+            let previous = self.core.state().queue.iter().last().map(|op| op.id);
             self.core.send(Command::BeginExport(offer.sources.clone()));
             let state = self.core.state();
-            let Some(op) = state.queue.iter().last() else {
+            let Some(op) = state
+                .queue
+                .iter()
+                .last()
+                .filter(|op| previous.is_none_or(|id| op.id > id))
+            else {
+                drop(state);
+                let _ = wire::send("t=E:i=1", Some("EBUSY: copy in progress"));
                 return;
             };
             let id = op.id;
@@ -615,26 +625,35 @@ impl App {
     }
 
     fn dnd_queue(&mut self, sources: Vec<PathBuf>, kind: OpKind) {
-        let Some(choice) = self.dnd.choice.take() else {
+        let Some(choice) = self.dnd.choice.as_ref() else {
             return;
         };
         if sources.is_empty() {
             self.dnd_error();
             return;
         }
+        let previous = self.core.state().queue.iter().last().map(|op| op.id);
         self.core.send(Command::QueueDrop {
             kind,
             sources,
-            dest: choice.dest,
+            dest: choice.dest.clone(),
         });
-        let op = self.core.state().queue.iter().last().map(|op| op.id);
+        let op = self
+            .core
+            .state()
+            .queue
+            .iter()
+            .last()
+            .map(|op| op.id)
+            .filter(|id| previous.is_none_or(|previous| *id > previous));
         if let Some(op) = op {
+            self.dnd.choice.take();
             self.dnd.active = Some(Active {
                 op,
                 result_operation: kind,
             });
         } else {
-            self.dnd_error();
+            self.dnd_error_with("copy in progress; file is locked");
         }
     }
 

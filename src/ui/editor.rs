@@ -93,7 +93,7 @@ impl Editor {
         Self::spawn(path, size, argv)
     }
 
-    fn spawn(path: PathBuf, size: (u16, u16), argv: Vec<OsString>) -> Result<Self> {
+    pub(super) fn spawn(path: PathBuf, size: (u16, u16), argv: Vec<OsString>) -> Result<Self> {
         let size = (size.0.max(1), size.1.max(1));
         let pty_size = PtySize {
             cols: size.0,

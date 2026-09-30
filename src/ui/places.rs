@@ -65,6 +65,7 @@ pub enum PlaceAction {
     RenameBookmark { path: PathBuf, name: String },
     RemoveBookmark(PathBuf),
     Unmount { path: PathBuf, source: PathBuf },
+    EmptyTrash(PathBuf),
     Refresh,
 }
 
@@ -87,6 +88,10 @@ enum Mode {
         source: PathBuf,
         name: String,
     },
+    ConfirmEmptyTrash {
+        path: PathBuf,
+        name: String,
+    },
 }
 
 #[derive(Debug)]
@@ -100,6 +105,7 @@ pub struct Places {
     unmounting: Option<PathBuf>,
     spinner: &'static str,
     error: Option<String>,
+    notice: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,6 +117,7 @@ enum Row {
 const REMOVE_YES: &str = "y remove";
 const REMOVE_NO: &str = "n keep";
 const UNMOUNT_YES: &str = "y unmount";
+const EMPTY_TRASH_YES: &str = "y empty trash";
 const REMOVE_GAP: u16 = 3;
 
 impl Places {
@@ -125,6 +132,7 @@ impl Places {
             unmounting: None,
             spinner: crate::ui::SPINNER[0],
             error: None,
+            notice: None,
         }
     }
 
@@ -273,11 +281,24 @@ impl Places {
                 }
                 _ => PlaceAction::Consumed,
             },
+            Mode::ConfirmEmptyTrash { path, .. } => match key.code {
+                KeyCode::Char('y') if key.modifiers.is_empty() => {
+                    let path = path.clone();
+                    self.mode = Mode::Browse;
+                    PlaceAction::EmptyTrash(path)
+                }
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.mode = Mode::Browse;
+                    PlaceAction::Consumed
+                }
+                _ => PlaceAction::Consumed,
+            },
             Mode::Browse => self.handle_browse(key),
         }
     }
 
     fn handle_browse(&mut self, key: KeyEvent) -> PlaceAction {
+        self.notice = None;
         match key.code {
             KeyCode::Esc => return PlaceAction::Close,
             KeyCode::Up => self.move_selection(-1),
@@ -299,6 +320,7 @@ impl Places {
             }
             KeyCode::Delete => return self.start_remove(),
             KeyCode::F(6) => return self.start_unmount(),
+            KeyCode::F(7) => return self.start_empty_trash(),
             KeyCode::F(5) => return PlaceAction::Refresh,
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.search.clear();
@@ -370,6 +392,22 @@ impl Places {
         self.mode = Mode::ConfirmUnmount {
             path: item.path.clone(),
             source: item.unmount_source.clone().expect("checked above"),
+            name: item.name.clone(),
+        };
+        PlaceAction::Consumed
+    }
+
+    fn start_empty_trash(&mut self) -> PlaceAction {
+        let Some(item) = self.selected_item().filter(|item| item.info.is_some()) else {
+            return PlaceAction::Consumed;
+        };
+        if item.info.as_ref().is_some_and(|info| info.trash_disabled) {
+            self.notice =
+                Some("Trash is disabled on this drive; there is nothing to empty.".into());
+            return PlaceAction::Consumed;
+        }
+        self.mode = Mode::ConfirmEmptyTrash {
+            path: item.path.clone(),
             name: item.name.clone(),
         };
         PlaceAction::Consumed
@@ -503,6 +541,25 @@ impl Places {
                 }
                 return PlaceAction::Consumed;
             }
+            Mode::ConfirmEmptyTrash { path, .. } => {
+                if y == inner.y.saturating_add(2) {
+                    let yes_width = width_of(EMPTY_TRASH_YES).min(inner.width);
+                    let no_start = width_of(EMPTY_TRASH_YES).saturating_add(REMOVE_GAP);
+                    let no_end = no_start
+                        .saturating_add(width_of(REMOVE_NO))
+                        .min(inner.width);
+                    let left = x.saturating_sub(inner.x);
+                    if x >= inner.x && left < yes_width {
+                        let path = path.clone();
+                        self.mode = Mode::Browse;
+                        return PlaceAction::EmptyTrash(path);
+                    }
+                    if left >= no_start && left < no_end {
+                        self.mode = Mode::Browse;
+                    }
+                }
+                return PlaceAction::Consumed;
+            }
             Mode::Browse => {}
         }
         let actions_y = inner.y + inner.height.saturating_sub(1);
@@ -517,6 +574,7 @@ impl Places {
                     self.mode = Mode::Details;
                     PlaceAction::Consumed
                 }
+                51..=66 => self.start_empty_trash(),
                 _ => PlaceAction::Consumed,
             };
         }
@@ -638,14 +696,15 @@ pub fn render(
         return None;
     }
     let footer = match places.mode {
-        Mode::Browse if rr.width < 70 => "enter open · F3 info · F6 unmount · esc close",
+        Mode::Browse if rr.width < 70 => "enter open · F7 empty trash · esc close",
         Mode::Browse => {
-            "enter open · F2 rename · F3 info · del remove · F5 refresh · F6 unmount · esc close"
+            "enter open · F2 rename · F3 info · del remove · F5 scan · F6 unmount · F7 trash · esc"
         }
         Mode::Details => "enter open · esc back",
         Mode::Edit { .. } => "enter save · esc back",
         Mode::ConfirmRemove { .. } => "y remove · n keep",
         Mode::ConfirmUnmount { .. } => "y unmount · n keep",
+        Mode::ConfirmEmptyTrash { .. } => "y empty trash · n keep",
     };
     let inner = overlay::render(
         rr,
@@ -773,6 +832,37 @@ pub fn render(
             }
             None
         }
+        Mode::ConfirmEmptyTrash { name, path } => {
+            buf.set_string(
+                inner.x,
+                inner.y,
+                fit("EMPTY DRIVE TRASH PERMANENTLY?", inner.width),
+                Style::default().fg(rgb(theme.fold.error_fg)),
+            );
+            if inner.height > 1 {
+                buf.set_string(
+                    inner.x,
+                    inner.y + 1,
+                    fit(&format!("{name}  {}", path.display()), inner.width),
+                    Style::default().fg(rgb(theme.fg)),
+                );
+            }
+            if inner.height > 2 {
+                buf.set_string(
+                    inner.x,
+                    inner.y + 2,
+                    fit(
+                        &format!(
+                            "{EMPTY_TRASH_YES}{}{REMOVE_NO}",
+                            " ".repeat(usize::from(REMOVE_GAP))
+                        ),
+                        inner.width,
+                    ),
+                    Style::default().fg(rgb(theme.accent)),
+                );
+            }
+            None
+        }
         Mode::Browse => {
             let style = Style::default().fg(rgb(theme.fg));
             buf.set_string(
@@ -802,6 +892,8 @@ pub fn render(
                 });
                 let status = if let Some(activity) = activity.as_deref() {
                     activity
+                } else if let Some(notice) = &places.notice {
+                    notice.as_str()
                 } else if let Some(error) = &places.error {
                     error.as_str()
                 } else if places.loading {
@@ -811,6 +903,8 @@ pub fn render(
                 };
                 let color = if activity.is_some() {
                     theme.fold.progress_fg
+                } else if places.notice.is_some() {
+                    theme.warn
                 } else if places.error.is_some() {
                     theme.fold.error_fg
                 } else {
@@ -960,7 +1054,7 @@ pub fn render(
                     inner.x,
                     action_y,
                     fit(
-                        "F2 edit  del remove  F5 scan  F6 unmount  F3 info",
+                        "F2 edit  del remove  F5 scan  F6 unmount  F3 info  F7 empty trash",
                         inner.width,
                     ),
                     Style::default().fg(rgb(theme.dim)),
@@ -1165,6 +1259,25 @@ mod tests {
                 source: "/dev/sdb1".into(),
             }
         );
+    }
+
+    #[test]
+    fn empty_trash_requires_a_drive_and_confirmation() {
+        let mut standard = Places::new(vec![item(PlaceGroup::Standard, "Home", "/home/me")]);
+        assert_eq!(standard.handle(key(KeyCode::F(7))), PlaceAction::Consumed);
+
+        let mut drive = Places::new(vec![device("USB", "/media/usb", "/dev/sdb1")]);
+        assert_eq!(drive.handle(key(KeyCode::F(7))), PlaceAction::Consumed);
+        assert_eq!(drive.handle(key(KeyCode::Char('n'))), PlaceAction::Consumed);
+        assert_eq!(drive.handle(key(KeyCode::F(7))), PlaceAction::Consumed);
+        assert_eq!(
+            drive.handle(key(KeyCode::Char('y'))),
+            PlaceAction::EmptyTrash("/media/usb".into())
+        );
+
+        drive.items[0].info.as_mut().unwrap().trash_disabled = true;
+        assert_eq!(drive.handle(key(KeyCode::F(7))), PlaceAction::Consumed);
+        assert!(drawn(&mut drive, 100, 30).contains("Trash is disabled on this drive"));
     }
 
     #[test]

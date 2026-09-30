@@ -3,11 +3,13 @@
 //! Atomics rather than a value behind the state lock: the worker thread
 //! updates this after every file it copies, and taking the write lock that
 //! often -- for numbers the UI only reads once a frame -- would serialise the
-//! copy against the thread drawing the status bar for no reason. `bar` and
-//! `line` are pure formatting over whatever the atomics say at the moment
-//! they are called.
+//! copy against the thread drawing the status bar for no reason. The ETA's
+//! recent samples are collected by the reader; workers only update atomics.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Shared between the op that is running and whoever is drawing its status.
 #[derive(Debug, Default)]
@@ -16,6 +18,62 @@ pub struct Progress {
     total: AtomicU64,
     received: AtomicU64,
     cancelled: AtomicBool,
+    estimate: Mutex<Estimate>,
+}
+
+#[derive(Debug, Default)]
+struct Estimate {
+    total: u64,
+    samples: VecDeque<(Instant, u64)>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TransferEstimate {
+    bytes_per_second: u64,
+    remaining: Option<Duration>,
+}
+
+impl Estimate {
+    fn sample(&mut self, now: Instant, done: u64, total: u64) -> Option<TransferEstimate> {
+        if self.total != total || self.samples.back().is_some_and(|(_, bytes)| done < *bytes) {
+            self.samples.clear();
+            self.total = total;
+        }
+        if total > 0 && done >= total {
+            self.samples.clear();
+            return None;
+        }
+        if self
+            .samples
+            .back()
+            .is_none_or(|(time, _)| now.duration_since(*time) >= Duration::from_secs(1))
+        {
+            self.samples.push_back((now, done));
+        }
+        // Keep a ten-second window, plus its boundary sample. This also
+        // ages out old throughput when a drive stops making progress.
+        while self.samples.len() > 2
+            && now.duration_since(self.samples[1].0) >= Duration::from_secs(10)
+        {
+            self.samples.pop_front();
+        }
+        let (start, first) = *self.samples.front()?;
+        let (end, last) = *self.samples.back()?;
+        let elapsed = end.duration_since(start);
+        let advanced = last.saturating_sub(first);
+        if elapsed < Duration::from_secs(2) {
+            return None;
+        }
+        let remaining = (total > 0 && advanced > 0).then(|| {
+            let seconds =
+                ((total - done) as f64 * elapsed.as_secs_f64() / advanced as f64).ceil() as u64;
+            Duration::from_secs(seconds.max(1))
+        });
+        Some(TransferEstimate {
+            bytes_per_second: (advanced as f64 / elapsed.as_secs_f64()).round() as u64,
+            remaining,
+        })
+    }
 }
 
 impl Progress {
@@ -25,6 +83,7 @@ impl Progress {
             total: AtomicU64::new(total),
             received: AtomicU64::new(0),
             cancelled: AtomicBool::new(false),
+            estimate: Mutex::default(),
         }
     }
 
@@ -117,6 +176,53 @@ impl Progress {
         s
     }
 
+    /// Speed and time remaining after enough time has been sampled.
+    /// Receiving and placement start separate speed samples.
+    pub fn bar_with_estimate(&self, width: usize) -> String {
+        let mut bar = self.bar(width);
+        bar.push_str(&self.transfer_details());
+        bar
+    }
+
+    /// Incoming SSH copies have a measured rate even before their size is known.
+    pub fn receiving_with_rate(&self, width: usize) -> String {
+        format!(
+            "{} {}{}",
+            self.receiving_bar(width),
+            crate::fold::format::size(self.done()),
+            self.transfer_details()
+        )
+    }
+
+    fn transfer_details(&self) -> String {
+        let mut details = String::new();
+        if !self.is_cancelled() {
+            let estimate = self
+                .estimate
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .sample(Instant::now(), self.done(), self.total());
+            if let Some(estimate) = estimate {
+                details.push_str(&format!(
+                    " · {}/s",
+                    crate::fold::format::size(estimate.bytes_per_second)
+                ));
+                if let Some(remaining) = estimate.remaining {
+                    let seconds = remaining.as_secs();
+                    let time = if seconds >= 3600 {
+                        format!("{}h {:02}m", seconds / 3600, seconds % 3600 / 60)
+                    } else if seconds >= 60 {
+                        format!("{}m {:02}s", seconds / 60, seconds % 60)
+                    } else {
+                        format!("{seconds}s")
+                    };
+                    details.push_str(&format!(" · ~{time} left"));
+                }
+            }
+        }
+        details
+    }
+
     /// `COPYING ███████▊░░ 78.0%`, the line the status row shows while an
     /// operation is running.
     pub fn line(&self, verb: &str) -> String {
@@ -127,6 +233,100 @@ impl Progress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfer_estimate_waits_for_samples_and_uses_measured_speed() {
+        let now = Instant::now();
+        let mut estimate = Estimate::default();
+        assert_eq!(estimate.sample(now, 0, 1_000), None);
+        assert_eq!(
+            estimate.sample(now + Duration::from_secs(1), 100, 1_000),
+            None
+        );
+        assert_eq!(
+            estimate.sample(now + Duration::from_secs(2), 200, 1_000),
+            Some(TransferEstimate {
+                bytes_per_second: 100,
+                remaining: Some(Duration::from_secs(8)),
+            })
+        );
+    }
+
+    #[test]
+    fn recent_speed_replaces_old_speed_and_ages_out_during_stalls() {
+        let now = Instant::now();
+        let mut estimate = Estimate::default();
+        for seconds in 0..=20 {
+            let done = if seconds <= 10 {
+                seconds * 100
+            } else {
+                1_000 + (seconds - 10) * 10
+            };
+            estimate.sample(now + Duration::from_secs(seconds), done, 2_000);
+        }
+        assert_eq!(
+            estimate.sample(now + Duration::from_secs(20), 1_100, 2_000),
+            Some(TransferEstimate {
+                bytes_per_second: 10,
+                remaining: Some(Duration::from_secs(90)),
+            })
+        );
+        for seconds in 21..=30 {
+            estimate.sample(now + Duration::from_secs(seconds), 1_100, 2_000);
+        }
+        assert_eq!(
+            estimate.sample(now + Duration::from_secs(30), 1_100, 2_000),
+            Some(TransferEstimate {
+                bytes_per_second: 0,
+                remaining: None,
+            })
+        );
+        assert!(estimate.samples.len() <= 11);
+    }
+
+    #[test]
+    fn receiving_has_speed_without_guessing_size_and_placement_resets_it() {
+        let now = Instant::now();
+        let mut estimate = Estimate::default();
+        estimate.sample(now, 0, 0);
+        assert_eq!(
+            estimate.sample(now + Duration::from_secs(2), 200, 0),
+            Some(TransferEstimate {
+                bytes_per_second: 100,
+                remaining: None,
+            })
+        );
+        assert_eq!(
+            estimate.sample(now + Duration::from_secs(3), 200, 400),
+            None
+        );
+        assert_eq!(
+            estimate.sample(now + Duration::from_secs(5), 220, 400),
+            Some(TransferEstimate {
+                bytes_per_second: 10,
+                remaining: Some(Duration::from_secs(18)),
+            })
+        );
+        assert_eq!(
+            estimate.sample(now + Duration::from_secs(6), 400, 400),
+            None
+        );
+    }
+
+    #[test]
+    fn transfer_bar_formats_speed_and_time_and_hides_them_after_cancel() {
+        let p = Progress::new(10_000_000);
+        p.add(2_400_000);
+        *p.estimate.lock().unwrap() = Estimate {
+            total: p.total(),
+            samples: VecDeque::from([(Instant::now() - Duration::from_secs(2), 0)]),
+        };
+        let bar = p.bar_with_estimate(10);
+        assert!(bar.contains("1.2 MB/s"), "{bar}");
+        assert!(bar.contains("left"), "{bar}");
+        p.cancel();
+        assert_eq!(p.bar_with_estimate(10), p.bar(10));
+    }
 
     #[test]
     fn the_fraction_is_zero_with_nothing_known() {

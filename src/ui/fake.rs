@@ -27,6 +27,11 @@ use crate::fold::state::State;
 use crate::fold::worker::{self, Done, IoOutcome, Job, Senders};
 use crate::fold::{listing, testing, FoldConfig};
 
+/// Fixed filesystem figures keep frame snapshots independent of the test
+/// machine's changing free space. Listings and operations still use the real
+/// fixture tree; only the display value is pinned.
+const FIXTURE_SPACE: (u64, u64) = (500_000_000_000, 125_000_000_000);
+
 /// A [`Handle`] with no worker threads behind it, and the plumbing that
 /// stands in for them.
 ///
@@ -75,7 +80,8 @@ pub fn handle(cfg: FoldConfig) -> (Handle, Fake) {
     // List the start directory synchronously, exactly as `Handle::spawn`
     // does, so the first frame a test draws already has rows instead of an
     // empty panel waiting for a thread that will never run.
-    let listing = listing::read(&home, &cfg.list);
+    let mut listing = listing::read(&home, &cfg.list);
+    listing.space = Some(FIXTURE_SPACE);
     worker::finish(Done::Listed(listing), &state, &events, &senders);
 
     let handle = Handle::from_parts(HandleParts {
@@ -139,6 +145,15 @@ impl Fake {
     fn run_io(&self, job: Job) {
         let cancel = AtomicBool::new(false);
         match worker::perform_io(job, &self.cfg, &self.state, &cancel) {
+            IoOutcome::Done(Done::Listed(mut listing)) => {
+                listing.space = Some(FIXTURE_SPACE);
+                worker::finish(
+                    Done::Listed(listing),
+                    &self.state,
+                    &self.events,
+                    &self.senders,
+                );
+            }
             IoOutcome::Done(done) => worker::finish(done, &self.state, &self.events, &self.senders),
             IoOutcome::Note(note) => self.events.send(Event::Note(note)),
             IoOutcome::None => {}

@@ -80,6 +80,19 @@ pub enum Command {
     RemoveBookmark(PathBuf),
     /// Surface a startup warning after the terminal has entered its window.
     Notify(String),
+    RememberTabScroll {
+        tab: super::tab::TabId,
+        rows: Vec<(usize, super::stack::FrameId, usize)>,
+    },
+    NewTab {
+        duplicate: bool,
+    },
+    SwitchTab(super::tab::TabId),
+    CloseTab(super::tab::TabId),
+    RenameTab(super::tab::TabId, String),
+    MoveTab(super::tab::TabId, i32),
+    ReopenTab,
+    RestoreTabs(Vec<crate::session::TabSession>, usize),
     ToggleView,
     FocusPane(usize),
     RestoreCommander {
@@ -118,6 +131,11 @@ pub enum Command {
     CancelSearch,
     CloseSearch,
     SetSort(SortOrder),
+    /// Restore Fold and both Commander sort orders from a session.
+    RestoreSorts {
+        fold: Option<SortOrder>,
+        panes: [Option<SortOrder>; 2],
+    },
     SetHidden(bool),
     /// Mark or unmark the entry under the cursor, and move down.
     ToggleMark,
@@ -169,6 +187,10 @@ pub enum Command {
     QueueDeleteSources(Vec<PathBuf>),
     /// Explicit permanent delete after a separate confirmation in the UI.
     QueuePermanentDeleteSources(Vec<PathBuf>),
+    /// Retry only permission-denied paths from a failed permanent delete.
+    QueueElevatedDelete(OpId),
+    /// Empty this mounted volume's trash after confirmation in Places.
+    EmptyDriveTrash(PathBuf),
     QueueRename {
         from: PathBuf,
         to: PathBuf,

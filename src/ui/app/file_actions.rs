@@ -173,6 +173,7 @@ impl App {
     ) {
         use overlays::context::{Action as A, Request};
         match action {
+            A::Tabs => self.open_tab_picker(None),
             A::Open => {
                 let current_matches = self
                     .core
@@ -197,7 +198,11 @@ impl App {
                 let path = target.create_dir.to_string_lossy().into_owned();
                 match crate::ui::clipboard::copy_text(&path) {
                     Ok(message) => {
-                        self.note = Some((message.into(), NoteLevel::Info, Instant::now()));
+                        self.note = Some((
+                            format!("current path {message}"),
+                            NoteLevel::Info,
+                            Instant::now(),
+                        ));
                     }
                     Err(error) => {
                         self.note = Some((
@@ -378,7 +383,8 @@ mod tests {
             vec![
                 overlays::context::Action::CopyCurrentPath,
                 overlays::context::Action::CreateFile,
-                overlays::context::Action::CreateDirectory
+                overlays::context::Action::CreateDirectory,
+                overlays::context::Action::Tabs
             ]
         );
         app.key(key(KeyCode::Down));

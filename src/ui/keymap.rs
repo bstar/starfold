@@ -80,6 +80,11 @@ pub type Binding = KitBinding<Action>;
 /// Everything the UI can be asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
+    NewTab,
+    CloseTab,
+    NextTab,
+    PreviousTab,
+    TabPicker,
     // -- moving about --
     CursorUp,
     CursorDown,
@@ -138,8 +143,10 @@ pub enum Action {
 
     // -- the operations queue's own keys --
     RunOp,
+    RetryElevated,
     DropOp,
     ClearQueue,
+    CopyOperations,
 
     // -- view --
     ToggleView,
@@ -190,6 +197,7 @@ pub enum Scope {
 /// why the operations queue is two groups rather than one. Preview has a
 /// scoped `c` binding for its header's close action.
 pub const GROUPS: &[(&str, Scope)] = &[
+    ("tabs", Scope::Global),
     ("navigation", Scope::Global),
     ("stack", Scope::Modules(&[Module::Stack])),
     ("selection", Scope::Modules(&[Module::Stack])),
@@ -203,6 +211,36 @@ pub const GROUPS: &[(&str, Scope)] = &[
 
 /// Every key, in the order the help overlay prints them.
 pub const BINDINGS: &[Binding] = &[
+    Binding {
+        action: Action::NewTab,
+        keys: "ctrl+t",
+        label: "new tab",
+        group: "tabs",
+    },
+    Binding {
+        action: Action::CloseTab,
+        keys: "ctrl+w",
+        label: "close tab",
+        group: "tabs",
+    },
+    Binding {
+        action: Action::NextTab,
+        keys: "ctrl+pgdn",
+        label: "next tab",
+        group: "tabs",
+    },
+    Binding {
+        action: Action::PreviousTab,
+        keys: "ctrl+pgup",
+        label: "previous tab",
+        group: "tabs",
+    },
+    Binding {
+        action: Action::TabPicker,
+        keys: "ctrl+p",
+        label: "tabs and actions",
+        group: "tabs",
+    },
     // -- navigation ----------------------------------------------------
     Binding {
         action: Action::FocusNext,
@@ -429,7 +467,13 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         action: Action::RunOp,
         keys: "enter/r",
-        label: "resume paused queue",
+        label: "details / resume",
+        group: "queue",
+    },
+    Binding {
+        action: Action::RetryElevated,
+        keys: "s",
+        label: "retry as admin",
         group: "queue",
     },
     Binding {
@@ -442,6 +486,12 @@ pub const BINDINGS: &[Binding] = &[
         action: Action::ClearQueue,
         keys: "esc/c",
         label: "remove waiting",
+        group: "queue",
+    },
+    Binding {
+        action: Action::CopyOperations,
+        keys: "C",
+        label: "copy operations",
         group: "queue",
     },
     // -- the preview's own header key ---------------------------------------
@@ -648,6 +698,13 @@ pub const SHADOWS: &[Shadow] = &[
         reason: "esc in the queue clears it outright rather than merely \
                  cancelling",
     },
+    Shadow {
+        module: Module::Operations,
+        keys: "s",
+        module_action: Action::RetryElevated,
+        global_action: Action::NextSortKey,
+        reason: "s on a failed operation retries deletion as admin",
+    },
 ];
 
 fn scope_of(group: &str) -> Scope {
@@ -836,8 +893,8 @@ directory. `dd` asks for confirmation before queuing deletion. `v` switches view
 opens Places, and `B` bookmarks the current directory. In Places, type to
 search, use arrows and `enter` to open a location, `F2` to rename a bookmark,
 `F3` to inspect the selected place, `delete` to remove one after confirmation,
-`F5` to rescan mounts, and `F6` to unmount a selected local drive after
-confirmation.
+`F5` to rescan mounts, `F6` to unmount a selected local drive, and `F7` to
+empty its trash after confirmation.
 ";
 
 /// The key table as `docs/keys-and-mouse.md`. Run with `STARFOLD_UPDATE_DOCS=1`
@@ -1329,6 +1386,14 @@ mod tests {
         assert_eq!(module(Module::Stack, plain('h')), Some(Action::Pop));
         assert_eq!(module(Module::Stack, plain('r')), Some(Action::Rename));
         assert_eq!(module(Module::Operations, plain('r')), Some(Action::RunOp));
+        assert_eq!(
+            module(Module::Operations, plain('s')),
+            Some(Action::RetryElevated)
+        );
+        assert_eq!(
+            module(Module::Operations, plain('C')),
+            Some(Action::CopyOperations)
+        );
         assert_eq!(
             module(Module::Operations, plain('c')),
             Some(Action::ClearQueue)

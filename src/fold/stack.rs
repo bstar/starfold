@@ -103,6 +103,53 @@ impl Stack {
         }
     }
 
+    pub fn snapshot(&self) -> crate::session::StackSession {
+        crate::session::StackSession {
+            active: self.active,
+            frames: self
+                .frames
+                .iter()
+                .map(|f| crate::session::FrameSession {
+                    dir: f.dir.clone(),
+                    cursor: f.cursor,
+                    cursor_name: f
+                        .cursor_name
+                        .as_ref()
+                        .and_then(|n| n.to_str())
+                        .map(str::to_owned),
+                    filter: f.filter.clone(),
+                    scroll: f.view,
+                })
+                .collect(),
+        }
+    }
+
+    pub fn restore(saved: &crate::session::StackSession) -> Option<Self> {
+        if saved.frames.is_empty() {
+            return None;
+        }
+        let frames: Vec<_> = saved
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let mut frame = Frame::new(FrameId(i as u64), f.dir.clone());
+                frame.cursor = f.cursor;
+                frame.cursor_name = f.cursor_name.as_ref().map(OsString::from);
+                frame.filter = f.filter.clone();
+                frame.view = f.scroll;
+                frame
+            })
+            .collect();
+        let active = saved.active.min(frames.len() - 1);
+        let next_id = frames.len() as u64;
+        Some(Self {
+            frames,
+            active,
+            next_id,
+        })
+    }
+
     /// Drill into `dir`. Anything past the active frame -- a child trail from
     /// before the user jumped away and went somewhere else -- is dropped
     /// first, the way a fresh navigation replaces a browser's forward

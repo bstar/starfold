@@ -22,6 +22,7 @@ pub mod overlays;
 pub mod panels;
 pub mod places;
 pub mod status;
+mod tabs;
 pub mod theme;
 
 /// A compact terminal-safe spinner shared by Places and the activity row.

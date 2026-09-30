@@ -66,6 +66,9 @@ pub struct Listing {
     /// level changed underneath the stack; `None` when the directory itself
     /// could not be stat-ed (which also means `error` is set).
     pub dir_mtime: Option<SystemTime>,
+    /// Filesystem capacity and bytes available to this user, sampled on the
+    /// listing worker so a slow mounted volume never stalls drawing.
+    pub space: Option<(u64, u64)>,
 }
 
 impl Listing {
@@ -76,6 +79,7 @@ impl Listing {
             truncated: false,
             error: Some(message.into()),
             dir_mtime: None,
+            space: None,
         }
     }
 }
@@ -121,6 +125,7 @@ pub fn read(dir: &Path, cfg: &ListConfig) -> Listing {
         truncated,
         error: None,
         dir_mtime,
+        space: None,
     }
 }
 

@@ -766,3 +766,128 @@ fn osc72_commander_drag_between_panes() {
     );
     child.master.as_mut().unwrap().write_all(b"q").unwrap();
 }
+
+fn workspace_child(config: &std::path::Path, dir: Option<&std::path::Path>) -> Running {
+    let (master, slave) = pty();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_starfold"));
+    if let Some(dir) = dir {
+        command.arg(dir);
+    }
+    command
+        .env("STARFOLD_DIR", config)
+        .env("STARFOLD_CONFIG_DIR", config)
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::from(slave.try_clone().unwrap()))
+        .stdout(Stdio::from(slave.try_clone().unwrap()))
+        .stderr(Stdio::from(slave));
+    for key in [
+        "TMUX",
+        "TERM_PROGRAM",
+        "KITTY_WINDOW_ID",
+        "GHOSTTY_RESOURCES_DIR",
+        "WEZTERM_EXECUTABLE",
+        "KONSOLE_VERSION",
+        "SSH_TTY",
+        "SSH_CONNECTION",
+    ] {
+        command.env_remove(key);
+    }
+    // SAFETY: these are async-signal-safe calls between fork and exec.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Running {
+        child: command.spawn().unwrap(),
+        master: Some(master),
+    }
+}
+fn quit_workspace(child: &mut Running) {
+    child.master.as_mut().unwrap().write_all(b"q").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut bytes = [0; 16384];
+        let _ = child.master.as_mut().unwrap().read(&mut bytes);
+        if let Some(status) = child.child.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "workspace did not exit");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+#[test]
+fn workspace_tabs_shortcuts_restart_and_cli_override() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("config");
+    let first = tmp.path().join("first");
+    let second = tmp.path().join("second");
+    for path in [&config, &first, &second] {
+        std::fs::create_dir(path).unwrap();
+    }
+    std::fs::write(first.join("config.txt"), "text").unwrap();
+    let mut child = workspace_child(&config, Some(&first));
+    frame(&mut child);
+    child.master.as_mut().unwrap().write_all(b"\x14").unwrap();
+    let output = collect_for(&mut child, Duration::from_millis(200));
+    assert!(
+        String::from_utf8_lossy(&output).contains("[+]"),
+        "new tab rail missing: {}",
+        String::from_utf8_lossy(&output)
+    );
+    // Ctrl+PageUp, then Ctrl+PageDown use xterm's standard modified-key codes.
+    child
+        .master
+        .as_mut()
+        .unwrap()
+        .write_all(b"\x1b[5;5~")
+        .unwrap();
+    collect_for(&mut child, Duration::from_millis(100));
+    quit_workspace(&mut child);
+    let path = config.join("session.toml");
+    let saved: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(saved["tabs"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["active_tab"].as_integer(), Some(0));
+    let mut restored = workspace_child(&config, Some(&second));
+    let startup = frame(&mut restored);
+    assert!(String::from_utf8_lossy(&startup).contains("[+]"));
+    restored
+        .master
+        .as_mut()
+        .unwrap()
+        .write_all(b"\x1b[6;5~")
+        .unwrap();
+    collect_for(&mut restored, Duration::from_millis(100));
+    quit_workspace(&mut restored);
+    let saved: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(saved["active_tab"].as_integer(), Some(1));
+    assert_eq!(
+        saved["tabs"][0]["stacks"][0]["frames"][0]["dir"].as_str(),
+        second.to_str()
+    );
+    assert_eq!(
+        saved["tabs"][1]["stacks"][0]["frames"][0]["dir"].as_str(),
+        first.to_str()
+    );
+    // Restart without an override, close current tab, and verify clean persistence.
+    let mut restored = workspace_child(&config, None);
+    frame(&mut restored);
+    restored
+        .master
+        .as_mut()
+        .unwrap()
+        .write_all(b"\x17")
+        .unwrap();
+    collect_for(&mut restored, Duration::from_millis(100));
+    quit_workspace(&mut restored);
+    let saved: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(saved["tabs"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        saved["tabs"][0]["stacks"][0]["frames"][0]["dir"].as_str(),
+        second.to_str()
+    );
+}

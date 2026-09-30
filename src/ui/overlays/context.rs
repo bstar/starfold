@@ -33,6 +33,7 @@ pub struct Target {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
+    Tabs,
     Open,
     Preview,
     Edit,
@@ -50,6 +51,7 @@ pub enum Action {
 impl Action {
     fn label(self) -> &'static str {
         match self {
+            Self::Tabs => "Tabs…",
             Self::Open => "Open",
             Self::Preview => "Preview",
             Self::Edit => "Edit",
@@ -109,6 +111,7 @@ impl Menu {
         {
             actions.push(Action::Extract);
         }
+        actions.push(Action::Tabs);
         Self {
             target,
             actions,

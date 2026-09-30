@@ -22,8 +22,9 @@ directory.
 
 Press `c` with the Stack focused or click `actions` in its heading to open the file actions menu.
 Choose Copy current path to put the open directory's full path on the system clipboard. Over SSH,
-STAR/FOLD sends it to the terminal's clipboard with OSC 52, so the local computer receives it
-when the terminal allows clipboard writes. This works with a file highlighted and in an empty
+STAR/FOLD uses Kitty's clipboard helper when available, tmux's clipboard bridge inside tmux,
+and OSC 52 for other terminals. The local terminal must allow clipboard writes. This works with a
+file highlighted and in an empty
 directory. Choose New file or New directory, type one name,
 and press Enter. Creation runs immediately through the
 IO worker; it does not enter the operations queue. An existing file, directory,
@@ -134,10 +135,14 @@ OPERATIONS expands while work is active without changing keyboard focus.
 requests. `X` from anywhere or `enter`/`r` in OPERATIONS resumes it. `esc`
 there clears work that has not started. A running copy shows live byte progress
 to a tenth of a percent, with partial bar cells, even while the file view is
-idle (`COPYING ███████▊░░ 78.0%`). Stopping it removes any unfinished
+idle (`COPYING ███████▊░░ 78.0%`). After a few seconds it also shows the
+recent copy rate and estimated time remaining, such as `24.8 MB/s · ~3m 20s left`.
+The rate uses the last ten seconds of progress and adjusts as a drive speeds
+up or slows down. Stopping it removes any unfinished
 destination file. Files already completed stay completed.
 For a remote drag and drop, the same operation shows a receiving bar and live
-byte count while the sender's total is unknown. It then continues into the
+byte count and transfer rate while the sender's total is unknown. The completion
+estimate appears once the total is known. It then continues into the
 measured placement phase without starting a second operation or resetting the
 progress bar.
 
@@ -161,6 +166,8 @@ for size, A → Z and Z → A for names and extensions, or newest and oldest for
 dates. Press `S` to toggle direction directly, including while the picker is
 open. With directories first enabled, direction changes the order within each
 group while directories continue to lead.
+In Commander, the left and right panes keep separate sort orders. Fold keeps
+its own order when you switch views.
 
 - **name** compares case-insensitively and treats a run of digits as a
   number, so `file2.txt` sorts before `file10.txt` rather than after it.
@@ -177,6 +184,8 @@ level's rows through a fuzzy, ranked match (best match first, case
 insensitive) over what is currently visible — narrowing an already-sorted
 view rather than searching the whole directory. An empty query is the
 identity: every row, in the order the sort already gave them.
+Each Commander pane keeps its active directory's filter independently; moving
+focus to the other pane shows that pane's filter and rows.
 
 ## When a level cannot be shown
 
@@ -225,10 +234,16 @@ renames anything. Planning never follows a symlink: a symlinked directory
 among your marks is queued as one item, recreated as a link at the other end,
 not walked into. Copying or moving a directory into itself, or into its own
 descendant, is refused outright rather than attempted.
+Before a copy writes to the destination, STAR/FOLD compares the bytes it plans
+to copy with the free space there. If it cannot fit at the start, the copy
+fails before writing; the reason stays visible in OPERATIONS.
 
 A drop joins the same serial queue as keyboard and menu operations. It waits
 for earlier work, and for Resume if the queue is paused. It uses the same
 planning and conflict handling as an ordinary copy or move.
+While a copy is active, STAR/FOLD blocks deletes, moves, renames, and other
+changes to its source tree or destination items. The status line names the
+locked path. Other files in the same directories remain available.
 
 When a plan finds a name already at the destination, the queue stops and
 asks — the OPERATIONS module shows the conflicts, and there are three
@@ -256,3 +271,42 @@ Moving within the same filesystem is a rename and keeps the file's identity;
 moving across a filesystem boundary falls back to copying the file and then
 removing the source, because the kernel has no cheaper way to move data
 between two devices.
+
+## Workspace tabs
+
+`ctrl+t` opens a fresh tab at the current locations with the same view and sort
+settings. `ctrl+w` closes it; the last tab stays open. `ctrl+pageup` and
+`ctrl+pagedown` cycle tabs. `ctrl+p` opens a picker searchable by name or path;
+right arrow opens its actions. The file actions menu also offers **Tabs…**.
+
+Each tab keeps Fold and Commander trails, active pane, cursor, scroll, marks,
+filters, hidden files, sorting, search, preview position, and module focus.
+The one-row rail spans both Commander panes, appears only with multiple tabs,
+and keeps the active tab visible when the labels overflow. Click a label to
+switch or right-click for actions; `[+]` opens a tab.
+
+Tab actions include duplicate, rename, move left/right, close, and reopen.
+An empty name restores the automatic directory label. Duplicate preserves
+browsing context without duplicating marks or processes. Reopen keeps the
+last ten closed browsing contexts for this run. Closing an editor tab asks
+before terminating its editor. Switching tabs keeps editors alive. While an editor owns typing keys, use
+the rail actions to create/close tabs; Ctrl+PageUp/PageDown still switches. Playback
+continues through switches using one shared player; closing its tab transfers
+the player to the remaining active tab.
+
+Operations, copy clipboard, bookmarks, Places, and theme are shared. Operation
+rows retain their origin name even after that tab closes, and copy locks still
+protect files. The rail shows activity and failure badges for background tabs;
+background conflicts wait for that tab or an explicit visit to OPERATIONS.
+Tab changes are disabled during drag-and-drop so the source stays stable.
+
+The workspace saves every two seconds after changes and on exit, including
+forward history, cursor identity, filters, sorting, search definitions, and
+preview/focus state. Searches rerun when their tab first opens. Marks, editors,
+playback, and pending operations are never restored after restart. Old sessions
+migrate automatically. Unavailable saved drives keep their location and error;
+use reload or Places when the drive returns. Inactive tabs load lazily. An
+explicit command-line directory replaces only the active tab's active pane.
+
+The first window owns the session writer for its lifetime. Additional windows
+can read the workspace, but show a footer notice and cannot overwrite it.

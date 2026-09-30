@@ -20,15 +20,15 @@ expression: "render(&mut app, 100, 30)"
 ║                                                                                                  ║
 ║                                                                                                  ║
 ║                                                                                                  ║
-╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
+╚═■■■■■■■■■■■■ 125.0 GB free / 500.0 GB total══════════════════════════════════════════════════════╝
 ╔═ PREVIEW — ↗ notes.txt ══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
 ║ → projects/starwire/README.md                                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                           remove ║
-║COPY 1 item: ~/blob.bin → ~                 failed · ctrl+x cancel · x remove · esc remove waiting║
+╔═ OPERATIONS — 2 failed · enter details ══════════════════════════════════════════════════════════╗
+║                                                                                     Copy  remove ║
+║COPY 1 item: ~/blob.bin → ~                                      failed · enter details · x remove║
 ║MOVE 1 item: ~/notes.txt → ~                                                                failed║
 ║TRASH 1 item                                                                                  done║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-? help  ctrl+x cancel  x remove  esc remove waiting                                           ~  off
+? help  enter details/resume  C copy operations  ctrl+x cancel  x remove  esc remove waiting  ~  off

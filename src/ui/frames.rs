@@ -379,7 +379,24 @@ fn marking_jumping_up_and_copying_queues_an_operation() {
     app.key(alt('3'));
     settle(&mut app, &fk);
 
-    insta::assert_snapshot!("queue-terminal-100x30", render(&mut app, 100, 30));
+    // The copy creates src/ with the wall clock's mtime. Keep the screen
+    // snapshot stable while still checking the row and its other columns.
+    let frame = render(&mut app, 100, 30);
+    let frame = frame
+        .lines()
+        .map(|line| {
+            if line.contains("▸ src/") && line.contains("dir             - ") {
+                let mut line = line.to_owned();
+                let date_end = line.rfind("  ║").expect("src row has a right border");
+                line.replace_range(date_end - 10..date_end, "----------");
+                line
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("queue-terminal-100x30", frame);
 }
 
 /// An operation `Running` at 78%, its counters set by hand through
@@ -714,5 +731,27 @@ fn structured_previews_render_at_both_sizes() {
             {let mut s=fk.state_mut();s.preview=Some((fk.fixture.path("blob.bin"),Arc::new(Preview::Document(d))));s.version+=1;}
             app.tick();insta::assert_snapshot!(format!("structured-{}-{w}x{h}",kind.to_lowercase()),render(&mut app,w,h));
         }
+    }
+}
+
+#[test]
+fn workspace_tabs_fit_the_floor_in_light_and_dark_themes() {
+    for (theme, name) in [
+        ("catppuccin-latte", "tabs-latte-60x21"),
+        ("catppuccin-mocha", "tabs-mocha-60x21"),
+    ] {
+        let (mut app, fake) = build(theme);
+        for _ in 0..7 {
+            app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        }
+        settle(&mut app, &fake);
+        let frame = render(&mut app, 60, 21);
+        assert!(frame.contains("[8 "), "{frame}");
+        assert!(frame.contains("[+]"), "{frame}");
+        insta::assert_snapshot!(name, frame);
+        app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        let picker = render(&mut app, 60, 21);
+        assert!(picker.contains("find:"));
+        insta::assert_snapshot!(format!("{name}-picker"), picker);
     }
 }

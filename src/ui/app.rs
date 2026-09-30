@@ -41,6 +41,7 @@
 mod dnd;
 mod editing;
 mod file_actions;
+mod workspace;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -78,7 +79,7 @@ use crate::audio_embed::{self, Client as AudioClient, Presentation};
 use crate::config::{AudioButtons, Config, Scale};
 use crate::fold::entry::{Entry, EntryKind};
 use crate::fold::handle::{Command, Event, Handle, NoteLevel};
-use crate::fold::ops::{Op, OpId, OpKind, OpStatus};
+use crate::fold::ops::{DeleteHow, Op, OpId, OpKind, OpStatus};
 use crate::fold::preview::Preview;
 use crate::fold::selection::Selection;
 use crate::fold::sort::SortOrder;
@@ -121,6 +122,7 @@ pub struct ViewData {
     /// `Selection::summary()`.
     pub marked: String,
     pub dir_stats: Option<(usize, usize, u64)>,
+    pub space: Option<(u64, u64)>,
     /// The active frame's directory, for `session.toml` and for `Push`ing a
     /// path that is not the cursor's.
     pub active_dir: PathBuf,
@@ -163,6 +165,7 @@ impl ViewData {
             filter: String::new(),
             marked: String::new(),
             dir_stats: None,
+            space: None,
             active_dir: PathBuf::new(),
             home: PathBuf::new(),
             location: String::new(),
@@ -205,6 +208,7 @@ struct PaneView {
     loading: bool,
     error: Option<String>,
     truncated: bool,
+    space: Option<(u64, u64)>,
 }
 
 fn place_items(state: &crate::fold::State) -> Vec<super::places::PlaceItem> {
@@ -253,6 +257,16 @@ fn place_items(state: &crate::fold::State) -> Vec<super::places::PlaceItem> {
 }
 
 pub struct App {
+    tab_ui: HashMap<crate::fold::tab::TabId, workspace::UiContext>,
+    closed_tab_ui: Vec<workspace::UiContext>,
+    tab_picker: Option<super::tabs::Picker>,
+    tab_hits: Vec<(Rect, super::tabs::Hit)>,
+    tab_strip_offset: usize,
+    audio_tab: Option<crate::fold::tab::TabId>,
+    preserve_preview_scroll: bool,
+    session_writer: Option<session::Writer>,
+    session_saved: Option<session::Session>,
+    session_checked: Instant,
     dnd: wire_dnd::State,
     audio: AudioClient,
     audio_path: Option<PathBuf>,
@@ -296,9 +310,12 @@ pub struct App {
     scroll: HashMap<(usize, FrameId), usize>,
     preview_scroll: usize,
     pdf_requested: Option<(u64, u32)>,
+    pending_preview_page: Option<u32>,
     ops_cursor: usize,
     ops_scroll: usize,
     prompted_trash_failures: HashSet<OpId>,
+    prompted_elevated_failures: HashSet<OpId>,
+    pending_elevated_delete: Option<OpId>,
     suppressed_trash_warnings: HashSet<trash_warning::DriveKey>,
     unmount_started: Option<(PathBuf, Instant)>,
     animation_started: Instant,
@@ -365,6 +382,7 @@ impl App {
         self.audio_generation = self.audio_generation.wrapping_add(1);
         self.audio_activation = self.audio_generation;
         self.audio_focus_origin = Some((path.clone(), self.active_pane, self.commander));
+        self.audio_tab = Some(self.core.state().tabs.active().id);
         self.audio_path = Some(path.clone());
         self.audio_error = None;
         self.audio_frame = None;
@@ -389,6 +407,7 @@ impl App {
         self.audio_focus_origin = None;
         self.audio_graphics.clear(&mut self.graphics);
         self.audio_path = None;
+        self.audio_tab = None;
         self.audio_frame = None;
         self.audio_error = None;
         self.audio_presentation = None;
@@ -479,7 +498,8 @@ impl App {
                             .state()
                             .cursor_entry()
                             .is_some_and(|entry| entry.path == path);
-                        if self.layout.focus() == ModuleId::Stack
+                        if self.audio_here()
+                            && self.layout.focus() == ModuleId::Stack
                             && self.active_pane == pane
                             && self.commander == commander
                             && still_at_track
@@ -715,6 +735,7 @@ impl App {
             PlaceAction::Unmount { path, source } => {
                 self.core.send(Command::UnmountPlace { path, source })
             }
+            PlaceAction::EmptyTrash(path) => self.core.send(Command::EmptyDriveTrash(path)),
             PlaceAction::Refresh => self.core.send(Command::RefreshPlaces),
         }
         self.repaint = true;
@@ -748,6 +769,7 @@ impl App {
             },
             error: p.error.as_deref(),
             truncated: p.truncated,
+            space: p.space,
         }
     }
 
@@ -766,6 +788,16 @@ impl App {
         let audio_cell_size = transport_cell_size(&mut graphics);
 
         let mut app = Self {
+            tab_ui: HashMap::new(),
+            closed_tab_ui: vec![],
+            tab_picker: None,
+            tab_hits: vec![],
+            tab_strip_offset: 0,
+            audio_tab: None,
+            preserve_preview_scroll: false,
+            session_writer: None,
+            session_saved: None,
+            session_checked: Instant::now(),
             dnd: wire_dnd::State::default(),
             audio: AudioClient::new(),
             audio_path: None,
@@ -805,9 +837,12 @@ impl App {
             scroll: HashMap::new(),
             preview_scroll: 0,
             pdf_requested: None,
+            pending_preview_page: None,
             ops_cursor: 0,
             ops_scroll: 0,
             prompted_trash_failures: HashSet::new(),
+            prompted_elevated_failures: HashSet::new(),
+            pending_elevated_delete: None,
             suppressed_trash_warnings: HashSet::new(),
             unmount_started: None,
             animation_started: Instant::now(),
@@ -827,6 +862,7 @@ impl App {
         app.core.send(Command::LoadPlaces(
             app.cfg_path.with_file_name("bookmarks.toml"),
         ));
+        app.init_workspaces();
         app.refresh();
         app
     }
@@ -855,31 +891,42 @@ impl App {
         app.dnd_stop();
         term::restore()?;
 
-        if let Some(path) = app.session_path.clone() {
-            let session = session::Session {
-                last_dir: Some(
-                    app.core.state().tabs.active().stacks[0]
-                        .active()
-                        .dir
-                        .clone(),
-                ),
-                show_hidden: Some(app.view.show_hidden),
-                sort: Some(app.view.sort),
-                commander: Some(app.commander),
-                commander_left: app.panes.first().map(|p| p.dir.clone()),
-                commander_right: app.panes.get(1).map(|p| p.dir.clone()),
-                commander_active: Some(app.active_pane),
-            };
-            if let Err(e) = session.save(&path) {
-                tracing::warn!("could not save the session: {e}");
-            }
-        }
+        app.save_workspace(true);
+        app.session_writer = None;
+        app.tab_ui.clear();
         app.core.send(Command::Shutdown);
         result
     }
 
     fn event_loop(&mut self, term: &mut Tui) -> Result<()> {
         while !self.quit {
+            if let Some(op) = self.pending_elevated_delete.take() {
+                term::restore()?;
+                let authorization = std::process::Command::new("sudo")
+                    .args(["-v", "-p", "STAR/FOLD administrator password: "])
+                    .status();
+                *term = term::init()?;
+                self.repaint = true;
+                match authorization {
+                    Ok(status) if status.success() => {
+                        self.core.send(Command::QueueElevatedDelete(op))
+                    }
+                    Ok(_) => {
+                        self.note = Some((
+                            "Administrator authorization was cancelled or denied".into(),
+                            NoteLevel::Warning,
+                            Instant::now(),
+                        ));
+                    }
+                    Err(error) => {
+                        self.note = Some((
+                            format!("Could not run sudo: {error}"),
+                            NoteLevel::Error,
+                            Instant::now(),
+                        ));
+                    }
+                }
+            }
             self.tick();
 
             if std::mem::take(&mut self.repaint) {
@@ -938,6 +985,8 @@ impl App {
 
     /// Everything a frame does before it draws.
     pub fn tick(&mut self) {
+        self.save_workspace(false);
+        self.poll_parked_editors();
         self.dnd_poll_completion();
         let batch: Vec<Event> = self.core.drain().take(DRAIN_CAP).collect();
         for event in batch {
@@ -945,7 +994,20 @@ impl App {
                 Event::Note(note) => {
                     self.note = Some((note.text, note.level, Instant::now()));
                 }
-                Event::Conflicts(op) => self.open_conflicts(op),
+                Event::Conflicts(op) => {
+                    let here = {
+                        let state = self.core.state();
+                        let here = state
+                            .queue
+                            .iter()
+                            .find(|o| o.id == op)
+                            .is_some_and(|o| o.origin_tab == Some(state.tabs.active().id));
+                        here
+                    };
+                    if here {
+                        self.open_conflicts(op);
+                    }
+                }
                 Event::ImportReady(op) => self.dnd_start_remote(op),
                 Event::Queue(op) if self.dnd.import_op == Some(op) => {
                     let stopped = self
@@ -985,6 +1047,7 @@ impl App {
         }
         self.refresh();
         self.offer_trash_fallback();
+        self.offer_elevated_delete();
 
         self.dnd_autoscroll();
 
@@ -1001,16 +1064,62 @@ impl App {
             .cursor_entry()
             .map(|e| (e.len, e.modified));
         if self.editor.is_none()
-            && self.audio_path.is_none()
+            && !self.audio_here()
             && self.layout.is_open(ModuleId::Preview)
             && (self.view.cursor_path != self.last_preview_for || stamp != self.last_preview_stamp)
         {
             self.last_preview_stamp = stamp;
-            self.preview_scroll = 0;
+            if self.preserve_preview_scroll {
+                self.preserve_preview_scroll = false;
+            } else {
+                self.preview_scroll = 0;
+                self.pending_preview_page = None;
+            }
             self.pdf_requested = None;
             self.last_preview_for = self.view.cursor_path.clone();
             if let Some(path) = self.last_preview_for.clone() {
                 self.core.send(Command::Preview(path));
+            }
+        }
+        if let Some(page) = self.pending_preview_page {
+            if let Some(Preview::Document(document)) = self.view.preview.as_deref() {
+                match &document.content {
+                    crate::fold::preview::model::Content::Pages(pages) => {
+                        if let Some(index) = pages.iter().position(|p| p.number == page) {
+                            let width = self
+                                .layout
+                                .last
+                                .as_ref()
+                                .map(|r| {
+                                    panels::preview::content_rect(r.rect_of(ModuleId::Preview))
+                                        .width
+                                })
+                                .unwrap_or(80);
+                            self.preview_scroll = self.preview_scroll.saturating_add(
+                                pages[..index]
+                                    .iter()
+                                    .map(|p| panels::preview::page_rows(p, width))
+                                    .sum::<usize>(),
+                            );
+                            self.pending_preview_page = None;
+                        } else if document.total_pages.is_some_and(|total| page > total) {
+                            self.pending_preview_page = None;
+                        } else {
+                            let generation = self.core.state().preview_generation;
+                            if self.pdf_requested != Some((generation, page)) {
+                                self.pdf_requested = Some((generation, page));
+                                if let Some(path) = self.view.cursor_path.clone() {
+                                    self.core.send(Command::PreviewPage {
+                                        path,
+                                        generation,
+                                        page,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    _ => self.pending_preview_page = None,
+                }
             }
         }
     }
@@ -1022,6 +1131,9 @@ impl App {
         let failure = {
             let state = self.core.state();
             let found = state.queue.iter().find_map(|op| {
+                if op.origin_tab.is_some_and(|id| id != state.tabs.active().id) {
+                    return None;
+                }
                 let reason = op.trash_failure.as_ref()?;
                 (!self.prompted_trash_failures.contains(&op.id))
                     .then(|| (op.id, op.sources[0].clone(), reason.clone()))
@@ -1032,6 +1144,30 @@ impl App {
             self.prompted_trash_failures.insert(id);
             self.overlays
                 .open_confirm(Confirm::trash_failed(path, &reason));
+            self.repaint = true;
+        }
+    }
+
+    fn offer_elevated_delete(&mut self) {
+        if self.overlays.is_open() {
+            return;
+        }
+        let failed_id = {
+            let state = self.core.state();
+            let found = state.queue.iter().find_map(|op| {
+                if op.origin_tab.is_some_and(|id| id != state.tabs.active().id)
+                    || op.status != OpStatus::Failed
+                    || self.prompted_elevated_failures.contains(&op.id)
+                {
+                    return None;
+                }
+                super::overlays::failure::Failure::from_op(op).sudo_retry
+            });
+            found
+        };
+        if let Some(id) = failed_id {
+            self.prompted_elevated_failures.insert(id);
+            self.overlays.open_confirm(Confirm::elevated_delete(id));
             self.repaint = true;
         }
     }
@@ -1083,7 +1219,7 @@ impl App {
                     .find(|op| op.import_sources.is_some() && op.status == OpStatus::Planning)
             }) {
                 if let Some(index) = self.view.op_ids.iter().position(|id| *id == op.id) {
-                    self.view.ops[index] = build_op_row(op, &state.home, state.queue.is_paused());
+                    self.view.ops[index] = workspace::operation_row(op, &state);
                 }
                 self.view.running_bar = Some(op_progress_line(op));
             }
@@ -1132,6 +1268,7 @@ impl App {
                     loading: frame.loading,
                     error: listing.and_then(|l| l.error.clone()),
                     truncated: listing.is_some_and(|l| l.truncated),
+                    space: listing.and_then(|l| l.space),
                 }
             })
             .collect();
@@ -1259,9 +1396,13 @@ impl App {
         // The picture on screen is about to be a different picture, or none.
         // Noted here, while both `Arc`s are alive and can be compared, and
         // acted on below once the read guard is gone. See `forget_picture`.
-        if let (Some(Preview::Document(old)), Some(Preview::Document(new))) =
-            (self.view.preview.as_deref(), preview.as_deref())
-        {
+        if let (Some(Preview::Document(old)), Some(Preview::Document(new))) = (
+            self.view
+                .preview
+                .as_deref()
+                .filter(|_| self.pending_preview_page.is_none()),
+            preview.as_deref(),
+        ) {
             use crate::fold::preview::model::Content;
             if let (Content::Pages(a), Content::Pages(b)) = (&old.content, &new.content) {
                 if let (Some(a0), Some(b0)) = (a.first(), b.first()) {
@@ -1295,7 +1436,7 @@ impl App {
         let ops: Vec<panels::operations::OpRow> = state
             .queue
             .iter()
-            .map(|op| build_op_row(op, &state.home, state.queue.is_paused()))
+            .map(|op| workspace::operation_row(op, &state))
             .collect();
         let op_ids: Vec<OpId> = state.queue.iter().map(|op| op.id).collect();
         let running_bar = state
@@ -1343,6 +1484,7 @@ impl App {
             } else {
                 state.dir_stats()
             },
+            space: listing.and_then(|l| l.space),
             active_dir: state
                 .search
                 .as_ref()
@@ -1358,17 +1500,19 @@ impl App {
             preview_name,
             preview,
             ops,
-            ops_active: state
-                .queue
-                .iter()
-                .any(|op| matches!(op.status, OpStatus::Planning | OpStatus::Running)),
+            ops_active: state.queue.iter().any(|op| {
+                matches!(
+                    op.status,
+                    OpStatus::Planning | OpStatus::Running | OpStatus::Failed
+                )
+            }),
             unmounting: unmounting_name,
             op_ids,
             running_bar,
             has_forward: state.tabs.active().active_stack().has_forward(),
             trash_available: state.trash_available,
             show_hidden: state.show_hidden,
-            sort: state.sort,
+            sort: state.active_sort(),
             frame_id: state
                 .search
                 .as_ref()
@@ -1416,7 +1560,12 @@ impl App {
             }
         }
 
-        if let Some(preview) = &self.view.preview {
+        if let Some(preview) = self
+            .view
+            .preview
+            .as_ref()
+            .filter(|_| self.pending_preview_page.is_none())
+        {
             let preview_rect = regions.rect_of(ModuleId::Preview);
             let body = panels::preview::content_rect(preview_rect);
             let total = panels::preview::lines(preview, body.width).len();
@@ -1437,6 +1586,29 @@ impl App {
 
     pub fn key(&mut self, k: KeyEvent) {
         self.refresh();
+        if self.tab_picker.is_some() {
+            let answer = self.tab_picker.as_mut().unwrap().key(k);
+            self.tab_answer(answer);
+            return;
+        }
+        if !self.overlays.is_open()
+            && k.modifiers
+                .contains(starkit::crossterm::event::KeyModifiers::CONTROL)
+        {
+            if k.code == KeyCode::PageUp {
+                self.cycle_tab(-1);
+                return;
+            }
+            if k.code == KeyCode::PageDown {
+                self.cycle_tab(1);
+                return;
+            }
+        }
+        if self.overlays.is_open() {
+            let answer = self.overlays.handle(k);
+            self.after_overlay_answer(answer);
+            return;
+        }
         if self.editor.is_some() {
             self.editor_key(k);
             return;
@@ -1458,11 +1630,6 @@ impl App {
         if let Some(places) = &mut self.places {
             let action = places.handle(k);
             self.place_action(action);
-            return;
-        }
-        if self.overlays.is_open() {
-            let answer = self.overlays.handle(k);
-            self.after_overlay_answer(answer);
             return;
         }
         if self.view.search_active && k.code == KeyCode::Esc {
@@ -1521,10 +1688,7 @@ impl App {
             }
             return;
         }
-        if self.audio_path.is_some()
-            && self.layout.focus() == ModuleId::Preview
-            && self.audio_key(k)
-        {
+        if self.audio_here() && self.layout.focus() == ModuleId::Preview && self.audio_key(k) {
             return;
         }
         if k.modifiers.is_empty() && k.code == KeyCode::Char('g') {
@@ -1572,6 +1736,13 @@ impl App {
             Answer::Consumed => {}
             Answer::Closed => self.dnd_cancel_choice(),
             Answer::Confirmed(pending) => self.on_confirmed(pending),
+            Answer::RetryFailedDelete(paths) => {
+                self.overlays
+                    .open_confirm(Confirm::delete_permanently(paths));
+            }
+            Answer::RetryFailedDeleteWithSudo(op) => {
+                self.overlays.open_confirm(Confirm::elevated_delete(op));
+            }
             Answer::TrashDelete {
                 sources,
                 drive,
@@ -1620,16 +1791,28 @@ impl App {
             Pending::DeletePermanently(paths) => {
                 self.core.send(Command::QueuePermanentDeleteSources(paths))
             }
+            Pending::ElevatedDelete(op) => self.pending_elevated_delete = Some(op),
             Pending::QueueDelete(sources) => self.core.send(Command::QueueDeleteSources(sources)),
             Pending::ClearQueue => self.core.send(Command::ClearQueue),
             Pending::CancelRunning(op) => self.core.send(Command::StopActive(op)),
             Pending::Quit => self.quit = true,
+            Pending::CloseTab(id) => {
+                self.finish_tab_close(id);
+            }
         }
     }
 
     /// One action -- the single place a key or a click becomes a change.
     fn act(&mut self, a: Action) {
         match a {
+            Action::NewTab => self.tab_action(super::tabs::Action::New),
+            Action::CloseTab => {
+                let id = self.core.state().tabs.active().id;
+                self.tab_action(super::tabs::Action::Close(id));
+            }
+            Action::NextTab => self.cycle_tab(1),
+            Action::PreviousTab => self.cycle_tab(-1),
+            Action::TabPicker => self.open_tab_picker(None),
             Action::ToggleView => {
                 if self.view.search_active {
                     self.core.send(Command::CloseSearch);
@@ -1766,7 +1949,50 @@ impl App {
                     self.request_delete(sources, true);
                 }
             }
-            Action::RunQueue | Action::RunOp => self.core.send(Command::Run),
+            Action::RunQueue => self.core.send(Command::Run),
+            Action::RunOp => {
+                if let Some(id) = self.op_id_at_cursor() {
+                    let failure = {
+                        let state = self.core.state();
+                        let result = state
+                            .queue
+                            .iter()
+                            .find(|op| op.id == id && op.status == OpStatus::Failed)
+                            .map(super::overlays::failure::Failure::from_op);
+                        result
+                    };
+                    if let Some(failure) = failure {
+                        self.overlays.open_failure(failure);
+                        self.repaint = true;
+                    } else {
+                        self.core.send(Command::Run);
+                    }
+                } else {
+                    self.core.send(Command::Run);
+                }
+            }
+            Action::RetryElevated => {
+                if let Some(id) = self.op_id_at_cursor() {
+                    let eligible = {
+                        let state = self.core.state();
+                        let found = state
+                            .queue
+                            .iter()
+                            .find(|op| op.id == id && op.status == OpStatus::Failed)
+                            .is_some_and(|op| {
+                                super::overlays::failure::Failure::from_op(op)
+                                    .sudo_retry
+                                    .is_some()
+                            });
+                        found
+                    };
+                    if eligible {
+                        self.prompted_elevated_failures.insert(id);
+                        self.overlays.open_confirm(Confirm::elevated_delete(id));
+                        self.repaint = true;
+                    }
+                }
+            }
             Action::CancelRun => {
                 if let Some(id) = self.running_op_id() {
                     self.core.send(Command::StopActive(id));
@@ -1779,6 +2005,33 @@ impl App {
             }
             Action::ClearQueue => {
                 self.core.send(Command::ClearQueue);
+            }
+            Action::CopyOperations => {
+                let report = {
+                    let state = self.core.state();
+                    operations_report(&state.queue, &self.view.home)
+                };
+                if let Some(report) = report {
+                    self.note = Some(match crate::ui::clipboard::copy_text(&report) {
+                        Ok(message) => (
+                            format!("operations {message}"),
+                            NoteLevel::Info,
+                            Instant::now(),
+                        ),
+                        Err(error) => (
+                            format!("could not copy operations: {error}"),
+                            NoteLevel::Warning,
+                            Instant::now(),
+                        ),
+                    });
+                } else {
+                    self.note = Some((
+                        "no operations to copy".into(),
+                        NoteLevel::Info,
+                        Instant::now(),
+                    ));
+                }
+                self.repaint = true;
             }
 
             Action::TogglePreview => {
@@ -2041,6 +2294,45 @@ impl App {
         } else {
             m.kind
         };
+        if let Some(picker) = &mut self.tab_picker {
+            if matches!(kind, MouseEventKind::Down(MouseButton::Left)) {
+                let answer = picker.click(regions.area, m.column, m.row);
+                self.tab_answer(answer);
+            }
+            return;
+        }
+        if !self.overlays.is_open()
+            && self.places.is_none()
+            && self.bars.held().is_none()
+            && !self.dnd.drag_active
+        {
+            if let Some((_, hit)) = self
+                .tab_hits
+                .iter()
+                .find(|(r, _)| r.contains((m.column, m.row).into()))
+                .copied()
+            {
+                match kind {
+                    MouseEventKind::Down(MouseButton::Left) => self.tab_hit(hit, false),
+                    MouseEventKind::Down(MouseButton::Right) => self.tab_hit(hit, true),
+                    _ => {}
+                }
+                return;
+            }
+        }
+        if self.overlays.is_open() {
+            match kind {
+                MouseEventKind::ScrollDown => self.overlays.scroll(false),
+                MouseEventKind::ScrollUp => self.overlays.scroll(true),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let answer = self.overlays.click(m.column, m.row, regions.area);
+                    self.after_overlay_answer(answer);
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if self.editor.is_some() {
             return;
         }
@@ -2107,20 +2399,7 @@ impl App {
             return;
         }
 
-        if self.overlays.is_open() {
-            match kind {
-                MouseEventKind::ScrollDown => self.overlays.scroll(false),
-                MouseEventKind::ScrollUp => self.overlays.scroll(true),
-                MouseEventKind::Down(MouseButton::Left) => {
-                    let answer = self.overlays.click(m.column, m.row, regions.area);
-                    self.after_overlay_answer(answer);
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        if self.audio_path.is_some() && regions.hit(m.column, m.row) == Some(ModuleId::Preview) {
+        if self.audio_here() && regions.hit(m.column, m.row) == Some(ModuleId::Preview) {
             let rect = regions.rect_of(ModuleId::Preview);
             let body = audio_body(rect);
             if m.column >= body.x
@@ -2306,6 +2585,7 @@ impl App {
             panels::operations::header_words(
                 self.core.state().queue.is_paused(),
                 self.running_op_id().is_some(),
+                self.layout.focus() == ModuleId::Operations,
             )
         } else {
             panels::words(module)
@@ -2397,6 +2677,7 @@ impl App {
             panels::Word::Actions => self.open_actions_modal(),
             panels::Word::Run => self.try_run(),
             panels::Word::Cancel => self.act(Action::CancelRun),
+            panels::Word::Copy => self.act(Action::CopyOperations),
             panels::Word::Clear => self.act(Action::ClearQueue),
             panels::Word::Close => self.act(Action::TogglePreview),
         }
@@ -2419,6 +2700,7 @@ impl App {
             filter: (!self.view.filter.is_empty()).then_some(self.view.filter.as_str()),
             error: self.view.error.as_deref(),
             truncated: self.view.truncated,
+            space: self.view.space,
         }
     }
 
@@ -2461,7 +2743,24 @@ impl App {
             } else {
                 self.ops_scroll
             },
-            hint: if self.core.state().queue.is_paused() {
+            hint: if self.op_id_at_cursor().is_some_and(|id| {
+                self.core.state().queue.iter().any(|op| {
+                    op.id == id
+                        && op.status == OpStatus::Failed
+                        && super::overlays::failure::Failure::from_op(op)
+                            .sudo_retry
+                            .is_some()
+                })
+            }) {
+                "s retry as admin · enter details · x remove"
+            } else if self
+                .view
+                .ops
+                .get(self.ops_cursor)
+                .is_some_and(|row| row.tone == panels::operations::Tone::Failed)
+            {
+                "enter details · x remove"
+            } else if self.core.state().queue.is_paused() {
                 "enter resume · ctrl+x cancel · x remove · esc remove waiting"
             } else {
                 "ctrl+x cancel · x remove · esc remove waiting"
@@ -2505,11 +2804,13 @@ impl App {
                     ("dd", "delete"),
                 ],
                 ModuleId::Operations => &[
+                    ("enter", "details/resume"),
+                    ("C", "copy operations"),
                     ("ctrl+x", "cancel"),
                     ("x", "remove"),
                     ("esc", "remove waiting"),
                 ],
-                ModuleId::Preview if self.audio_path.is_some() => &[
+                ModuleId::Preview if self.audio_here() => &[
                     ("space", "pause"),
                     ("[/]", "track"),
                     ("←/→", "seek"),
@@ -2561,12 +2862,26 @@ impl App {
         )
         .unwrap_or(u16::MAX);
         self.layout.ops_active = self.view.ops_active || incoming;
+        self.layout.tabs_visible = self.core.state().tabs.tabs.len() > 1;
         let Some(regions) = self.layout.regions(area, padding, queued).cloned() else {
             too_small(area, buf, &self.theme);
             self.bars = bars;
             return;
         };
 
+        self.tab_hits.clear();
+        if let Some(rect) = regions.tabs {
+            let items = self.tab_items();
+            let active = self.core.state().tabs.active().id;
+            self.tab_hits = super::tabs::rail(
+                rect,
+                &items,
+                active,
+                &mut self.tab_strip_offset,
+                buf,
+                &self.theme,
+            );
+        }
         let focus = self.layout.focus();
 
         if self.commander {
@@ -2649,7 +2964,7 @@ impl App {
                 ));
             }
             None
-        } else if self.audio_path.is_some() {
+        } else if self.audio_here() {
             self.draw_audio(regions.rect_of(ModuleId::Preview), buf);
             None
         } else {
@@ -2702,6 +3017,7 @@ impl App {
                 panels::operations::header_words(
                     self.core.state().queue.is_paused(),
                     self.running_op_id().is_some(),
+                    focus == ModuleId::Operations,
                 )
             } else {
                 panels::words(module)
@@ -2767,6 +3083,9 @@ impl App {
             }
         }
 
+        if let Some(picker) = &mut self.tab_picker {
+            picker.render(regions.area, buf, &self.theme);
+        }
         self.bars = bars;
         let spinner = self.unmount_spinner();
         if let Some(places) = &mut self.places {
@@ -3037,6 +3356,46 @@ fn build_row(
     }
 }
 
+/// Plain text from the current queue, with full paths and failures that may
+/// be elided in the terminal panel. The state guard is dropped before the
+/// caller touches the system clipboard.
+fn operations_report(queue: &crate::fold::ops::Queue, home: &Path) -> Option<String> {
+    use std::fmt::Write as _;
+
+    if queue.iter().next().is_none() {
+        return None;
+    }
+    let mut report = String::from("STAR/FOLD OPERATIONS\n");
+    for (index, op) in queue.iter().enumerate() {
+        let status = build_op_row(op, home, queue.is_paused()).status;
+        let _ = writeln!(report, "\n{}. {} — {}", index + 1, op.title(), status);
+        for source in op.import_sources.as_ref().unwrap_or(&op.sources) {
+            let _ = writeln!(report, "  source: {}", source.display());
+        }
+        if let Some(dest) = &op.dest {
+            let _ = writeln!(report, "  destination: {}", dest.display());
+        }
+        if let Some(reason) = &op.failure {
+            let _ = writeln!(report, "  error: {reason}");
+        }
+        for (path, reason) in &op.failed {
+            let _ = writeln!(report, "  failed: {} — {reason}", path.display());
+        }
+        if op.skipped > 0 {
+            let _ = writeln!(report, "  skipped: {}", op.skipped);
+        }
+        if matches!(op.status, OpStatus::Running | OpStatus::Planning) {
+            let _ = writeln!(
+                report,
+                "  progress: {} / {} bytes",
+                op.progress.done(),
+                op.progress.total()
+            );
+        }
+    }
+    Some(report)
+}
+
 fn build_op_row(op: &Op, home: &std::path::Path, paused: bool) -> panels::operations::OpRow {
     use panels::operations::Tone;
 
@@ -3081,28 +3440,70 @@ fn build_op_row(op: &Op, home: &std::path::Path, paused: bool) -> panels::operat
                 )
             }
         }
-        OpStatus::Done => ("done".to_string(), Tone::Done),
-        // `Op` keeps no `Outcome` of its own (see `fold/ops/mod.rs`) -- the
-        // detailed "n of m failed" count already reached the status row once,
-        // as an `Event::Note`, when the op finished.
-        OpStatus::Failed => ("failed".to_string(), Tone::Failed),
+        OpStatus::Done => (
+            if op.label.is_some() && op.skipped == op.sources.len() {
+                "already empty".to_string()
+            } else {
+                "done".to_string()
+            },
+            Tone::Done,
+        ),
+        OpStatus::Failed if matches!(op.kind, OpKind::Delete(_)) => {
+            let count = op.failed.len();
+            let total = op.sources.len().max(count);
+            let prefix = if count > 0 && op.kind == OpKind::Delete(DeleteHow::Permanent) {
+                format!("{count}/{total} failed")
+            } else {
+                "failed".to_string()
+            };
+            (
+                op.failure.as_ref().map_or(prefix.clone(), |reason| {
+                    let source_prefix = op
+                        .failed
+                        .first()
+                        .map(|(path, _)| format!("{}: ", path.display()));
+                    let detail = source_prefix
+                        .as_deref()
+                        .and_then(|path| reason.strip_prefix(path))
+                        .unwrap_or(reason);
+                    format!("{prefix}: {detail}")
+                }),
+                Tone::Failed,
+            )
+        }
+        OpStatus::Failed => (
+            op.failure
+                .as_ref()
+                .filter(|reason| reason.starts_with("not enough space:"))
+                .map_or_else(
+                    || "failed".to_string(),
+                    |reason| format!("failed: {reason}"),
+                ),
+            Tone::Failed,
+        ),
         OpStatus::Cancelled => ("cancelled".to_string(), Tone::Failed),
     };
     let bar =
         if op.import_sources.is_some() && op.status == OpStatus::Running && op.kind == OpKind::Copy
         {
-            Some(format!(
-                "{} {}",
-                op.progress.receiving_bar(10),
-                crate::fold::format::size(op.progress.done())
-            ))
+            Some(op.progress.receiving_with_rate(10))
         } else {
             (matches!(op.status, OpStatus::Running | OpStatus::Planning) && op.progress.total() > 0)
-                .then(|| op.progress.bar(10))
+                .then(|| op_progress_bar(op))
         };
 
     panels::operations::OpRow {
-        title: op_title(op, home),
+        title: if matches!(op.kind, OpKind::Delete(_)) && !op.failed.is_empty() {
+            let path = &op.failed[0].0;
+            let more = if op.failed.len() > 1 {
+                format!(" +{} more", op.failed.len() - 1)
+            } else {
+                String::new()
+            };
+            format!("{}: {}{more}", op.title(), home_relative(path, home))
+        } else {
+            op_title(op, home)
+        },
         status,
         bar,
         tone,
@@ -3113,6 +3514,9 @@ fn build_op_row(op: &Op, home: &std::path::Path, paused: bool) -> panels::operat
 /// directory: `~` for home and relative to it, since the queue is read next
 /// to the location it will land in.
 fn op_title(op: &Op, home: &std::path::Path) -> String {
+    if op.label.is_some() {
+        return op.title();
+    }
     match &op.dest {
         Some(dest) => {
             let verb = op.title();
@@ -3140,17 +3544,30 @@ fn op_title(op: &Op, home: &std::path::Path) -> String {
 
 fn op_progress_line(op: &Op) -> String {
     if op.import_sources.is_some() && op.kind == OpKind::Copy && op.status == OpStatus::Running {
-        format!(
-            "RECEIVING {} {}",
-            op.progress.receiving_bar(10),
-            crate::fold::format::size(op.progress.done())
-        )
+        format!("RECEIVING {}", op.progress.receiving_with_rate(10))
     } else {
-        op.progress.line(if op.import_sources.is_some() {
+        let verb = if op.import_sources.is_some() {
             "COPYING"
         } else {
             running_verb_upper(op.kind)
-        })
+        };
+        if op.status == OpStatus::Running
+            && (matches!(op.kind, OpKind::Copy | OpKind::Move) || op.import_sources.is_some())
+        {
+            format!("{verb} {}", op_progress_bar(op))
+        } else {
+            op.progress.line(verb)
+        }
+    }
+}
+
+fn op_progress_bar(op: &Op) -> String {
+    if op.status == OpStatus::Running
+        && (matches!(op.kind, OpKind::Copy | OpKind::Move) || op.import_sources.is_some())
+    {
+        op.progress.bar_with_estimate(10)
+    } else {
+        op.progress.bar(10)
     }
 }
 
@@ -3208,6 +3625,73 @@ mod tests {
         let cfg_path = dir.path().join("config.toml");
         let app = App::new(core, cfg, cfg_path, None, Graphics::disabled());
         (app, fk, dir)
+    }
+
+    #[test]
+    fn operation_row_keeps_a_space_failure_visible() {
+        let mut queue = crate::fold::ops::Queue::new();
+        let id = queue.enqueue(
+            OpKind::Copy,
+            vec!["/source/movie.mkv".into()],
+            Some("/target".into()),
+            crate::fold::ops::ConflictPolicy::Ask,
+        );
+        let op = queue.get_mut(id).unwrap();
+        op.status = OpStatus::Failed;
+        op.failure = Some("not enough space: need 20.0 GB, 7.0 GB free".into());
+        let row = build_op_row(op, Path::new("/home"), false);
+        assert_eq!(
+            row.status,
+            "failed: not enough space: need 20.0 GB, 7.0 GB free"
+        );
+    }
+
+    #[test]
+    fn operation_row_names_the_item_and_reason_for_a_partial_delete() {
+        let mut queue = crate::fold::ops::Queue::new();
+        let id = queue.enqueue(
+            OpKind::Delete(DeleteHow::Permanent),
+            vec!["/home/gone".into(), "/home/still-here".into()],
+            None,
+            crate::fold::ops::ConflictPolicy::Ask,
+        );
+        let op = queue.get_mut(id).unwrap();
+        op.status = OpStatus::Failed;
+        op.failed = vec![(
+            "/home/still-here".into(),
+            "/home/still-here: Permission denied (os error 13)".into(),
+        )];
+        op.failure = Some(op.failed[0].1.clone());
+
+        let row = build_op_row(op, Path::new("/home"), false);
+        assert_eq!(row.title, "DELETE 2 items: ~/still-here");
+        assert_eq!(row.status, "1/2 failed: Permission denied (os error 13)");
+    }
+
+    #[test]
+    fn operations_report_keeps_full_paths_and_all_failures() {
+        let mut queue = crate::fold::ops::Queue::new();
+        assert!(operations_report(&queue, Path::new("/home/bstar")).is_none());
+        let id = queue.enqueue(
+            OpKind::Delete(DeleteHow::Permanent),
+            vec!["/media/archive/one".into(), "/media/archive/two".into()],
+            None,
+            crate::fold::ops::ConflictPolicy::Ask,
+        );
+        let op = queue.get_mut(id).unwrap();
+        op.status = OpStatus::Failed;
+        op.failure = Some("Permission denied".into());
+        op.failed = vec![
+            ("/media/archive/one".into(), "one: Permission denied".into()),
+            ("/media/archive/two".into(), "two: Permission denied".into()),
+        ];
+
+        let report = operations_report(&queue, Path::new("/home/bstar")).unwrap();
+        assert!(report.contains("DELETE 2 items — 2/2 failed"));
+        assert!(report.contains("source: /media/archive/one"));
+        assert!(report.contains("source: /media/archive/two"));
+        assert!(report.contains("failed: /media/archive/one — one: Permission denied"));
+        assert!(report.contains("failed: /media/archive/two — two: Permission denied"));
     }
 
     #[test]
@@ -3311,6 +3795,35 @@ mod tests {
     }
 
     #[test]
+    fn commander_storage_bars_follow_each_panes_directory() {
+        let (mut app, fake, _dir) = app();
+        app.key(key('v'));
+        fake.pump();
+        let left = fake.home().to_path_buf();
+        let right = fake.fixture.path("projects");
+        app.core.send(Command::FocusPane(1));
+        app.core.send(Command::Push(right.clone()));
+        fake.pump();
+        {
+            let mut state = fake.state_mut();
+            Arc::make_mut(state.listings.get_mut(&left).unwrap()).space =
+                Some((500_000_000_000, 100_000_000_000));
+            Arc::make_mut(state.listings.get_mut(&right).unwrap()).space =
+                Some((1_000_000_000_000, 800_000_000_000));
+            state.version += 1;
+        }
+        app.tick();
+        assert_eq!(
+            app.pane_view(0).space,
+            Some((500_000_000_000, 100_000_000_000))
+        );
+        assert_eq!(
+            app.pane_view(1).space,
+            Some((1_000_000_000_000, 800_000_000_000))
+        );
+    }
+
+    #[test]
     fn hidden_toggle_reruns_an_open_search() {
         let (mut app, fake, _dir) = app();
         fake.pump();
@@ -3380,6 +3893,7 @@ mod tests {
             panels::operations::header_words(
                 app.core.state().queue.is_paused(),
                 app.running_op_id().is_some(),
+                app.layout.focus() == ModuleId::Operations,
             )
         } else {
             panels::words(module)
@@ -3447,6 +3961,32 @@ mod tests {
     }
 
     #[test]
+    fn operations_copy_header_click_reaches_the_copy_action() {
+        let (mut app, fk, _dir) = app();
+        fk.pump();
+        app.layout.focus_set(ModuleId::Operations);
+        let area = Rect::new(0, 0, 100, 30);
+        app.draw(area, &mut Buffer::empty(area));
+        let rect = app
+            .layout
+            .last
+            .as_ref()
+            .unwrap()
+            .rect_of(ModuleId::Operations);
+        let words = panels::operations::header_words(false, false, true);
+        let (_, slot) = header::slots(rect, &words)
+            .into_iter()
+            .find(|(word, _)| *word == panels::Word::Copy)
+            .unwrap();
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            slot.x,
+            slot.y,
+        ));
+        assert_eq!(app.note.as_ref().unwrap().0, "no operations to copy");
+    }
+
+    #[test]
     fn heading_actions_use_the_clicked_commander_pane() {
         let (mut app, fk, _dir) = app();
         fk.pump();
@@ -3482,6 +4022,7 @@ mod tests {
                 overlays::context::Action::CopyCurrentPath,
                 overlays::context::Action::CreateFile,
                 overlays::context::Action::CreateDirectory,
+                overlays::context::Action::Tabs,
             ]
         );
     }
@@ -3523,6 +4064,7 @@ mod tests {
                 overlays::context::Action::CopyCurrentPath,
                 overlays::context::Action::CreateFile,
                 overlays::context::Action::CreateDirectory,
+                overlays::context::Action::Tabs,
             ]
         );
         app.key(code(KeyCode::Esc));
@@ -3840,6 +4382,46 @@ mod tests {
     }
 
     #[test]
+    fn permission_denied_delete_prompts_once_and_remains_reachable_in_operations() {
+        let (mut app, fake, _dir) = app();
+        let path = fake.fixture.path("blob.bin");
+        let id = {
+            let mut state = fake.state_mut();
+            let id = state.queue.enqueue(
+                OpKind::Delete(DeleteHow::Permanent),
+                vec![path.clone()],
+                None,
+                crate::fold::ops::ConflictPolicy::Ask,
+            );
+            let op = state.queue.get_mut(id).unwrap();
+            op.status = OpStatus::Failed;
+            op.failed = vec![(path.clone(), "Permission denied (os error 13)".into())];
+            op.failure = Some(op.failed[0].1.clone());
+            state.version += 1;
+            id
+        };
+        app.tick();
+        assert!(matches!(
+            app.overlays.current(),
+            Some(Overlay::Confirm(confirm)) if confirm.pending == Pending::ElevatedDelete(id)
+        ));
+        app.key(code(KeyCode::Esc));
+        app.tick();
+        assert!(!app.overlays.is_open());
+
+        app.layout.focus_set(ModuleId::Operations);
+        assert_eq!(
+            app.operations_view().hint,
+            "s retry as admin · enter details · x remove"
+        );
+        app.key(key('s'));
+        assert!(matches!(
+            app.overlays.current(),
+            Some(Overlay::Confirm(confirm)) if confirm.pending == Pending::ElevatedDelete(id)
+        ));
+    }
+
+    #[test]
     fn yank_then_paste_and_run_copies_the_marked_file_to_the_destination() {
         let (mut app, fk, _dir) = app();
         let idx = row_index(&app, "blob.bin");
@@ -4153,6 +4735,7 @@ mod tests {
     #[test]
     fn internal_drop_label_names_source_action_and_destination() {
         let offer = wire_dnd::Offer {
+            source_tab: crate::fold::tab::TabId(0),
             sources: vec![PathBuf::from("/source/movie.mkv")],
             uri_text: String::new(),
             source_stack: 1,
@@ -4185,6 +4768,7 @@ mod tests {
         let x = left.x + 4;
         let y = left.bottom() - 2;
         app.dnd.offer = Some(wire_dnd::Offer {
+            source_tab: crate::fold::tab::TabId(0),
             sources: vec![source],
             uri_text: String::new(),
             source_stack: 1,
@@ -4231,6 +4815,7 @@ mod tests {
         let source_scroll = app.scroll.get(&source_key).copied().unwrap_or(0);
         let destination_scroll = app.scroll.get(&destination_key).copied().unwrap_or(0);
         app.dnd.offer = Some(wire_dnd::Offer {
+            source_tab: crate::fold::tab::TabId(0),
             sources: vec![left_dir.join("file-00")],
             uri_text: String::new(),
             source_stack: 1,

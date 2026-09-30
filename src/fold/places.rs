@@ -370,13 +370,86 @@ fn trash_disabled_at(_mount: &Path) -> bool {
     false
 }
 
+/// Only the current user's trash directories on a selected mounted volume.
+/// Never include the shared `.Trash` or `.Trashes` parent, which may hold
+/// other users' files. The planner treats absent directories as an empty bin.
+pub fn drive_trash_paths(mount: &Path) -> Vec<PathBuf> {
+    // SAFETY: getuid reads the current process credentials without pointers.
+    let uid = unsafe { libc::getuid() };
+    #[cfg(target_os = "linux")]
+    {
+        vec![
+            mount.join(".Trash").join(uid.to_string()),
+            mount.join(format!(".Trash-{uid}")),
+        ]
+    }
+    #[cfg(target_os = "macos")]
+    {
+        vec![mount.join(".Trashes").join(uid.to_string())]
+    }
+}
+
+/// Recheck a confirmed drive-trash target on the worker immediately before
+/// planning and again before deletion. This prevents a symlink or nested
+/// mount from redirecting the operation outside the selected volume.
+pub fn validate_drive_trash(mount: &Path, sources: &[PathBuf]) -> Result<(), String> {
+    let current = discover_locations()?;
+    if !current
+        .iter()
+        .any(|location| location.path == mount && location.info.is_some())
+    {
+        return Err(format!("{} is no longer a mounted drive", mount.display()));
+    }
+    validate_drive_trash_paths(mount, sources)
+}
+
+fn validate_drive_trash_paths(mount: &Path, sources: &[PathBuf]) -> Result<(), String> {
+    if trash_disabled_at(mount) {
+        return Err("Trash is disabled on this drive".into());
+    }
+    if sources != drive_trash_paths(mount) {
+        return Err("drive trash paths changed".into());
+    }
+    let drive =
+        std::fs::metadata(mount).map_err(|error| format!("{}: {error}", mount.display()))?;
+    use std::os::unix::fs::MetadataExt as _;
+    for source in sources {
+        let parent = source.parent().expect("trash path has a parent");
+        if parent != mount {
+            match std::fs::symlink_metadata(parent) {
+                Ok(meta) if meta.is_dir() && meta.dev() == drive.dev() => {}
+                Ok(_) => {
+                    return Err(format!(
+                        "{} is not a directory on this drive",
+                        parent.display()
+                    ))
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("{}: {error}", parent.display())),
+            }
+        }
+        match std::fs::symlink_metadata(source) {
+            Ok(meta) if meta.is_dir() && meta.dev() == drive.dev() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "{} is not a trash directory on this drive",
+                    source.display()
+                ))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("{}: {error}", source.display())),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
-fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
+pub(crate) fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     // SAFETY: `path` is NUL-terminated and statvfs writes the output record
-    // only on success. The call runs on the discovery worker.
+    // only on success. Callers run this on a discovery or listing worker.
     if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
         return None;
     }
@@ -395,7 +468,7 @@ fn filesystem_bytes(blocks: impl Into<u64>, block_size: u64) -> u64 {
 }
 
 #[cfg(not(unix))]
-fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
+pub(crate) fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
     None
 }
 
@@ -566,6 +639,24 @@ mod tests {
         std::fs::remove_file(&marker).unwrap();
         std::fs::create_dir(&marker).unwrap();
         assert!(!trash_disabled_at_uid(dir.path(), 1000));
+    }
+
+    #[test]
+    fn drive_trash_rejects_other_paths_and_symlinked_shared_trash() {
+        use std::os::unix::fs::symlink;
+
+        let drive = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let sources = drive_trash_paths(drive.path());
+        assert!(validate_drive_trash_paths(drive.path(), &sources).is_ok());
+        assert!(validate_drive_trash_paths(drive.path(), &[outside.path().to_path_buf()]).is_err());
+
+        #[cfg(target_os = "linux")]
+        let shared = drive.path().join(".Trash");
+        #[cfg(target_os = "macos")]
+        let shared = drive.path().join(".Trashes");
+        symlink(outside.path(), &shared).unwrap();
+        assert!(validate_drive_trash_paths(drive.path(), &sources).is_err());
     }
 
     #[cfg(unix)]

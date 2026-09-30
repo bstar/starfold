@@ -23,6 +23,7 @@
 
 pub mod archive;
 pub mod create;
+pub mod elevated;
 pub mod file_type;
 mod process;
 

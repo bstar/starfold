@@ -188,6 +188,7 @@ pub struct Offer {
     pub uri_text: String,
     /// Fold is stack 0; Commander's left and right panes are 1 and 2.
     pub source_stack: usize,
+    pub source_tab: crate::fold::tab::TabId,
 }
 
 #[derive(Debug, Clone)]

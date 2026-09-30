@@ -13,7 +13,7 @@ expression: "render(&mut app, 60, 21)"
 ║    ↗ notes.txt             ║║    ↗ notes.txt             ║
 ║                            ║║                            ║
 ║                            ║║                            ║
-╚════════════════════════════╝╚════════════════════════════╝
+╚═■■■ 125.0GB free / 500.0GB═╝╚═■■■ 125.0GB free / 500.0GB═╝
 ╔═ PREVIEW — ▸ projects ═══════════════════════════════════╗
 ║                                                    close ║
 ║ └── ▸ starwire/                                          █

@@ -145,28 +145,31 @@ exit errors.
 multiple selected paths; run a harmless test action on files with spaces and
 quotes; verify a failing command reports its status.
 
-### 6. Durable project tabs
+### 6. Durable project tabs (implemented)
 
-After the daily-work gaps above, turn the reserved `Tabs` model into several
-independent Fold/Commander navigation contexts. Each tab has its own
+Independent Fold/Commander navigation contexts now use stable tab identities,
+a compact rail and a searchable actions picker. Each tab has its own
 locations, active pane, cursor/filter/scroll context, and preview context.
-Keep the operation queue visible globally so queued work cannot disappear
-behind a tab. Save tab locations and the active tab across restart; migrate
-old single-tab sessions. Do not persist pending operations merely to restore
-tabs: paths may be stale or unsafe after restart. Give async work stable tab
-identities and include `TabId` in UI scroll/cache keys. Define a safe policy
-for two STAR/FOLD processes sharing one session file so the second process
-cannot silently overwrite the first one's saved tabs. Fit the tab indicator
-within the existing minimum terminal height.
+The operation queue stays visible globally, with origin labels and shared copy
+locks. Workspace restoration includes forward trails, cursor identities,
+filters, sorting, search definitions and preview positions; old single-tab
+sessions migrate automatically. Pending operations and live processes are not
+serialized. Async results and UI caches use stable tab identities. A lifetime
+session lock prevents secondary windows from overwriting the owner's saved
+workspace. The rail fits within the existing minimum terminal height.
 
-**Pass:** Open two projects, switch tabs and views, close/reopen STAR/FOLD, and
-recover both locations and the active tab. Verify old session migration,
-pending-queue visibility, long labels at 60×21, and concurrent-instance
+**Coverage:** Core and UI tests cover independent settings and marks, async
+ownership, retained copy locks, editor/audio behavior, close/reopen, restoration
+and lazy missing-drive loading. Snapshots cover overflow in light and dark
+themes at 60×21. PTY checks exercise shortcuts and workspace restart.
+
+**Desktop check:** Open two projects, switch tabs and views, close/reopen
+STAR/FOLD, and recover both locations and the active tab. Verify old session
+migration, pending-queue visibility, long labels at 60×21, and concurrent-instance
 session behavior.
 
 **Why tabs:** Terminal tabs run independent STAR/FOLD instances. In-app tabs
-can preserve several project contexts inside one restorable session. This is
-worth implementing after the core gaps, not before them.
+can preserve several project contexts inside one restorable session. It follows the core daily-work improvements above.
 
 ### 7. Desktop file conveniences
 

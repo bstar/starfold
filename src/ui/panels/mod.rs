@@ -101,6 +101,7 @@ pub enum Word {
     Filter,
     Run,
     Cancel,
+    Copy,
     Clear,
     Close,
 }
@@ -119,6 +120,7 @@ impl Word {
             Word::Places => Some(('e', 4)),
             Word::View => Some(('v', 0)),
             Word::Run => Some(('r', 0)),
+            Word::Copy => Some(('C', 0)),
             Word::Cancel | Word::Clear => None,
             Word::Close => Some(('c', 0)),
         }
@@ -138,6 +140,7 @@ impl header::Word for Word {
             Word::Filter => "filter".into(),
             Word::Run => "resume".into(),
             Word::Cancel => "cancel".into(),
+            Word::Copy => "Copy".into(),
             Word::Clear => "remove".into(),
             Word::Close => "close".into(),
         }
@@ -400,7 +403,7 @@ mod tests {
                         )
                     }
                     ModuleId::Preview => matches!(w, Word::Close),
-                    ModuleId::Operations => matches!(w, Word::Run | Word::Clear),
+                    ModuleId::Operations => matches!(w, Word::Run | Word::Copy | Word::Clear),
                 };
                 assert!(allowed, "{m:?} offers {w:?}");
             }

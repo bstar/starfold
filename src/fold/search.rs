@@ -54,6 +54,8 @@ pub struct Search {
     pub skipped_binary: usize,
     pub skipped_large: usize,
     pub cursor: usize,
+    pub view: usize,
+    pub restore_cursor_path: Option<PathBuf>,
     pub status: Status,
     pub errors: Vec<String>,
     pub progress: Arc<Progress>,

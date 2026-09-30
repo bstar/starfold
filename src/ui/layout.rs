@@ -100,6 +100,7 @@ pub struct Regions {
     /// order. Every one of them is the full width of the area.
     modules: [Rect; 3],
     pub status: Rect,
+    pub tabs: Option<Rect>,
 }
 
 impl Regions {
@@ -125,6 +126,7 @@ pub struct LayoutState {
     /// independently, so this is its own flag rather than an `Option` shared
     /// with anything else.
     pub preview_open: bool,
+    pub tabs_visible: bool,
     /// An embedded player reserves ten body rows when possible, five at
     /// the terminal floor, temporarily borrowing rows from the file list.
     pub audio_active: bool,
@@ -153,6 +155,7 @@ impl LayoutState {
         Self {
             focus: ModuleId::Stack,
             preview_open: true,
+            tabs_visible: false,
             audio_active: false,
             editor_active: false,
             ops_active: false,
@@ -185,8 +188,13 @@ impl LayoutState {
             height: 1,
             ..area
         };
+        let tab_rows = u16::from(self.tabs_visible);
+        let tabs = self
+            .tabs_visible
+            .then(|| Rect::new(area.x, area.y, area.width, 1));
         let body = Rect {
-            height: area.height - 1,
+            y: area.y + tab_rows,
+            height: area.height - 1 - tab_rows,
             ..area
         };
 
@@ -197,7 +205,8 @@ impl LayoutState {
             8
         } else {
             STACK_MIN_ROWS
-        };
+        }
+        .saturating_sub(tab_rows);
         let room = body.height - stack_min - 2 * COLLAPSED_ROWS;
 
         // OPERATIONS only grows while focused, and then it is served first:
@@ -260,6 +269,7 @@ impl LayoutState {
             area,
             modules,
             status,
+            tabs,
         });
         self.last.as_ref()
     }

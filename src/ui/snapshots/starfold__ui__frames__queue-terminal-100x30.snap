@@ -1,12 +1,12 @@
 ---
 source: src/ui/frames.rs
-expression: "render(&mut app, 100, 30)"
+expression: frame
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
 ║                                         ‹  hidden  sort  filter  Bookmark  places  view  actions ║
 ║▸ ~                                                                                        6 items║
 ║─ projects/ ── 1 files · 2 dirs · 92 B ───────────────────────────────────────────────────────────║
-║    ▸ src/                                                         dir             -  2026-09-28  ║
+║    ▸ src/                                                         dir             -  ----------  ║
 ║    ▸ starwire/                                                    dir             -  Sep 10      ║
 ║    λ Cargo.toml                                                   toml         92 B  11:00       ║
 ║                                                                                                  ║
@@ -18,7 +18,7 @@ expression: "render(&mut app, 100, 30)"
 ║                                                                                                  ║
 ║                                                                                                  ║
 ║                                                                                                  ║
-╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
+╚═■■■■■■■■■■■■ 125.0 GB free / 500.0 GB total══════════════════════════════════════════════════════╝
 ╔═ PREVIEW — ▸ starwire ═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
 ║                                                                    Tree · 4 files · 2 dirs shown ║
@@ -28,7 +28,7 @@ expression: "render(&mut app, 100, 30)"
 ║ ├── ◇ .gitignore                                                                                 ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                           remove ║
+║                                                                                     Copy  remove ║
 ║COPY 2 items: ~/projec…o.toml +1 → ~/projects done · ctrl+x cancel · x remove · esc remove waiting║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ? help  yanked 2 items                                                               ~/projects  off

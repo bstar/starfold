@@ -27,6 +27,17 @@ fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("Missing archive request"))?,
         ));
     }
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--elevated-delete")) {
+        let path = PathBuf::from(
+            std::env::args_os()
+                .nth(2)
+                .ok_or_else(|| anyhow::anyhow!("Missing delete target"))?,
+        );
+        if std::env::args_os().nth(3).is_some() {
+            anyhow::bail!("Unexpected elevated-delete argument");
+        }
+        return fold::elevated::delete_one(&path).map_err(anyhow::Error::msg);
+    }
     let cli = cli::Cli::parse();
 
     PATHS.init_private_dirs();
@@ -134,6 +145,7 @@ fn run_tui(dir: Option<PathBuf>) -> Result<()> {
     let session = session::load(&session_path);
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let explicit = dir.clone();
     let restored = restore_locations(dir, &session, &cwd);
 
     let home = std::env::home_dir()
@@ -144,10 +156,39 @@ fn run_tui(dir: Option<PathBuf>) -> Result<()> {
     if let Some(hidden) = session.show_hidden {
         core.send(fold::Command::SetHidden(hidden));
     }
-    if let Some(sort) = session.sort {
-        core.send(fold::Command::SetSort(sort));
+    core.send(fold::Command::RestoreSorts {
+        fold: session.sort,
+        panes: [session.commander_left_sort, session.commander_right_sort],
+    });
+    if !session.tabs.is_empty() {
+        let (tabs, active) = restore_workspace(&session, explicit);
+        core.send(fold::Command::RestoreTabs(tabs, active));
     }
     ui::app::App::run(core, cfg, config_path, Some(session_path))
+}
+
+/// An explicit location starts fresh in only the active pane. A restored
+/// search or preview must not keep displaying its previous location.
+fn restore_workspace(
+    session: &session::Session,
+    explicit: Option<PathBuf>,
+) -> (Vec<session::TabSession>, usize) {
+    let mut tabs = session.tabs.clone();
+    let active = session.active_tab.min(tabs.len().saturating_sub(1));
+    if let (Some(dir), Some(tab)) = (explicit, tabs.get_mut(active)) {
+        let stack = if tab.commander {
+            tab.commander_pane.min(1) + 1
+        } else {
+            0
+        };
+        if let Some(saved) = tab.stacks.get_mut(stack) {
+            *saved = fold::stack::Stack::new(dir).snapshot();
+            tab.search = None;
+            tab.preview_scroll = 0;
+            tab.preview_page = None;
+        }
+    }
+    (tabs, active)
 }
 
 fn restore_locations(
@@ -284,5 +325,42 @@ mod startup_tests {
         assert_eq!(dirs[0].fallback.as_deref(), Some(dir.path()));
         assert_eq!(dirs[1].path, dir.path());
         assert_eq!((active, enabled), (0, true));
+    }
+    #[test]
+    fn cli_override_clears_only_active_pane_search_and_preview() {
+        let saved = session::TabSession {
+            commander: true,
+            commander_pane: 1,
+            active_stack: 2,
+            stacks: ["/fold", "/left", "/right"]
+                .iter()
+                .map(|path| fold::stack::Stack::new(PathBuf::from(path)).snapshot())
+                .collect(),
+            search: Some(session::SearchSession {
+                query: "old query".into(),
+                root: Some("/right".into()),
+                ..Default::default()
+            }),
+            preview_scroll: 40,
+            preview_page: Some(8),
+            ..Default::default()
+        };
+        let session = session::Session {
+            active_tab: 1,
+            tabs: vec![saved.clone(), saved.clone()],
+            ..Default::default()
+        };
+        let (tabs, active) = restore_workspace(&session, Some("/new/project".into()));
+        assert_eq!(active, 1);
+        assert_eq!(tabs[0], saved);
+        assert_eq!(tabs[1].stacks[0], saved.stacks[0]);
+        assert_eq!(tabs[1].stacks[1], saved.stacks[1]);
+        assert_eq!(
+            tabs[1].stacks[2].frames[0].dir,
+            PathBuf::from("/new/project")
+        );
+        assert!(tabs[1].search.is_none());
+        assert_eq!(tabs[1].preview_scroll, 0);
+        assert_eq!(tabs[1].preview_page, None);
     }
 }
