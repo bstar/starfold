@@ -21,6 +21,7 @@ pub mod layout;
 pub mod overlays;
 pub mod panels;
 pub mod places;
+mod popup;
 pub mod status;
 mod tabs;
 pub mod theme;

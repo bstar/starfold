@@ -3,6 +3,10 @@ use super::*;
 use crate::session::{SearchSession, TabSession};
 
 impl State {
+    pub fn can_reopen_tab(&self) -> bool {
+        !self.closed_tabs.is_empty()
+    }
+
     fn swap_context(&mut self, context: &mut TabContext) {
         macro_rules! swap { ($($field:ident),*) => { $(std::mem::swap(&mut self.$field, &mut context.$field);)* }; }
         swap!(

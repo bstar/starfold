@@ -276,14 +276,16 @@ between two devices.
 
 `ctrl+t` opens a fresh tab at the current locations with the same view and sort
 settings. `ctrl+w` closes it; the last tab stays open. `ctrl+pageup` and
-`ctrl+pagedown` cycle tabs. `ctrl+p` opens a picker searchable by name or path;
-right arrow opens its actions. The file actions menu also offers **Tabs…**.
+`ctrl+pagedown` cycle tabs. `ctrl+p` opens the tab list;
+right arrow opens its context popup; closing it returns to the list. The file actions menu also offers **Tabs…**.
 
 Each tab keeps Fold and Commander trails, active pane, cursor, scroll, marks,
 filters, hidden files, sorting, search, preview position, and module focus.
 The one-row rail spans both Commander panes, appears only with multiple tabs,
 and keeps the active tab visible when the labels overflow. Click a label to
-switch or right-click for actions; `[+]` opens a tab.
+switch or right-click for actions (regardless of the file-menu right-click
+setting); `×` closes that tab and `+` opens a tab. The active tab has a subtle
+fill with three spaces of padding on each side; inactive labels stay quiet and unboxed.
 
 Tab actions include duplicate, rename, move left/right, close, and reopen.
 An empty name restores the automatic directory label. Duplicate preserves

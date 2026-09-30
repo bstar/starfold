@@ -1,6 +1,6 @@
 ---
 source: src/ui/frames.rs
-expression: "render(&mut app, w, h)"
+expression: submenu
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
 ║                                         ‹  hidden  sort  filter  Bookmark  places  view  actions ║
@@ -13,10 +13,10 @@ expression: "render(&mut app, w, h)"
 ║ │  Move…              │                                           link         27 B  Sep 10      ║
 ║ │  Rename…            │                                                                          ║
 ║ │  Copy current path  │                                                                          ║
-║ │─────────────────────│                                                                          ║
-║ │  New              › │                                                                          ║
-║ │  Archive          › │                                                                          ║
-║ │─────────────────────│                                                                          ║
+║ │─────────────────────┌──────────────────┐                                                       ║
+║ │  New              › │  New file…       │                                                       ║
+║ │  Archive          › │  New directory…  │                                                       ║
+║ │─────────────────────└──────────────────┘                                                       ║
 ║ │  Delete             │                                                                          ║
 ╚═│─────────────────────│ree / 500.0 GB total══════════════════════════════════════════════════════╝
 ╔═│  Tabs…              │══════════════════════════════════════════════════════════════════════════╗

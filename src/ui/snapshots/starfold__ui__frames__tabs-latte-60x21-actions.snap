@@ -1,0 +1,25 @@
+---
+source: src/ui/frames.rs
+expression: actions
+---
+   7 ~               ×     8 ~               ×  ‹ ›  +
+╔═ S T A R / F O L D ══════════════════════════════ stack ═╗
+║ ‹  hidden  sort  filter  Bookmark  places  view  actions ║
+╔═ TABS ═══════════════════════════════════════════════════╗
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~ ┌─────────────────────┐                                 ║
+║  │  New tab            │                                 ║
+║  │  Duplicate tab      │                                 ║
+║  │  Rename tab…        │                                 ║
+║  │─────────────────────│                                 ║
+╚══│  Position         › │r switch · → actions · esc close ╝
+║  │─────────────────────│                          remove ║
+║  │  Close tab          │hing queued                      ║
+╚══│  Reopen closed tab  │═════════════════════════════════╝
+? h└─────────────────────┘rk  enter open  y yank  p   ~  off

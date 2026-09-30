@@ -20,7 +20,7 @@ files, `f` also opens the filter, and `e` also opens Places. The existing
 `.`, `/`, and `b` keys still work. Preview's `c` and Operations' `r`/`c` work only
 when that module has focus. The back arrow keeps its `h` navigation key.
 Press `c` with the Stack focused, or click `actions` in its heading, to open
-the modal file actions menu.
+the file actions popup.
 `F3` or `ctrl+f` opens recursive search below the active directory. In its
 prompt, Tab switches between filenames and file contents; content results
 show the first matching line and identify skipped binary or oversized files.
@@ -190,16 +190,28 @@ browser navigation, marking, global focus shortcuts, and quit keep their
 normal meanings. The player's transport, seek, and volume controls are also
 clickable. Left-click a visualizer to cycle it; Ctrl+click a visualizer or
 seek bar to cycle the seek style; wheel over a visualizer cycles it. Physical
-right-click does the same when `[ui] right_click = true`.
+right-click does the same by default; `[ui] right_click = false` disables physical right-click for file menus.
 
 | where | gesture | what it does |
 |---|---|---|
 | stack    | click                 | move the cursor |
 | stack    | double-click          | open it |
 | stack    | ctrl+click            | actions menu |
-| stack    | right-click           | actions if enabled |
+| stack    | right-click           | actions menu |
 | stack    | click a crumb         | jump there |
 | stack    | wheel                 | scroll three rows |
 | modules  | click a fold          | open it |
 | modules  | click a word          | what it says |
 | status   | click the bar         | open operations |
+
+## Context menus
+
+File, directory, tab and drop menus use compact popups. Move the pointer to
+highlight an action; hover a submenu for 200 ms or click it to open it.
+Up/Down or j/k navigate, Right opens a submenu, Left returns, and Enter
+chooses. Esc closes the deepest menu first. A click outside dismisses the
+menu without activating the file underneath. New and Archive actions are
+grouped into submenus; tab positioning has its own submenu.
+
+Ctrl+P retains the plain tab list. Right opens the selected tab's actions;
+closing that popup returns to the list. Unavailable tab actions are dimmed.

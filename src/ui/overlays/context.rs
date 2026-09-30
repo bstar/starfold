@@ -1,5 +1,6 @@
 //! Context menu and destination dialog. Targets are captured when opened,
 //! never reconstructed from a cursor that may subsequently move.
+use crate::ui::popup::{Answer as PopupAnswer, Entry, Popup};
 use crate::{
     fold::{archive::Format, ops::OpKind},
     ui::{
@@ -11,12 +12,7 @@ use starkit::{
     chrome::overlay::{self, Anchor},
     crossterm::event::{KeyCode, KeyEvent},
     input::{Edit, TextInput},
-    ratatui::{
-        buffer::Buffer,
-        layout::Rect,
-        style::Style,
-        widgets::{Clear, Widget},
-    },
+    ratatui::{buffer::Buffer, layout::Rect, style::Style},
 };
 use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +58,7 @@ impl Action {
             Self::Rename => "Rename…",
             Self::CreateFile => "New file…",
             Self::CreateDirectory => "New directory…",
-            Self::Delete => "Delete (queue)",
+            Self::Delete => "Delete",
             Self::Compress => "Compress…",
             Self::Extract => "Extract…",
         }
@@ -71,14 +67,12 @@ impl Action {
 #[derive(Debug)]
 pub struct Menu {
     pub target: Target,
+    #[cfg(test)]
     pub actions: Vec<Action>,
-    pub cursor: usize,
-    pub anchor: (u16, u16),
-    pub title: &'static str,
+    pub popup: Popup<Action>,
 }
 impl Menu {
     pub fn new(target: Target, anchor: (u16, u16)) -> Self {
-        let empty = target.sources.is_empty();
         let mut actions = if target.sources.is_empty() {
             vec![
                 Action::CopyCurrentPath,
@@ -112,16 +106,51 @@ impl Menu {
             actions.push(Action::Extract);
         }
         actions.push(Action::Tabs);
+        let action = |a: Action| Entry::action(a.label(), a);
+        let mut entries = Vec::new();
+        if !target.sources.is_empty() {
+            for a in [Action::Open, Action::Preview, Action::Edit, Action::Mark] {
+                if actions.contains(&a) {
+                    entries.push(action(a));
+                }
+            }
+            entries.push(Entry::Separator);
+            for a in [
+                Action::Copy,
+                Action::Move,
+                Action::Rename,
+                Action::CopyCurrentPath,
+            ] {
+                entries.push(action(a));
+            }
+            entries.push(Entry::Separator);
+        } else {
+            entries.push(action(Action::CopyCurrentPath));
+            entries.push(Entry::Separator);
+        }
+        entries.push(Entry::submenu(
+            "New",
+            vec![action(Action::CreateFile), action(Action::CreateDirectory)],
+        ));
+        let archive = [Action::Compress, Action::Extract]
+            .into_iter()
+            .filter(|a| actions.contains(a))
+            .map(action)
+            .collect::<Vec<_>>();
+        if !archive.is_empty() {
+            entries.push(Entry::submenu("Archive", archive));
+        }
+        if actions.contains(&Action::Delete) {
+            entries.push(Entry::Separator);
+            entries.push(action(Action::Delete).dangerous());
+        }
+        entries.push(Entry::Separator);
+        entries.push(action(Action::Tabs));
         Self {
             target,
+            #[cfg(test)]
             actions,
-            cursor: 0,
-            anchor,
-            title: if empty {
-                "directory actions"
-            } else {
-                "file actions"
-            },
+            popup: Popup::new(entries, anchor),
         }
     }
     pub fn for_drop(anchor: (u16, u16)) -> Self {
@@ -134,71 +163,32 @@ impl Menu {
                 create_dir: PathBuf::new(),
                 editable: false,
             },
+            #[cfg(test)]
             actions: vec![Action::Copy, Action::Move],
-            cursor: 0,
-            anchor,
-            title: "drop files",
+            popup: Popup::new(
+                vec![
+                    Entry::action("Copy", Action::Copy),
+                    Entry::action("Move", Action::Move),
+                ],
+                anchor,
+            ),
         }
     }
+    #[cfg(test)]
     pub fn rect(&self, area: Rect) -> Rect {
-        let w = 26.min(area.width);
-        let h = (self.actions.len() as u16 + 2).min(area.height);
-        Rect::new(
-            self.anchor.0.clamp(area.x, area.right().saturating_sub(w)),
-            self.anchor.1.clamp(area.y, area.bottom().saturating_sub(h)),
-            w,
-            h,
-        )
+        self.popup.root_rect(area)
     }
     pub fn center_in(&mut self, area: Rect) {
-        let width = 26.min(area.width);
-        let height = (self.actions.len() as u16 + 2).min(area.height);
-        self.anchor = (
-            area.x + area.width.saturating_sub(width) / 2,
-            area.y + area.height.saturating_sub(height) / 2,
-        );
+        self.popup.center_in(area);
     }
     pub fn key(&mut self, k: KeyEvent) -> Option<Action> {
-        match k.code {
-            KeyCode::Up | KeyCode::Char('k') => self.cursor = self.cursor.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.cursor = (self.cursor + 1).min(self.actions.len() - 1)
-            }
-            KeyCode::Enter => return self.actions.get(self.cursor).copied(),
-            _ => {}
+        match self.popup.key(k) {
+            PopupAnswer::Selected(a) => Some(a),
+            _ => None,
         }
-        None
     }
-    pub fn render(&self, area: Rect, buf: &mut Buffer, t: &Theme) {
-        let r = self.rect(area);
-        Clear.render(r, buf);
-        let inner = overlay::render(
-            r,
-            buf,
-            &overlay::Overlay {
-                theme: t,
-                title: self.title,
-                detail: None,
-                footer: None,
-            },
-        );
-        for (i, a) in self.actions.iter().take(inner.height as usize).enumerate() {
-            let style = if i == self.cursor {
-                Style::default().fg(rgb(t.bg)).bg(rgb(t.row_fg))
-            } else {
-                Style::default().fg(rgb(t.row_fg)).bg(rgb(t.bg))
-            };
-            buf.set_string(
-                inner.x,
-                inner.y + i as u16,
-                format!(
-                    "{:<width$}",
-                    fit(a.label(), inner.width),
-                    width = inner.width as usize
-                ),
-                style,
-            );
-        }
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, t: &Theme) {
+        self.popup.render(area, buf, t);
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]

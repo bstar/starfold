@@ -293,12 +293,16 @@ mod tests {
         let Some(Overlay::Context(menu)) = app.overlays.current() else {
             panic!("expected the file actions menu")
         };
-        let index = menu
-            .actions
-            .iter()
-            .position(|item| *item == action)
-            .unwrap();
-        for _ in 0..index {
+        let steps = if menu.target.sources.is_empty() {
+            1
+        } else {
+            7 + usize::from(menu.target.editable)
+        };
+        for _ in 0..steps {
+            app.key(key(KeyCode::Down));
+        }
+        app.key(key(KeyCode::Right));
+        if action == overlays::context::Action::CreateDirectory {
             app.key(key(KeyCode::Down));
         }
         app.key(key(KeyCode::Enter));
@@ -388,6 +392,7 @@ mod tests {
             ]
         );
         app.key(key(KeyCode::Down));
+        app.key(key(KeyCode::Right));
         app.key(key(KeyCode::Enter));
         assert!(matches!(app.overlays.current(), Some(Overlay::Create(_))));
         type_name(&mut app, "inside.txt");

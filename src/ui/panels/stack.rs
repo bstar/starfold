@@ -297,7 +297,7 @@ fn render_space(area: Rect, buf: &mut Buffer, theme: &Theme, space: Option<(u64,
         x + filled as u16,
         y,
         "■".repeat(bar_width - filled),
-        Style::default().fg(rgb(theme.dim)),
+        Style::default().fg(rgb(theme.border)),
     );
     let label_style = Style::default().fg(rgb(theme.dim));
     buf.set_string(x + bar_width as u16, y, " ", label_style);
@@ -742,7 +742,7 @@ mod tests {
             buf[(area.x + 2, area.bottom() - 1)].fg,
             rgb(theme.fold.progress_fg)
         );
-        assert_eq!(buf[(area.x + 7, area.bottom() - 1)].fg, rgb(theme.dim));
+        assert_eq!(buf[(area.x + 7, area.bottom() - 1)].fg, rgb(theme.border));
         assert_eq!(
             split(frame::body(area, &words(ModuleId::Stack)), 0, 6)
                 .list

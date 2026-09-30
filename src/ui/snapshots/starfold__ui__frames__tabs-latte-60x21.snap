@@ -2,7 +2,7 @@
 source: src/ui/frames.rs
 expression: frame
 ---
-[7 ~             ][8 ~             ]‹ › … [+]───────────────
+   7 ~               ×     8 ~               ×  ‹ ›  +
 ╔═ S T A R / F O L D ══════════════════════════════ stack ═╗
 ║ ‹  hidden  sort  filter  Bookmark  places  view  actions ║
 ║─ ~ ── 3 files · 3 dirs · 290 B ──────────────────────────║

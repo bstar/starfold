@@ -508,13 +508,16 @@ fn create_dialogs_at_both_terminal_sizes() {
         for _ in 0..7 {
             app.key(code(KeyCode::Down));
         }
+        app.key(code(KeyCode::Right));
         app.key(code(KeyCode::Enter));
         insta::assert_snapshot!(format!("create-file-{w}x{h}"), render(&mut app, w, h));
         app.key(code(KeyCode::Esc));
         app.key(code(KeyCode::Menu));
-        for _ in 0..8 {
+        for _ in 0..7 {
             app.key(code(KeyCode::Down));
         }
+        app.key(code(KeyCode::Right));
+        app.key(code(KeyCode::Down));
         app.key(code(KeyCode::Enter));
         insta::assert_snapshot!(format!("create-directory-{w}x{h}"), render(&mut app, w, h));
     }
@@ -709,6 +712,13 @@ fn file_context_menu_at_both_terminal_sizes() {
         settle(&mut app, &fk);
         app.key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
         insta::assert_snapshot!(format!("file-menu-{w}x{h}"), render(&mut app, w, h));
+        for _ in 0..7 {
+            app.key(code(KeyCode::Down));
+        }
+        app.key(code(KeyCode::Right));
+        let submenu = render(&mut app, w, h);
+        assert!(submenu.contains("New file…") && submenu.contains("New directory…"));
+        insta::assert_snapshot!(format!("file-submenu-{w}x{h}"), submenu);
     }
 }
 #[test]
@@ -746,12 +756,19 @@ fn workspace_tabs_fit_the_floor_in_light_and_dark_themes() {
         }
         settle(&mut app, &fake);
         let frame = render(&mut app, 60, 21);
-        assert!(frame.contains("[8 "), "{frame}");
-        assert!(frame.contains("[+]"), "{frame}");
+        assert!(frame.contains("  8 "), "{frame}");
+        assert!(frame.lines().next().unwrap().ends_with('+'), "{frame}");
         insta::assert_snapshot!(name, frame);
         app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
         let picker = render(&mut app, 60, 21);
-        assert!(picker.contains("find:"));
+        assert!(picker.contains("TABS"));
+        assert!(!picker.contains("find:"));
         insta::assert_snapshot!(format!("{name}-picker"), picker);
+        app.key(code(KeyCode::Right));
+        let actions = render(&mut app, 60, 21);
+        assert!(actions.contains("New tab") && actions.contains("Position"));
+        insta::assert_snapshot!(format!("{name}-actions"), actions);
+        app.key(code(KeyCode::Esc));
+        assert!(render(&mut app, 60, 21).contains("TABS"));
     }
 }

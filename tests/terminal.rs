@@ -120,6 +120,33 @@ fn collect_for(child: &mut Running, duration: Duration) -> Vec<u8> {
     output
 }
 
+fn assert_synchronized_frames(output: &[u8]) {
+    let begin = b"\x1b[?2026h";
+    let end = b"\x1b[?2026l";
+    let mut in_frame = false;
+    let mut frames = 0;
+    let mut i = 0;
+    while i < output.len() {
+        if output[i..].starts_with(begin) {
+            assert!(!in_frame, "nested synchronized frame");
+            in_frame = true;
+            i += begin.len();
+        } else if output[i..].starts_with(end) {
+            assert!(in_frame, "frame ended without starting");
+            in_frame = false;
+            frames += 1;
+            i += end.len();
+        } else {
+            if output[i..].starts_with(b"\x1b[2J") {
+                assert!(in_frame, "screen clear exposed outside a frame");
+            }
+            i += 1;
+        }
+    }
+    assert!(!in_frame, "terminal left waiting for the frame to finish");
+    assert!(frames > 0, "no synchronized frames emitted");
+}
+
 #[test]
 fn startup_redraw_and_resize_need_no_cursor_position_reply() {
     let tmp = tempfile::tempdir().unwrap();
@@ -835,10 +862,31 @@ fn workspace_tabs_shortcuts_restart_and_cli_override() {
     child.master.as_mut().unwrap().write_all(b"\x14").unwrap();
     let output = collect_for(&mut child, Duration::from_millis(200));
     assert!(
-        String::from_utf8_lossy(&output).contains("[+]"),
+        String::from_utf8_lossy(&output).contains('‹'),
         "new tab rail missing: {}",
         String::from_utf8_lossy(&output)
     );
+    // Open tabs, then its actions. Moving the modal cursor must draw a diff,
+    // without the clear-screen escape that causes visible flicker.
+    child.master.as_mut().unwrap().write_all(b"\x10").unwrap();
+    let opened = collect_for(&mut child, Duration::from_millis(100));
+    assert_synchronized_frames(&opened);
+    child.master.as_mut().unwrap().write_all(b"\x1b[C").unwrap();
+    let actions = collect_for(&mut child, Duration::from_millis(100));
+    assert!(String::from_utf8_lossy(&actions).contains("New tab"));
+    assert!(!actions.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+    assert_synchronized_frames(&actions);
+    child.master.as_mut().unwrap().write_all(b"\x1b[B").unwrap();
+    let moved = collect_for(&mut child, Duration::from_millis(100));
+    assert!(!moved.is_empty(), "modal cursor did not redraw");
+    assert!(!moved.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+    assert_synchronized_frames(&moved);
+    child.master.as_mut().unwrap().write_all(b"\x1b").unwrap();
+    collect_for(&mut child, Duration::from_millis(100));
+    // Returning from tab actions leaves the tab list open.
+    child.master.as_mut().unwrap().write_all(b"\x1b").unwrap();
+    let closed = collect_for(&mut child, Duration::from_millis(100));
+    assert_synchronized_frames(&closed);
     // Ctrl+PageUp, then Ctrl+PageDown use xterm's standard modified-key codes.
     child
         .master
@@ -854,7 +902,7 @@ fn workspace_tabs_shortcuts_restart_and_cli_override() {
     assert_eq!(saved["active_tab"].as_integer(), Some(0));
     let mut restored = workspace_child(&config, Some(&second));
     let startup = frame(&mut restored);
-    assert!(String::from_utf8_lossy(&startup).contains("[+]"));
+    assert!(String::from_utf8_lossy(&startup).contains('‹'));
     restored
         .master
         .as_mut()

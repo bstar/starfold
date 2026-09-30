@@ -54,6 +54,7 @@ use starkit::crossterm::event::{
     self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent,
     MouseEventKind,
 };
+use starkit::crossterm::SynchronizedUpdate;
 use starkit::graphics::{Graphics, ImageId, Mode};
 use starkit::image::RgbaImage;
 use starkit::input::TextInput;
@@ -929,16 +930,22 @@ impl App {
             }
             self.tick();
 
-            if std::mem::take(&mut self.repaint) {
-                // Terminal::clear queries the cursor and can time out before
-                // the first frame. Fullscreen resize clears the viewport and
-                // invalidates the back buffer without a terminal round trip,
-                // even when the dimensions have not changed.
-                term.resize(term.size()?.into())?;
-            }
-            term.draw(|f| {
-                self.draw(f.area(), f.buffer_mut());
-            })?;
+            // Keep clears, graphics updates and cell diffs in one terminal
+            // frame. Otherwise a menu transition can expose the cleared
+            // screen, or half of the popup, before the draw has finished.
+            // Unsupported terminals ignore the synchronization sequences.
+            std::io::stdout().sync_update(|_| -> Result<()> {
+                if std::mem::take(&mut self.repaint) {
+                    // Terminal::clear queries the cursor and can time out
+                    // before the first frame. Resize invalidates the buffers
+                    // without that round trip, even at the same dimensions.
+                    term.resize(term.size()?.into())?;
+                }
+                term.draw(|f| {
+                    self.draw(f.area(), f.buffer_mut());
+                })?;
+                Ok(())
+            })??;
 
             if event::poll(FRAME)? {
                 // OSC 72 file content arrives in 4 KiB chunks. Drain a
@@ -985,6 +992,11 @@ impl App {
 
     /// Everything a frame does before it draws.
     pub fn tick(&mut self) {
+        let now = Instant::now();
+        self.overlays.tick(now);
+        if let Some(picker) = &mut self.tab_picker {
+            picker.tick(now);
+        }
         self.save_workspace(false);
         self.poll_parked_editors();
         self.dnd_poll_completion();
@@ -1733,7 +1745,7 @@ impl App {
                     });
                 }
             }
-            Answer::Consumed => {}
+            Answer::Consumed => return,
             Answer::Closed => self.dnd_cancel_choice(),
             Answer::Confirmed(pending) => self.on_confirmed(pending),
             Answer::RetryFailedDelete(paths) => {
@@ -1778,11 +1790,8 @@ impl App {
             }
             Answer::Quit => self.quit = true,
         }
-        // Closing an overlay can uncover a panel that redraws differently
-        // from what is on screen (a renamed row, a cleared queue), and a
-        // half-typed rename repaints on every keystroke the same way
-        // STAR/CORD's own overlays do -- cheap next to the cost of a frame
-        // that is wrong.
+        // Completed actions may change underlying graphics. Navigation and
+        // text entry use ordinary frame diffs, without clearing the screen.
         self.repaint = true;
     }
 
@@ -2281,9 +2290,6 @@ impl App {
         let Some(regions) = self.layout.last.clone() else {
             return;
         };
-        if m.kind == MouseEventKind::Down(MouseButton::Right) && !self.cfg.ui.right_click {
-            return;
-        }
         // Some terminals reserve the physical right button. Treat Ctrl+left
         // as the same action before scrollbar, pane, and preview dispatch.
         let kind = if m.kind == MouseEventKind::Down(MouseButton::Left)
@@ -2295,9 +2301,23 @@ impl App {
             m.kind
         };
         if let Some(picker) = &mut self.tab_picker {
-            if matches!(kind, MouseEventKind::Down(MouseButton::Left)) {
-                let answer = picker.click(regions.area, m.column, m.row);
-                self.tab_answer(answer);
+            match kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let answer = picker.click(regions.area, m.column, m.row);
+                    self.tab_answer(answer);
+                }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    let answer = picker.outside_click(regions.area, m.column, m.row);
+                    self.tab_answer(answer);
+                }
+                MouseEventKind::Moved => picker.hover(regions.area, m.column, m.row),
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => picker.wheel(
+                    regions.area,
+                    m.column,
+                    m.row,
+                    kind == MouseEventKind::ScrollDown,
+                ),
+                _ => {}
             }
             return;
         }
@@ -2314,16 +2334,38 @@ impl App {
             {
                 match kind {
                     MouseEventKind::Down(MouseButton::Left) => self.tab_hit(hit, false),
-                    MouseEventKind::Down(MouseButton::Right) => self.tab_hit(hit, true),
+                    MouseEventKind::Down(MouseButton::Right) => {
+                        self.tab_hit(hit, true);
+                        if let Some(picker) = &mut self.tab_picker {
+                            picker.set_anchor((m.column, m.row.saturating_add(1)));
+                        }
+                    }
                     _ => {}
                 }
                 return;
             }
         }
+        // File-menu preferences must not disable the tab actions menu.
+        if m.kind == MouseEventKind::Down(MouseButton::Right) && !self.cfg.ui.right_click {
+            return;
+        }
         if self.overlays.is_open() {
             match kind {
-                MouseEventKind::ScrollDown => self.overlays.scroll(false),
-                MouseEventKind::ScrollUp => self.overlays.scroll(true),
+                MouseEventKind::Down(MouseButton::Right) => {
+                    let answer = self.overlays.dismiss_outside(regions.area, m.column, m.row);
+                    self.after_overlay_answer(answer);
+                }
+                MouseEventKind::Moved => self.overlays.hover(regions.area, m.column, m.row),
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                    if !self.overlays.menu_wheel(
+                        regions.area,
+                        m.column,
+                        m.row,
+                        kind == MouseEventKind::ScrollDown,
+                    ) {
+                        self.overlays.scroll(kind == MouseEventKind::ScrollUp);
+                    }
+                }
                 MouseEventKind::Down(MouseButton::Left) => {
                     let answer = self.overlays.click(m.column, m.row, regions.area);
                     self.after_overlay_answer(answer);
@@ -3934,7 +3976,10 @@ mod tests {
                 .actions
                 .contains(&overlays::context::Action::CreateFile));
             assert!(menu.actions.contains(&overlays::context::Action::Delete));
-            assert_eq!(menu.rect(overlay_area).x, overlay_area.x + (width - 26) / 2);
+            assert_eq!(
+                menu.rect(overlay_area).x,
+                overlay_area.x + (width - menu.rect(overlay_area).width) / 2
+            );
             app.key(code(KeyCode::Esc));
         }
         app.key(key('c'));
@@ -4028,8 +4073,35 @@ mod tests {
     }
 
     #[test]
-    fn control_click_opens_actions_and_physical_right_click_is_opt_in() {
+    fn context_menu_hover_and_outside_click_do_not_act_on_the_files_below() {
         let (mut app, fk, _dir) = app();
+        fk.pump();
+        app.tick();
+        let area = Rect::new(0, 0, 100, 30);
+        app.draw(area, &mut Buffer::empty(area));
+        app.open_file_menu(3, 3);
+        let original = app.core.state().cursor_entry().unwrap().path.clone();
+        let Some(Overlay::Context(menu)) = app.overlays.current() else {
+            panic!("expected context popup")
+        };
+        let r = menu.rect(area);
+        let mut before = Buffer::empty(area);
+        app.draw(area, &mut before);
+        app.repaint = false;
+        app.mouse(mouse(MouseEventKind::Moved, r.x + 3, r.y + 2));
+        assert!(!app.repaint);
+        assert_eq!(app.core.state().cursor_entry().unwrap().path, original);
+        let mut after = Buffer::empty(area);
+        app.draw(area, &mut after);
+        assert_ne!(before, after);
+        app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 90, 7));
+        assert!(!app.overlays.is_open());
+        assert_eq!(app.core.state().cursor_entry().unwrap().path, original);
+    }
+    #[test]
+    fn control_click_opens_actions_when_physical_right_click_is_disabled() {
+        let (mut app, fk, _dir) = app();
+        app.cfg.ui.right_click = false;
         fk.pump();
         app.tick();
         let area = Rect::new(0, 0, 100, 30);

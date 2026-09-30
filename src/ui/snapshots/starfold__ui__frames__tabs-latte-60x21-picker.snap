@@ -2,20 +2,20 @@
 source: src/ui/frames.rs
 expression: picker
 ---
-[7 ~             ][8 ~             ]‹ › … [+]───────────────
+   7 ~               ×     8 ~               ×  ‹ ›  +
 ╔═ S T A R / F O L D ══════════════════════════════ stack ═╗
 ║ ‹  hidden  sort  filter  Bookmark  places  view  actions ║
 ╔═ TABS ═══════════════════════════════════════════════════╗
-║find:                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
+║~   ~                                                     ║
 ║                                                          ║
-║~   ~                                                     ║
-║~   ~                                                     ║
-║~   ~                                                     ║
-║~   ~                                                     ║
-║~   ~                                                     ║
-║~   ~                                                     ║
-║~   ~                                                     ║
-║~   ~                                                     ║
+║                                                          ║
 ║                                                          ║
 ║                                                          ║
 ╚════════════════════ enter switch · → actions · esc close ╝

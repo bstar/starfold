@@ -8,7 +8,7 @@ expression: "render(&mut app, 100, 30)"
 ║›   ▸ emp║  ctrl+t        new tab              click                move the cursor     ║ 10      ║
 ║    ▸ pic║  ctrl+w        close tab            double-click         open it             ║ 10      ║
 ║    ▸ pro║  ctrl+pgdn     next tab             ctrl+click           actions menu        ║ 10      ║
-║    ◇ blo║  ctrl+pgup     previous tab         right-click          actions if enabled  ║ 10      ║
+║    ◇ blo║  ctrl+pgup     previous tab         right-click          actions menu        ║ 10      ║
 ║    ↗ dan║  ctrl+p        tabs and actions     click a crumb        jump there          ║ 10      ║
 ║    ↗ not║  navigation                         wheel                scroll three rows   ║ 10      ║
 ║         ║  tab           next module          modules                                  ║         ║

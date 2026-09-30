@@ -240,13 +240,6 @@ impl App {
                 if self.tab_ui.get(&tab.id).is_some_and(|c| c.editor.is_some()) {
                     badges.push("edit".into());
                 }
-                let commander = tab
-                    .context
-                    .as_ref()
-                    .map_or(state.commander, |c| c.commander);
-                if commander {
-                    badges.push("⇄".into());
-                }
                 badges.dedup();
                 tabs::Item {
                     id: tab.id,
@@ -265,11 +258,22 @@ impl App {
             Some(id) => tabs::Picker::menu(self.tab_items(), id),
             None => tabs::Picker::new(self.tab_items(), self.core.state().tabs.active().id),
         });
+        let anchor = menu
+            .and_then(|id| {
+                self.tab_hits.iter().find_map(|(r, h)| {
+                    matches!(h,tabs::Hit::Tab(tab) if *tab==id).then_some((r.x + 3, r.y + 1))
+                })
+            })
+            .unwrap_or((0, 0));
+        let reopen = self.core.state().can_reopen_tab();
+        self.tab_picker.as_mut().unwrap().configure(anchor, reopen);
         self.repaint = true;
     }
     pub(super) fn tab_answer(&mut self, answer: tabs::Answer) {
         match answer {
-            tabs::Answer::Consumed => {}
+            // The normal frame diff draws cursor and input changes. A full
+            // repaint clears the terminal and makes every menu key flicker.
+            tabs::Answer::Consumed => return,
             tabs::Answer::Action(action) => {
                 self.tab_picker = None;
                 self.tab_action(action);
@@ -284,12 +288,13 @@ impl App {
     }
     pub(super) fn tab_hit(&mut self, hit: tabs::Hit, menu: bool) {
         match hit {
+            tabs::Hit::Close(id) if menu => self.open_tab_picker(Some(id)),
+            tabs::Hit::Close(id) => self.tab_action(TabAction::Close(id)),
             tabs::Hit::Tab(id) if menu => self.open_tab_picker(Some(id)),
             tabs::Hit::Tab(id) => self.tab_action(TabAction::Switch(id)),
             tabs::Hit::New => self.tab_action(TabAction::New),
             tabs::Hit::Previous => self.cycle_tab(-1),
             tabs::Hit::Next => self.cycle_tab(1),
-            tabs::Hit::Picker => self.open_tab_picker(None),
         }
     }
     pub(super) fn cycle_tab(&mut self, delta: i32) {
@@ -608,6 +613,63 @@ mod tests {
         assert_eq!(app.core.state().tabs.tabs.len(), 1);
         app.draw(area, &mut buffer);
         assert!(app.layout.last.as_ref().unwrap().tabs.is_none());
+    }
+    #[test]
+    fn tab_close_button_closes_its_tab_without_switching_to_it() {
+        let (mut app, _, _) = app();
+        let first = app.core.state().tabs.active().id;
+        app.key(ctrl(KeyCode::Char('t')));
+        let second = app.core.state().tabs.active().id;
+        let area = Rect::new(0, 0, 60, 21);
+        app.draw(area, &mut Buffer::empty(area));
+        let (rect, _) = app
+            .tab_hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, tabs::Hit::Close(id) if *id == first))
+            .unwrap();
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.core.state().tabs.tabs.len(), 1);
+        assert_eq!(app.core.state().tabs.active().id, second);
+        assert!(app.tab_picker.is_none());
+        app.draw(area, &mut Buffer::empty(area));
+        assert!(app.tab_hits.is_empty());
+    }
+    #[test]
+    fn tab_right_click_can_rename_an_inactive_tab_with_file_menus_disabled() {
+        let (mut app, _, _) = app();
+        app.cfg.ui.right_click = false;
+        let first = app.core.state().tabs.active().id;
+        app.key(ctrl(KeyCode::Char('t')));
+        let second = app.core.state().tabs.active().id;
+        let area = Rect::new(0, 0, 60, 21);
+        app.draw(area, &mut Buffer::empty(area));
+        let (rect, _) = app
+            .tab_hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, tabs::Hit::Tab(id) if *id == first))
+            .unwrap();
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: rect.x + 3,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.tab_picker.is_some());
+        for code in [KeyCode::Down, KeyCode::Down, KeyCode::Enter] {
+            app.key(KeyEvent::new(code, KeyModifiers::NONE));
+        }
+        for c in " renamed".chars() {
+            app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.core.state().tab_label(first).ends_with(" renamed"));
+        assert_eq!(app.core.state().tabs.active().id, second);
+        assert!(app.tab_picker.is_none());
     }
     #[test]
     fn scrollbar_and_drag_ownership_prevent_tab_switches() {

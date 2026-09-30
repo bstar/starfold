@@ -233,6 +233,15 @@ impl Overlays {
             self.current = None;
             return Answer::Quit;
         }
+        if matches!(k.code, KeyCode::Esc | KeyCode::Left) {
+            if let Some(Overlay::Context(m) | Overlay::Drop(m)) = self.current.as_mut() {
+                if m.popup.back() {
+                    return Answer::Consumed;
+                }
+                self.current = None;
+                return Answer::Closed;
+            }
+        }
         if k.code == KeyCode::Esc {
             self.current = None;
             return Answer::Closed;
@@ -398,6 +407,33 @@ impl Overlays {
         answer
     }
 
+    pub fn hover(&mut self, area: Rect, x: u16, y: u16) {
+        if let Some(Overlay::Context(m) | Overlay::Drop(m)) = self.current.as_mut() {
+            m.popup.hover(area, x, y);
+        }
+    }
+    pub fn dismiss_outside(&mut self, area: Rect, x: u16, y: u16) -> Answer {
+        if let Some(Overlay::Context(m) | Overlay::Drop(m)) = self.current.as_mut() {
+            if !m.popup.contains(area, x, y) {
+                self.current = None;
+                return Answer::Closed;
+            }
+        }
+        Answer::Consumed
+    }
+    pub fn tick(&mut self, now: std::time::Instant) {
+        if let Some(Overlay::Context(m) | Overlay::Drop(m)) = self.current.as_mut() {
+            m.popup.tick(now);
+        }
+    }
+    pub fn menu_wheel(&mut self, area: Rect, x: u16, y: u16, down: bool) -> bool {
+        if let Some(Overlay::Context(m) | Overlay::Drop(m)) = self.current.as_mut() {
+            m.popup.wheel(area, x, y, down);
+            true
+        } else {
+            false
+        }
+    }
     /// A click, while something is open. Outside the box it closes,
     /// whichever overlay it is; inside, the help ignores it, a confirmation's
     /// two footer words answer, and a conflict prompt's rows move the
@@ -409,37 +445,21 @@ impl Overlays {
         let overlay = self.current.as_mut().expect("checked above");
         let mut start_rename = None;
         let (close, answer) = match overlay {
-            Overlay::Drop(m) => {
-                let r = m.rect(area);
-                if !inside(r, x, y) {
-                    (true, Answer::Closed)
-                } else if y > r.y && y < r.bottom() - 1 {
-                    match m.actions.get((y - r.y - 1) as usize) {
-                        Some(context::Action::Copy) => {
-                            (true, Answer::Drop(crate::fold::ops::OpKind::Copy))
-                        }
-                        Some(context::Action::Move) => {
-                            (true, Answer::Drop(crate::fold::ops::OpKind::Move))
-                        }
-                        _ => (false, Answer::Consumed),
-                    }
-                } else {
-                    (false, Answer::Consumed)
+            Overlay::Drop(m) => match m.popup.click(area, x, y) {
+                super::popup::Answer::Selected(context::Action::Copy) => {
+                    (true, Answer::Drop(crate::fold::ops::OpKind::Copy))
                 }
-            }
-            Overlay::Context(m) => {
-                let r = m.rect(area);
-                if !inside(r, x, y) {
-                    (true, Answer::Closed)
-                } else if y > r.y && y < r.bottom() - 1 {
-                    match m.actions.get((y - r.y - 1) as usize) {
-                        Some(a) => (true, Answer::Context(m.target.clone(), *a)),
-                        None => (false, Answer::Consumed),
-                    }
-                } else {
-                    (false, Answer::Consumed)
+                super::popup::Answer::Selected(context::Action::Move) => {
+                    (true, Answer::Drop(crate::fold::ops::OpKind::Move))
                 }
-            }
+                super::popup::Answer::Dismissed => (true, Answer::Closed),
+                _ => (false, Answer::Consumed),
+            },
+            Overlay::Context(m) => match m.popup.click(area, x, y) {
+                super::popup::Answer::Selected(a) => (true, Answer::Context(m.target.clone(), a)),
+                super::popup::Answer::Dismissed => (true, Answer::Closed),
+                _ => (false, Answer::Consumed),
+            },
             Overlay::Destination(_) => {
                 if inside(context::Destination::rect(area), x, y) {
                     (false, Answer::Consumed)
