@@ -8,6 +8,8 @@ A terminal file manager in the STAR family. The directories you drill through
 stack up behind you, the files you mark stay marked wherever you go, and
 file operations start immediately with progress and cancellation controls.
 
+![STAR/FOLD showing two directory panes, an image preview, and the operations queue](docs/screenshot.png)
+
 [Status](docs/status.md) says how much of that is built today, area by area.
 
 Unfold your filesystem.
