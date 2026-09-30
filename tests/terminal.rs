@@ -26,6 +26,12 @@ impl Drop for Running {
     }
 }
 
+fn temporary_dir() -> tempfile::TempDir {
+    // macOS exposes /var through /private/var. Match the canonical paths
+    // emitted by startup listings and drag offers.
+    tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap()
+}
+
 fn pty() -> (File, File) {
     let (mut master, mut slave) = (-1, -1);
     let mut size = libc::winsize {
@@ -108,12 +114,26 @@ fn frame(child: &mut Running) -> Vec<u8> {
 fn collect_for(child: &mut Running, duration: Duration) -> Vec<u8> {
     let deadline = Instant::now() + duration;
     let mut output = Vec::new();
-    while Instant::now() < deadline {
+    let frame_deadline = deadline + Duration::from_secs(5);
+    loop {
         let mut bytes = [0u8; 16384];
         match child.master.as_mut().unwrap().read(&mut bytes) {
             Ok(n) => output.extend_from_slice(&bytes[..n]),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
             Err(e) => panic!("PTY read: {e}"),
+        }
+        if Instant::now() >= deadline {
+            // PTY reads can split a repaint. Finish an already-started frame
+            // before testing its synchronization, with a bounded wait.
+            let begin = output.windows(8).rposition(|w| w == b"\x1b[?2026h");
+            let end = output.windows(8).rposition(|w| w == b"\x1b[?2026l");
+            if begin.is_none() || end > begin {
+                break;
+            }
+            assert!(
+                Instant::now() < frame_deadline,
+                "unfinished synchronized frame"
+            );
         }
         std::thread::sleep(Duration::from_millis(2));
     }
@@ -149,7 +169,7 @@ fn assert_synchronized_frames(output: &[u8]) {
 
 #[test]
 fn startup_redraw_and_resize_need_no_cursor_position_reply() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = temporary_dir();
     let config = tmp.path().join("config");
     let files = tmp.path().join("files");
     std::fs::create_dir(&config).unwrap();
@@ -245,7 +265,7 @@ fn startup_redraw_and_resize_need_no_cursor_position_reply() {
 #[test]
 fn osc72_capability_reply_and_internal_drop_copy() {
     use base64::Engine as _;
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = temporary_dir();
     let config = tmp.path().join("config");
     let files = tmp.path().join("files");
     std::fs::create_dir(&config).unwrap();
@@ -498,7 +518,7 @@ fn osc72_capability_reply_and_internal_drop_copy() {
 fn osc72_remote_desktop_drop_streams_file() {
     use base64::Engine as _;
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = temporary_dir();
     let config = tmp.path().join("config");
     let files = tmp.path().join("files");
     std::fs::create_dir(&config).unwrap();
@@ -612,7 +632,7 @@ fn osc72_remote_desktop_drop_streams_file() {
 fn osc72_commander_drag_between_panes() {
     use base64::Engine as _;
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = temporary_dir();
     let config = tmp.path().join("config");
     let left = tmp.path().join("left");
     let right = tmp.path().join("right");
@@ -849,7 +869,7 @@ fn quit_workspace(child: &mut Running) {
 }
 #[test]
 fn workspace_tabs_shortcuts_restart_and_cli_override() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = temporary_dir();
     let config = tmp.path().join("config");
     let first = tmp.path().join("first");
     let second = tmp.path().join("second");
