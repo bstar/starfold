@@ -101,7 +101,7 @@ image identity. Existing preview resource limits still apply.
 | WezTerm / iTerm2 | Inline image transport where negotiated; text fallback | Expected from transport; hands-on performance check required |
 | Sixel terminals | Sixel surfaces where negotiated; text fallback | Expected from transport; hands-on repaint check required |
 | Ordinary text terminals | Full text file-manager workflow | PTY startup, resizing and existing operation/drop tests |
-| SSH | Local emulator's transport; lower update limit; existing OSC72 stream | Real PTY SSH-drop simulations; remote graphical latency needs hands-on check |
+| SSH | Local emulator's transport; lower update limit; existing OSC72 stream | Actual authenticated loopback SSH in Kitty rendered 20 image cells and exited cleanly; network latency remains unmeasured |
 | tmux | Auto graphics fallback follows existing transport policy | Text path supported; image passthrough needs hands-on check |
 
 Native desktop pixels cannot travel through an ordinary SSH terminal. The enhanced
@@ -129,6 +129,11 @@ For a smaller server build, use `--features visual` and run
 `target/release/starfold visual --backend terminal`; it does not need GPUI or a
 display server. The native window requires a local graphical session or a separate
 remote display solution and does not travel through ordinary SSH.
+
+A private loopback SSH server and an unconfigured Kitty window verified actual
+protocol negotiation and image rendering over an SSH PTY. No regular SSH or
+terminal configuration was changed. This verifies transport, not performance on
+a distant host or through tmux.
 
 ## Runtime screenshots
 
