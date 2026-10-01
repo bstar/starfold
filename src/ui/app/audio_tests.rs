@@ -836,7 +836,7 @@ fn missing_player_falls_back_to_configured_external_opener() {
         ),
     );
     let mut cfg = Config::default();
-    cfg.open.command = opener.display().to_string();
+    cfg.open.command = format!("sh {}", shell_quote(&opener.display().to_string()));
     cfg.preview.audio_player = crate::config::AudioPlayer::Staramp;
     let (mut app, fake, selected, _other) = media_app_with_config(cfg);
     app.audio = AudioClient::with_executable(fake.fixture.path("missing-staramp"));

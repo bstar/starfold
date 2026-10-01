@@ -130,7 +130,6 @@ pub fn copy_text(text: &str) -> Result<&'static str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt as _;
 
     #[test]
     fn ssh_uses_the_terminal_even_with_a_forwarded_display() {
@@ -165,30 +164,33 @@ mod tests {
     #[test]
     fn helper_receives_multiline_text_and_reports_rejection() {
         let dir = tempfile::tempdir().unwrap();
-        let helper = dir.path().join("clipboard-helper");
-        std::fs::write(&helper, "#!/bin/sh\ncat > \"$1\"\n").unwrap();
-        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
         let target = dir.path().join("clipboard.txt");
+        // Execute the installed shell; fresh executable fixtures can race
+        // with concurrent process creation and fail with ETXTBSY.
         copy_with_command(
-            helper.to_str().unwrap(),
-            &[target.to_str().unwrap()],
+            "sh",
+            &[
+                "-c",
+                "cat > \"$1\"",
+                "clipboard-helper",
+                target.to_str().unwrap(),
+            ],
             "one\ntwo\n",
         )
         .unwrap();
         assert_eq!(std::fs::read_to_string(target).unwrap(), "one\ntwo\n");
 
-        std::fs::write(
-            &helper,
-            "#!/bin/sh\ncat >/dev/null\necho rejected >&2\nexit 3\n",
+        let error = copy_with_command(
+            "sh",
+            &["-c", "cat >/dev/null; echo rejected >&2; exit 3"],
+            "report",
         )
-        .unwrap();
-        let error = copy_with_command(helper.to_str().unwrap(), &[], "report").unwrap_err();
+        .unwrap_err();
         assert!(error.to_string().contains("rejected"), "{error}");
 
-        std::fs::write(&helper, "#!/bin/sh\nsleep 2\n").unwrap();
         let error = copy_with_command_timeout(
-            helper.to_str().unwrap(),
-            &[],
+            "sh",
+            &["-c", "sleep 2"],
             "report",
             Duration::from_millis(50),
         )
