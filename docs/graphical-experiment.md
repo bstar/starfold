@@ -51,7 +51,8 @@ Native keys: j/k or arrows move, Enter/l opens, h/Backspace goes back, Space mar
 Tab changes Commander pane, F6 toggles Commander, F5 reloads, / filters, S sorts,
 C copies, F2 renames the tab, Ctrl+T creates a tab, Ctrl+W closes it,
 Ctrl+PageUp/PageDown switches tabs, Alt+Up selects the previous folded level,
-Alt+Down goes forward, Q closes the window. Menus capture keyboard input: file actions use O/M/C/R, tab actions R/D/X,
+Alt+Down goes forward, Q closes the window. Menus capture keyboard input: arrows or j/k select and Enter activates.
+File actions also use O/M/C/R, tab actions R/D/X,
 sort choices 1–7 and H for high/low, and collisions S/R/O or Escape.
 Input prompts accept Ctrl/Cmd+A,
 Ctrl/Cmd+V, Backspace, Enter and Escape. macOS also accepts Cmd+T/Cmd+W.
@@ -100,7 +101,7 @@ image identity. Existing preview resource limits still apply.
 | WezTerm / iTerm2 | Inline image transport where negotiated; text fallback | Expected from transport; hands-on performance check required |
 | Sixel terminals | Sixel surfaces where negotiated; text fallback | Expected from transport; hands-on repaint check required |
 | Ordinary text terminals | Full text file-manager workflow | PTY startup, resizing and existing operation/drop tests |
-| SSH | Local emulator's transport; lower update limit; existing OSC72 stream | Existing real PTY SSH-drop simulation tests |
+| SSH | Local emulator's transport; lower update limit; existing OSC72 stream | Real PTY SSH-drop simulations; remote graphical latency needs hands-on check |
 | tmux | Auto graphics fallback follows existing transport policy | Text path supported; image passthrough needs hands-on check |
 
 Native desktop pixels cannot travel through an ordinary SSH terminal. The enhanced
@@ -112,6 +113,22 @@ Nix shell/package includes Mesa and exposes its data directories, avoiding a
 host-driver/Nix-library mismatch encountered during launch testing. Proprietary
 GPU driver setups still need separate validation; no system configuration is
 changed by the experiment.
+
+## SSH
+
+Run the terminal backend in the remote SSH session:
+
+```sh
+ssh -t your-host 'starfold-visual --backend terminal'
+```
+
+The remote host needs the experimental executable installed. Your local emulator
+negotiates the image protocol; unknown graphics capabilities fall back to text.
+The SSH path uses the existing remote-safe image transport and lower redraw limit.
+For a smaller server build, use `--features visual` and run
+`target/release/starfold visual --backend terminal`; it does not need GPUI or a
+display server. The native window requires a local graphical session or a separate
+remote display solution and does not travel through ordinary SSH.
 
 ## Runtime screenshots
 

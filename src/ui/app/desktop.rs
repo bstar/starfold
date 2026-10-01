@@ -40,9 +40,12 @@ struct Desktop {
     app: super::App,
     focus: FocusHandle,
     lists: [UniformListScrollHandle; 2],
+    tabs_scroll: ScrollHandle,
+    visible_tab: Option<TabId>,
     prompt: Option<Prompt>,
     input: String,
     menu: bool,
+    menu_index: usize,
     tab_menu: Option<TabId>,
     menu_target: Option<visual::Target>,
     input_selected: bool,
@@ -57,6 +60,7 @@ struct Desktop {
     menu_pos: Point<Pixels>,
     image: Option<(usize, Arc<RenderImage>, Arc<RgbaImage>)>,
     metrics: starkit::visual::Metrics,
+    input_metrics: starkit::visual::Metrics,
 }
 impl Drop for Desktop {
     fn drop(&mut self) {
@@ -67,6 +71,7 @@ impl Drop for Desktop {
         tracing::info!(
             frames = self.metrics.frames,
             p95_ms = self.metrics.p95_ms(),
+            input_p95_ms = self.input_metrics.p95_ms(),
             "desktop render metrics"
         );
     }
@@ -144,9 +149,12 @@ pub fn run(core: Handle, cfg: Config, path: PathBuf, session: Option<PathBuf>) -
                             UniformListScrollHandle::new(),
                             UniformListScrollHandle::new(),
                         ],
+                        tabs_scroll: ScrollHandle::new(),
+                        visible_tab: None,
                         prompt: None,
                         input: String::new(),
                         menu: false,
+                        menu_index: 0,
                         tab_menu: None,
                         menu_target: None,
                         input_selected: false,
@@ -154,6 +162,7 @@ pub fn run(core: Handle, cfg: Config, path: PathBuf, session: Option<PathBuf>) -
                         operation_details: None,
                         image: None,
                         metrics: Default::default(),
+                        input_metrics: Default::default(),
                     }
                 })
             },
@@ -262,10 +271,29 @@ impl Desktop {
             self.input = self.app.view.active_dir.to_string_lossy().into();
         }
     }
+    fn menu_key(&mut self, key: &str, choices: &[&str]) -> String {
+        match key {
+            "down" | "j" => {
+                self.menu_index = (self.menu_index + 1) % choices.len();
+                String::new()
+            }
+            "up" | "k" => {
+                self.menu_index = (self.menu_index + choices.len() - 1) % choices.len();
+                String::new()
+            }
+            "enter" => choices[self.menu_index % choices.len()].into(),
+            _ => key.into(),
+        }
+    }
+    fn menu_option(&self, label: impl Into<SharedString>, index: usize, tokens: Tokens) -> Div {
+        menu_item(label, tokens).when(self.menu_index == index, |option| {
+            option.bg(rgb24(tokens.selected))
+        })
+    }
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = &event.keystroke.key;
         let mods = event.keystroke.modifiers;
-        tracing::debug!(key = key.as_str(), "native key input");
+        let input_started = Instant::now();
         if self.prompt.is_some() {
             if (mods.control || mods.platform) && key == "a" {
                 self.input_selected = true;
@@ -352,6 +380,7 @@ impl Desktop {
             return;
         }
         if let Some(id) = self.tab_menu {
+            let key = self.menu_key(key, &["r", "d", "x"]);
             match key.as_str() {
                 "r" => {
                     self.input = self.app.core.state().tab_label(id);
@@ -375,6 +404,7 @@ impl Desktop {
             return;
         }
         if self.menu {
+            let key = self.menu_key(key, &["o", "m", "c", "r"]);
             if key == "escape" {
                 self.menu = false;
             } else if matches!(key.as_str(), "o" | "m" | "c" | "r") {
@@ -411,6 +441,7 @@ impl Desktop {
             return;
         }
         if self.sort_menu {
+            let key = self.menu_key(key, &["1", "2", "3", "4", "5", "6", "7", "h"]);
             let keys = [
                 SortKey::Name,
                 SortKey::Size,
@@ -484,7 +515,10 @@ impl Desktop {
                     self.input = self.app.view.filter.clone();
                     self.input_selected = true;
                 }
-                "s" => self.sort_menu = !self.sort_menu,
+                "s" => {
+                    self.sort_menu = !self.sort_menu;
+                    self.menu_index = 0;
+                }
                 "c" => self.copy(),
                 "f2" => {
                     let id = self.app.core.state().tabs.active().id;
@@ -508,6 +542,7 @@ impl Desktop {
             0
         };
         self.lists[pane].scroll_to_item(self.app.view.cursor, ScrollStrategy::Top);
+        self.input_metrics.frame(input_started.elapsed());
         cx.notify();
     }
     fn pane(&mut self, pane: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -533,6 +568,11 @@ impl Desktop {
                 v.error.clone(),
                 v.space,
             )
+        };
+        let truncated = if commander {
+            self.app.panes[pane].truncated
+        } else {
+            self.app.view.truncated
         };
         let active = !commander || pane == self.app.active_pane;
         let destination = dir.clone();
@@ -667,6 +707,9 @@ impl Desktop {
                                     this.menu_target = context_target.clone();
                                     this.menu_pos = event.position;
                                     this.menu = true;
+                                    this.menu_index = 0;
+                                    this.tab_menu = None;
+                                    this.sort_menu = false;
                                     cx.notify();
                                 }),
                             )
@@ -746,9 +789,14 @@ impl Desktop {
                     .gap_2()
                     .items_center()
                     .child(div().flex_1().text_sm().child(format!(
-                        "▾ {} · {} items",
+                        "▾ {} · {} items{}",
                         dir.to_string_lossy(),
-                        count
+                        count,
+                        if truncated {
+                            " · listing limit reached"
+                        } else {
+                            ""
+                        }
                     )))
                     .child(menu_item("↑", tokens).id("back").on_click(cx.listener(
                         move |this, _, _, cx| {
@@ -891,15 +939,25 @@ impl Render for Desktop {
         let tokens = Tokens::from_theme(&self.app.theme);
         let active = self.app.core.state().tabs.active().id;
         let tabs = self.app.tab_items();
-        let toolbar =
+        if self.visible_tab != Some(active) {
+            if let Some(index) = tabs.iter().position(|tab| tab.id == active) {
+                self.tabs_scroll.scroll_to_item(index);
+            }
+            self.visible_tab = Some(active);
+        }
+        let tab_rail =
             div()
-                .id("toolbar")
+                .id("native-tab-rail")
+                .flex_1()
+                .min_w(px(0.))
+                .track_scroll(&self.tabs_scroll)
                 .overflow_x_scroll()
                 .flex()
                 .gap_2()
                 .items_center()
                 .children(tabs.into_iter().map(|item| {
                     tab(item.label, item.id == active, tokens)
+                        .flex_shrink_0()
                         .flex()
                         .flex_row()
                         .items_center()
@@ -910,6 +968,9 @@ impl Render for Desktop {
                             MouseButton::Right,
                             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                                 this.tab_menu = Some(item.id);
+                                this.menu_index = 0;
+                                this.menu = false;
+                                this.sort_menu = false;
                                 this.menu_pos = event.position;
                                 cx.notify();
                             }),
@@ -925,17 +986,26 @@ impl Render for Desktop {
                                 cx.notify();
                             }),
                         ))
-                }))
+                }));
+        let toolbar =
+            div()
+                .id("toolbar")
+                .flex()
+                .gap_2()
+                .items_center()
+                .child(tab_rail)
                 .child(menu_item("+", tokens).id("new-tab").on_click(cx.listener(
                     |this, _, _, cx| {
                         this.app.change_tab(Command::NewTab { duplicate: false });
                         cx.notify();
                     },
                 )))
-                .child(div().flex_1())
                 .child(menu_item("Sort", tokens).id("sort").on_click(cx.listener(
                     |this, _, _, cx| {
                         this.sort_menu = !this.sort_menu;
+                        this.menu_index = 0;
+                        this.menu = false;
+                        this.tab_menu = None;
                         cx.notify();
                     },
                 )))
@@ -972,6 +1042,11 @@ impl Render for Desktop {
             if let Some(Preview::Image { data, .. }) = self.app.view.preview.as_deref() {
                 let identity = Arc::as_ptr(data) as usize;
                 if self.image.as_ref().is_none_or(|(id, _, _)| *id != identity) {
+                    tracing::debug!(
+                        width = data.width(),
+                        height = data.height(),
+                        "native image preview surface"
+                    );
                     let mut bgra = (**data).clone();
                     for pixel in bgra.pixels_mut() {
                         pixel.0.swap(0, 2);
@@ -1012,6 +1087,17 @@ impl Render for Desktop {
             }))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.menu || this.tab_menu.is_some() || this.sort_menu {
+                        this.menu = false;
+                        this.tab_menu = None;
+                        this.sort_menu = false;
+                        cx.notify();
+                    }
+                }),
+            )
             .size_full()
             .flex()
             .flex_col()
@@ -1040,32 +1126,41 @@ impl Render for Desktop {
                         .into_iter()
                         .enumerate()
                         .map(|(index, key)| {
-                            menu_item(format!("{} · {}", key.label(), index + 1), tokens)
-                                .id(key.label())
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            self.menu_option(
+                                format!("{} · {}", key.label(), index + 1),
+                                index,
+                                tokens,
+                            )
+                            .id(key.label())
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     let mut order = this.app.view.sort;
                                     order.key = key;
                                     this.app.core.send(Command::SetSort(order));
                                     this.sort_menu = false;
                                     this.app.refresh();
                                     cx.notify();
-                                }))
+                                },
+                            ))
                         }),
                     )
-                    .child(menu_item("High / low · H", tokens).id("reverse").on_click(
-                        cx.listener(|this, _, _, cx| {
-                            let mut sort = this.app.view.sort;
-                            sort.reverse = !sort.reverse;
-                            this.app.core.send(Command::SetSort(sort));
-                            this.app.refresh();
-                            cx.notify();
-                        }),
-                    )),
+                    .child(
+                        self.menu_option("High / low · H", 7, tokens)
+                            .id("reverse")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let mut sort = this.app.view.sort;
+                                sort.reverse = !sort.reverse;
+                                this.app.core.send(Command::SetSort(sort));
+                                this.app.refresh();
+                                cx.notify();
+                            })),
+                    ),
             );
         }
         if let Some(id) = self.tab_menu {
             root = root.child(
                 card(tokens)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .absolute()
                     .left(self.menu_pos.x)
                     .top(self.menu_pos.y)
@@ -1073,7 +1168,7 @@ impl Render for Desktop {
                     .flex()
                     .flex_col()
                     .child(
-                        menu_item("Rename tab · R", tokens)
+                        self.menu_option("Rename tab · R", 0, tokens)
                             .id("tab-rename")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.input = this.app.core.state().tab_label(id);
@@ -1084,7 +1179,7 @@ impl Render for Desktop {
                             })),
                     )
                     .child(
-                        menu_item("Duplicate tab · D", tokens)
+                        self.menu_option("Duplicate tab · D", 1, tokens)
                             .id("tab-duplicate")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.app.change_tab(Command::SwitchTab(id));
@@ -1093,18 +1188,21 @@ impl Render for Desktop {
                                 cx.notify();
                             })),
                     )
-                    .child(menu_item("Close tab · X", tokens).id("tab-close").on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.app.change_tab(Command::CloseTab(id));
-                            this.tab_menu = None;
-                            cx.notify();
-                        }),
-                    )),
+                    .child(
+                        self.menu_option("Close tab · X", 2, tokens)
+                            .id("tab-close")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.app.change_tab(Command::CloseTab(id));
+                                this.tab_menu = None;
+                                cx.notify();
+                            })),
+                    ),
             );
         }
         if self.menu {
             root = root.child(
                 card(tokens)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .absolute()
                     .left(self.menu_pos.x)
                     .top(self.menu_pos.y)
@@ -1112,34 +1210,30 @@ impl Render for Desktop {
                     .flex()
                     .flex_col()
                     .gap_2()
+                    .child(self.menu_option("Open · O", 0, tokens).id("open").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(target) = this.menu_target.take() {
+                                this.app.core.send(if target.directory {
+                                    Command::Push(target.path)
+                                } else {
+                                    Command::OpenExternal(target.path)
+                                });
+                            }
+                            this.menu = false;
+                            cx.notify();
+                        }),
+                    ))
+                    .child(self.menu_option("Mark · M", 1, tokens).id("mark").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(target) = this.menu_target.take() {
+                                this.app.core.send(Command::ToggleMarkPath(target.path));
+                            }
+                            this.menu = false;
+                            cx.notify();
+                        }),
+                    ))
                     .child(
-                        menu_item("Open · O", tokens)
-                            .id("open")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(target) = this.menu_target.take() {
-                                    this.app.core.send(if target.directory {
-                                        Command::Push(target.path)
-                                    } else {
-                                        Command::OpenExternal(target.path)
-                                    });
-                                }
-                                this.menu = false;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        menu_item("Mark · M", tokens)
-                            .id("mark")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(target) = this.menu_target.take() {
-                                    this.app.core.send(Command::ToggleMarkPath(target.path));
-                                }
-                                this.menu = false;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        menu_item("Copy · C", tokens)
+                        self.menu_option("Copy · C", 2, tokens)
                             .id("copy-menu")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(target) = this.menu_target.take() {
@@ -1155,7 +1249,7 @@ impl Render for Desktop {
                             })),
                     )
                     .child(
-                        menu_item("Rename · R", tokens)
+                        self.menu_option("Rename · R", 3, tokens)
                             .id("rename")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(path) =
