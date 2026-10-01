@@ -106,8 +106,15 @@ pixels; use the ordinary TUI when those are needed.
   only visible rows; measured controller+scene p95 1.848 ms and <100 KiB JSON.
 - Local Kitty: the application pixels render inside the existing terminal with
   no visible native Electron window.
+- Live Kitty resize checks produce frames with the new geometry. The SSH view
+  reattached to the same controller after a 40-second interruption and repeated
+  failed connection attempts; stale frames did not enable input.
+- A five-minute full-size Linux idle sample (61 samples) measured 1.14% mean
+  aggregate CPU and 469.02–469.07 MiB aggregate PSS, with no measured growth.
+  This includes the frontend, controller, relay and Electron processes, and
+  excludes Kitty itself. Electron's memory cost remains substantial.
 - Linux/macOS feature builds and shared offscreen smoke capture are CI gates.
-  macOS interactive Kitty, sustained resource measurements and other terminal
+  macOS interactive Kitty, longer mixed-workload measurements and other terminal
   implementations remain promotion gates. This is still an experimental branch.
 
 Sessions and controller logs live under `~/.local/starfold/graphical` (or
