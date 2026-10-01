@@ -360,6 +360,11 @@ impl Client {
         Self::with_command(command)
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_test_command(command: Command) -> Self {
+        Self::with_command(command)
+    }
+
     fn with_command(command: Command) -> Self {
         let (requests, receiver) = bounded(32);
         let shared = Arc::new(Mutex::new(Shared::default()));

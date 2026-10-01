@@ -127,6 +127,15 @@ fn fake_player_with_hello(
 }
 
 #[cfg(unix)]
+fn player(script: PathBuf) -> AudioClient {
+    // Read the fixture through an installed shell. Executing newly written
+    // scripts can fail with ETXTBSY during concurrent process creation.
+    let mut command = std::process::Command::new("sh");
+    command.arg(script).args(["embed", "--stdio"]);
+    AudioClient::with_test_command(command)
+}
+
+#[cfg(unix)]
 fn wait_for(mut condition: impl FnMut() -> bool) {
     // The Nix package check runs many process-spawning tests in parallel;
     // the fake shell can be scheduled late even though its handshake is fast.
@@ -351,7 +360,7 @@ fn helper_graphics_capability_and_focused_button_toggle_reconfigure_player() {
         r#"{"type":"hello","protocol":1,"extensions":["mp3"],"capabilities":["transport_images"]}"#;
     let status = r#"{"type":"status","playing":true,"paused":false,"title":"track"}"#;
     let (program, log) = fake_player_with_hello(&fake, "pictures-staramp", false, hello, status);
-    app.audio = AudioClient::with_executable(program);
+    app.audio = player(program);
     app.key(key(KeyCode::Enter));
     wait_for(|| {
         app.tick();
@@ -399,7 +408,7 @@ fn helper_graphics_capability_and_focused_button_toggle_reconfigure_player() {
     text_app.graphics.set_mode(Mode::Kitty);
     text_app.audio_cell_size = Some((8, 16));
     let (program, text_log) = fake_player(&text_fake, "text-staramp", false, status);
-    text_app.audio = AudioClient::with_executable(program);
+    text_app.audio = player(program);
     text_app.key(key(KeyCode::Enter));
     wait_for(|| {
         text_app.tick();
@@ -429,7 +438,7 @@ fn player_styles_are_scoped_to_preview_and_profile_is_capability_gated() {
         hello,
         &format!("{status}\n{notice}"),
     );
-    app.audio = AudioClient::with_executable(program);
+    app.audio = player(program);
     app.key(key(KeyCode::Enter));
     wait_for(|| {
         app.tick();
@@ -490,7 +499,7 @@ fn player_styles_are_scoped_to_preview_and_profile_is_capability_gated() {
 
     let (mut old_app, old_fake, _selected, _other) = media_app();
     let (program, old_log) = fake_player(&old_fake, "old-styles-staramp", false, status);
-    old_app.audio = AudioClient::with_executable(program);
+    old_app.audio = player(program);
     old_app.key(key(KeyCode::Enter));
     wait_for(|| {
         old_app.tick();
@@ -646,7 +655,7 @@ fn fake_player_receives_sorted_filtered_queue_and_returns_a_real_protocol_frame(
         "type":"frame", "generation":1, "width":58, "height":5, "cells":cells
     });
     let (program, log) = fake_player(&fake, "fake-staramp", false, &format!("{status}\n{frame}"));
-    app.audio = AudioClient::with_executable(program);
+    app.audio = player(program);
 
     app.key(key(KeyCode::Enter));
     wait_for(|| {
@@ -679,10 +688,23 @@ fn accepted_song_focuses_player_and_space_then_stop_work_without_alt_two() {
         }
         let status = r#"{"type":"status","playing":true,"paused":false,"title":"track"}"#;
         let (program, log) = fake_player(&fake, "focus-staramp", false, status);
-        app.audio = AudioClient::with_executable(program);
+        // Make the Linux ETXTBSY condition deterministic: the helper must
+        // read this script through the shell even while a writer owns it.
+        let _writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&program)
+            .unwrap();
+        app.audio = player(program);
         app.key(key(KeyCode::Enter));
         wait_for(|| {
             app.tick();
+            assert!(
+                app.audio_path.is_some(),
+                "fake player failed: commander={commander}, note={:?}, error={:?}, messages={:?}",
+                app.note,
+                app.audio_error,
+                messages(&log)
+            );
             app.layout.focus() == ModuleId::Preview
         });
         assert_eq!(app.audio_path, Some(selected));
@@ -706,7 +728,7 @@ fn double_click_song_focuses_player_in_fold_and_commander() {
         }
         let status = r#"{"type":"status","playing":true,"paused":false,"title":"track"}"#;
         let (program, _log) = fake_player(&fake, "click-staramp", false, status);
-        app.audio = AudioClient::with_executable(program);
+        app.audio = player(program);
         draw(&mut app, 100, 30);
         let (x, y) = selected_row_position(&app, commander);
         app.mouse(left_click(x, y));
@@ -726,7 +748,7 @@ fn delayed_acceptance_does_not_steal_focus_after_navigation() {
     let (mut app, fake, _selected, _other) = media_app();
     let status = r#"{"type":"status","playing":true,"paused":false,"title":"track"}"#;
     let (program, log) = fake_player(&fake, "delayed-focus-staramp", true, status);
-    app.audio = AudioClient::with_executable(program);
+    app.audio = player(program);
     app.key(key(KeyCode::Enter));
     app.key(key(KeyCode::Char('j')));
     settle(&mut app, &fake);
@@ -760,7 +782,7 @@ fn later_track_status_does_not_refocus_player_while_browsing() {
             shell_quote(&next.to_string())
         ),
     );
-    app.audio = AudioClient::with_executable(program);
+    app.audio = player(program);
     app.key(key(KeyCode::Enter));
     wait_for(|| {
         app.tick();
@@ -782,7 +804,7 @@ fn resize_during_handshake_sends_latest_generation_with_play() {
     let (mut app, fake, _selected, _other) = media_app();
     let idle = r#"{"type":"status","playing":false,"paused":false,"title":"idle"}"#;
     let (program, log) = fake_player(&fake, "late-staramp", true, idle);
-    app.audio = AudioClient::with_executable(program);
+    app.audio = player(program);
     app.key(key(KeyCode::Enter));
     draw(&mut app, 60, 21);
     draw(&mut app, 100, 30);
@@ -841,7 +863,7 @@ fn decoder_error_after_handshake_stays_in_embedded_preview() {
     let (mut app, fake, selected, _other) = media_app_with_config(cfg);
     let error = r#"{"type":"error","message":"decoder failed"}"#;
     let (program, log) = fake_player(&fake, "error-staramp", false, error);
-    app.audio = AudioClient::with_executable(program);
+    app.audio = player(program);
     app.key(key(KeyCode::Enter));
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
