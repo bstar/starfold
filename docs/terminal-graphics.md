@@ -143,8 +143,26 @@ independently while presentation waits for a slow connection.
   This includes the frontend, controller, relay and Electron processes, and
   excludes Kitty itself. Electron's memory cost remains substantial.
 - Linux/macOS feature builds and shared offscreen smoke capture are CI gates.
-  macOS interactive Kitty, longer mixed-workload measurements and other terminal
-  implementations remain promotion gates. This is still an experimental branch.
+  Shared Linux Kitty CI also checks actual pixels, keyboard/font resize and
+  controlled renderer loss. macOS interactive Kitty and broader terminal
+  verification remain promotion gates. This is still an experimental branch.
+- A fresh ten-minute local mixed workload completed 949 iterations after a
+  checksum-verified 256 MiB copy. It exercised navigation, previews, actions,
+  themes and repeated font zoom. All process memory samples were readable;
+  aggregate PSS ranged 618.70–1379.81 MiB (median 954.36 MiB), and active CPU
+  averaged 96.68% of one core. It presented 3,781 frames and uploaded 255,406,512
+  image bytes. This is a bounded observation, not a long-term stability claim.
+- `scripts/measure-graphical-latency.py` measures actual Kitty pixel changes on
+  a private file/config/session fixture. Thirty navigation/preview/menu actions
+  in a 1820×2048 window measured median 531.60 ms and p95 539.14 ms. It includes
+  API input and screenshot overhead, and settles asynchronous preview updates
+  before each input; it is not renderer-only latency or a sustained input burst.
+  It requires Pillow, Kitty >=0.49 and the configured Electron runtime:
+
+  ```sh
+  python3 scripts/measure-graphical-latency.py --binary target/release/starfold \
+    --kitty /path/to/kitty --kitten /path/to/kitten --output /tmp/fold-pixel-proof
+  ```
 
 Sessions and controller logs live under `~/.local/starfold/graphical` (or
 `STARFOLD_DIR/graphical`); application debug logs are in the normal log directory.
