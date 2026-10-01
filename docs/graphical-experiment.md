@@ -20,7 +20,7 @@ rows retain actual path values, including names that cannot safely be reconstruc
 from display strings. Context menus retain their clicked path and marked sources.
 
 The native panel preserves **visited stack levels**. Folded parent rows show the
-level, item count and remembered cursor name above the expanded active directory.
+level, cached item count and remembered cursor name above the expanded active directory.
 Clicking a folded level sends the existing JumpTo command. It retains descendant
 frames; Alt+Down moves forward again. Filters and cursors remain per frame.
 Commander renders a separate stack in each pane. This is the same navigation
@@ -51,7 +51,9 @@ Native keys: j/k or arrows move, Enter/l opens, h/Backspace goes back, Space mar
 Tab changes Commander pane, F6 toggles Commander, F5 reloads, / filters, S sorts,
 C copies, F2 renames the tab, Ctrl+T creates a tab, Ctrl+W closes it,
 Ctrl+PageUp/PageDown switches tabs, Alt+Up selects the previous folded level,
-Alt+Down goes forward, Q closes the window. Input prompts accept Ctrl/Cmd+A,
+Alt+Down goes forward, Q closes the window. Menus capture keyboard input: file actions use O/M/C/R, tab actions R/D/X,
+sort choices 1–7 and H for high/low, and collisions S/R/O or Escape.
+Input prompts accept Ctrl/Cmd+A,
 Ctrl/Cmd+V, Backspace, Enter and Escape. macOS also accepts Cmd+T/Cmd+W.
 
 ## Shared STAR/KIT scope
@@ -91,7 +93,7 @@ image identity. Existing preview resource limits still apply.
 | Presentation/environment | Graphics in this experiment | Verification |
 | --- | --- | --- |
 | Native Linux Wayland | GPUI/Vulkan, native widgets | Local launch verified; Linux x86_64 and ARM64 build/tests |
-| Native Linux X11 | GPUI/Vulkan, native widgets | Build path checked; separate runtime check required |
+| Native Linux X11 | GPUI/Vulkan, native widgets | Local XWayland launch and screenshot verified |
 | Native macOS ARM64 | GPUI/Metal, native widgets | Native CI build/tests; hands-on display check required |
 | Kitty | Cached image icons, tab ends, previews; existing OSC72 drops | Protocol integration plus local visual check |
 | Ghostty | Kitty graphics transport where negotiated; text fallback | Expected from transport; hands-on check required |
@@ -111,6 +113,14 @@ host-driver/Nix-library mismatch encountered during launch testing. Proprietary
 GPU driver setups still need separate validation; no system configuration is
 changed by the experiment.
 
+## Runtime screenshots
+
+Actual Linux renders with disposable fixtures (not mockups):
+
+<img src="visual/native-fold.png" width="800" alt="Native Fold with a folded parent level, active directory, icons and preview">
+
+<img src="visual/kitty.png" width="800" alt="Enhanced terminal presentation in Kitty">
+
 ## Measurements and evidence
 
 Release measurement on the development Linux machine:
@@ -121,6 +131,10 @@ Release measurement on the development Linux machine:
 | Draw p95 with 100,000 synthetic rows | 0.059 ms | 200 terminal buffer draws at 100×30; only visible rows |
 | First 48×48 vector icon raster | 72 µs | One folder icon; excludes protocol encoding/upload |
 | Cached surface bytes in that fixture | 9,216 bytes | Repeated access reused the same allocation |
+| Native mapped-window latency | 110.8 ms | Warm Wayland launch, two-file preview fixture; mapping is not first paint |
+| Native idle CPU / RSS, XWayland | 0.33% / 85.7 MiB | Three-second sample, empty panes; includes GPUI and workers |
+| Native idle CPU / RSS, Wayland | 1.33% / 86.3 MiB | Three-second sample with image preview; not a settled long-term average |
+| Native element construction p95 | 0.084 ms | 37 frames in a small Wayland fixture; excludes layout and GPU work |
 
 Reproduce with `nix develop -c cargo test --release --features visual
 visual_performance_fixture -- --ignored --nocapture`. This command produces a

@@ -160,7 +160,7 @@ impl App {
 pub(super) struct FoldedLevel {
     pub index: usize,
     pub path: PathBuf,
-    pub count: usize,
+    pub count: Option<usize>,
     pub cursor_name: Option<String>,
 }
 impl App {
@@ -182,7 +182,7 @@ impl App {
             .map(|(index, frame)| FoldedLevel {
                 index,
                 path: frame.dir.clone(),
-                count: frame.rows.len(),
+                count: state.listing_of(&frame.dir).map(|_| frame.rows.len()),
                 cursor_name: frame
                     .cursor_name
                     .as_ref()

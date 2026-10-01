@@ -109,8 +109,8 @@
             # unrar_sys compiles the bundled RARLAB C++ engine.
             nativeBuildInputs = [ pkgsFor.stdenv.cc ] ++ pkgsFor.lib.optionals graphical ([ pkgsFor.pkg-config pkgsFor.makeWrapper ] ++ pkgsFor.lib.optionals pkgsFor.stdenv.hostPlatform.isDarwin [ pkgsFor.libclang ]);
             buildInputs = pkgsFor.lib.optionals graphical visualLibs;
-            cargoBuildFeatures = pkgsFor.lib.optionals graphical [ "desktop" ];
-            cargoTestFeatures = pkgsFor.lib.optionals graphical [ "desktop" ];
+            buildFeatures = pkgsFor.lib.optionals graphical [ "desktop" ];
+            checkFeatures = pkgsFor.lib.optionals graphical [ "desktop" ];
             LIBCLANG_PATH = pkgsFor.lib.optionalString (graphical && pkgsFor.stdenv.hostPlatform.isDarwin) "${pkgsFor.libclang.lib}/lib";
             pname = "starfold";
             version = cargoToml.package.version;

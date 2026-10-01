@@ -31,3 +31,7 @@ jobs:
       # not just a link.
       - run: nix build .#default --print-build-logs
       - run: nix flake check --print-build-logs
+      - name: Build graphical package and verify launcher
+        run: |
+          nix build .#visual --out-link result-visual --print-build-logs
+          result-visual/bin/starfold-visual --help | grep "Usage: starfold visual"

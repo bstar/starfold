@@ -265,6 +265,7 @@ impl Desktop {
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = &event.keystroke.key;
         let mods = event.keystroke.modifiers;
+        tracing::debug!(key = key.as_str(), "native key input");
         if self.prompt.is_some() {
             if (mods.control || mods.platform) && key == "a" {
                 self.input_selected = true;
@@ -495,6 +496,7 @@ impl Desktop {
                 "f5" => self.app.core.send(Command::Reload),
                 "q" => {
                     window.remove_window();
+                    cx.quit();
                 }
                 _ => {}
             }
@@ -724,7 +726,10 @@ impl Desktop {
                             .hover(move |style| style.bg(rgb24(tokens.selected)))
                             .child("▸")
                             .child(div().flex_1().child(label))
-                            .child(format!("{} items · {}", level.count, context))
+                            .child(match level.count {
+                                Some(count) => format!("{count} items · {context}"),
+                                None => context,
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if this.app.commander {
                                     this.app.focus_pane(pane);
