@@ -8,7 +8,7 @@ or terminal emulator has been tested.
 | Area | Native presentation | Verification |
 | --- | --- | --- |
 | Fold navigation | Retained folded levels, expanded active frame, back/forward, home/root, cursor/scroll restoration | Shared stack/session tests; actual large-directory navigation |
-| Commander | Independent stacks, marks, filters and sort; only browser splits | Shared per-pane regression tests; actual native copy between panes |
+| Commander | Independent stacks, marks, filters and sort; only browser splits | Shared per-pane regression tests; actual native copy between panes, including two marked paths and a long Unicode filename |
 | File rows | Fixed height, ellipsis, full-name tooltip, cached paths and shared colors | Actual 100,000-entry window and scrolling; row-cache tests |
 | Tabs | Padded filled tabs, close/new, context actions, rename, duplicate, reorder, reopen | Shared tab tests; actual native menu, rename and session persistence |
 | File actions | Open, Preview, Edit, Mark, Copy, Move, Rename, Copy path, New, Archive, Delete, Tabs, Recovery | Shared captured-target/controller tests; native menu renders same action tree |

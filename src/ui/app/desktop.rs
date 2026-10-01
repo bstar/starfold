@@ -316,9 +316,10 @@ impl Desktop {
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(0.))
+                    .min_w(px(110.))
+                    .overflow_hidden()
                     .text_ellipsis()
-                    .whitespace_nowrap()
+                    .line_clamp(1)
                     .child(if module == ModuleId::Stack {
                         if self.app.commander {
                             if pane == 0 {
@@ -421,7 +422,7 @@ impl Desktop {
                             .py_1()
                             .min_w(px(0.))
                             .text_ellipsis()
-                            .whitespace_nowrap()
+                            .line_clamp(1)
                             .when(row.selected && enabled, |item| {
                                 item.bg(rgb24(tokens.selected))
                             })
@@ -908,7 +909,7 @@ impl Desktop {
                                     menu_item(label, tokens)
                                         .min_w(px(0.))
                                         .text_ellipsis()
-                                        .whitespace_nowrap()
+                                        .line_clamp(1)
                                         .when(index == selected, |row| {
                                             row.bg(rgb24(tokens.selected))
                                         })
@@ -1099,7 +1100,7 @@ impl Desktop {
                                 menu_item(label, tokens)
                                     .min_w(px(0.))
                                     .text_ellipsis()
-                                    .whitespace_nowrap()
+                                    .line_clamp(1)
                                     .when(index == selected, |row| row.bg(rgb24(tokens.selected)))
                                     .id(("place-item", index))
                                     .on_mouse_down(
@@ -1299,7 +1300,7 @@ impl Desktop {
                                 menu_item(format!("{} · {}", item.label, item.location), tokens)
                                     .min_w(px(0.))
                                     .text_ellipsis()
-                                    .whitespace_nowrap()
+                                    .line_clamp(1)
                                     .when(index == selected, |row| row.bg(rgb24(tokens.selected)))
                                     .id(("tab-picker-row", index))
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1666,7 +1667,7 @@ impl Desktop {
                                     .flex_1()
                                     .min_w(px(0.))
                                     .overflow_hidden()
-                                    .whitespace_nowrap()
+                                    .line_clamp(1)
                                     .text_ellipsis()
                                     .tooltip({
                                         let text = row.name.clone();
@@ -1678,7 +1679,13 @@ impl Desktop {
                                             .into()
                                         }
                                     })
-                                    .child(row.name),
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .line_clamp(1)
+                                            .text_ellipsis()
+                                            .child(row.name),
+                                    ),
                             )
                             .child(
                                 div()
@@ -1806,7 +1813,7 @@ impl Desktop {
                                 div()
                                     .flex_1()
                                     .min_w(px(0.))
-                                    .whitespace_nowrap()
+                                    .line_clamp(1)
                                     .text_ellipsis()
                                     .child(label),
                             )
@@ -1814,7 +1821,7 @@ impl Desktop {
                                 div()
                                     .max_w(px(240.))
                                     .min_w(px(0.))
-                                    .whitespace_nowrap()
+                                    .line_clamp(1)
                                     .text_ellipsis()
                                     .child(match level.count {
                                         Some(count) => format!("{count} items · {context}"),
@@ -1841,7 +1848,7 @@ impl Desktop {
                             .flex_1()
                             .min_w(px(0.))
                             .text_sm()
-                            .whitespace_nowrap()
+                            .line_clamp(1)
                             .text_ellipsis()
                             .child(format!(
                                 "▾ {} · {} items{}",
@@ -2234,7 +2241,7 @@ impl Render for Desktop {
                     div()
                         .text_color(rgb24(tokens.muted))
                         .text_ellipsis()
-                        .whitespace_nowrap()
+                        .line_clamp(1)
                         .child(
                             self.app
                                 .view
@@ -2403,7 +2410,7 @@ impl Render for Desktop {
                                 div()
                                     .flex()
                                     .gap_2()
-                                    .child(div().flex_1().min_w(px(0.)).text_ellipsis().whitespace_nowrap().child(format!(
+                                    .child(div().flex_1().min_w(px(0.)).text_ellipsis().line_clamp(1).child(format!(
                                         "{} · {}",
                                         row.title,
                                         row.status
@@ -2436,7 +2443,7 @@ impl Render for Desktop {
                                     ),
                             )
                             .child(meter(*fractions.get(&id).unwrap_or(&0.), tokens))
-                            .children(row.bar.map(|bar| div().text_xs().whitespace_nowrap().text_ellipsis().child(bar)))
+                            .children(row.bar.map(|bar| div().text_xs().line_clamp(1).text_ellipsis().child(bar)))
                     }))),
             );
         }
@@ -2489,7 +2496,7 @@ impl Render for Desktop {
             div()
                 .text_xs()
                 .min_w(px(0.))
-                .whitespace_nowrap()
+                .line_clamp(1)
                 .text_ellipsis()
                 .text_color(rgb24(tokens.muted))
                 .child(note),
