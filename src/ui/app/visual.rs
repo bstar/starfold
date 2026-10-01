@@ -224,7 +224,10 @@ impl App {
             path: path.clone(),
             sources,
             directory: rows.get(index)?.kind == panels::stack::Kind::Dir
-                || path
+                || (matches!(
+                    rows.get(index)?.kind,
+                    panels::stack::Kind::Symlink { broken: false }
+                ) && path
                     .parent()
                     .and_then(|dir| state.listing_of(dir))
                     .is_some_and(|listing| {
@@ -232,7 +235,7 @@ impl App {
                             .entries
                             .iter()
                             .any(|entry| entry.path == path && entry.is_dir_like())
-                    }),
+                    })),
             destination: if self.commander {
                 self.panes.get(1 - pane)?.dir.clone()
             } else {

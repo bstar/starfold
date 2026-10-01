@@ -152,6 +152,11 @@ Release measurement on the development Linux machine:
 | Native idle CPU / RSS, XWayland | 0.33% / 85.7 MiB | Three-second sample, empty panes; includes GPUI and workers |
 | Native idle CPU / RSS, Wayland | 1.33% / 86.3 MiB | Three-second sample with image preview; not a settled long-term average |
 | Native element construction p95 | 0.084 ms | 37 frames in a small Wayland fixture; excludes layout and GPU work |
+| Native mapped-window latency, 100,000 files / 30 tabs | 112.7 ms | Warm tmpfs fixture; all 100,000 entries loaded, mapping is not first paint |
+| Native settled idle CPU / RSS, large fixture | 0.30% / 201.1 MiB | Ten-second Wayland sample after four seconds of warm-up |
+| Native element construction / input handling p95, large fixture | 0.199 ms / 30.490 ms | 196 frames; input includes rebuilding the core view snapshot, construction excludes layout and GPU work |
+| 24-megapixel PNG preview ready | 364 ms | Includes native startup; 6000×4000 source bounded to a 4096×2731 preview |
+| Native 256 MiB copy publication | 108.9 ms | Disposable tmpfs source/destination; SHA-256 matched; not a physical-drive throughput measurement |
 
 Reproduce with `nix develop -c cargo test --release --features visual
 visual_performance_fixture -- --ignored --nocapture`. This command produces a
@@ -159,11 +164,20 @@ terminal-only executable in target/release; rebuild with `--features desktop`
 before launching native mode.
 
 These are CPU measurements, not a 60fps native frame-rate claim. The native log
-records element-construction p95 and frame count on clean shutdown. GPU submission,
-presentation latency, encoded protocol byte counts, idle CPU/RSS, slow-mount first
-paint, large-preview latency and full 100,000-item native interaction remain
-separate measurements. A 16.7ms native frame budget and below-1%-of-one-core idle
-usage are targets, not established guarantees.
+records element-construction and input-handling p95 and frame count on clean
+shutdown. GPU submission, presentation latency, encoded protocol byte counts and
+slow-mount first paint remain unmeasured. The large fixture passed 100 cursor
+moves, automatic viewport scrolling, active-tab visibility, tab rename, session
+save and clean exit. The copy fixture also passed a second copy with the native
+Keep both collision choice and matching contents in `large (1).bin`. Kitty's
+remote-control text dump contained image placeholder cells, confirming graphics
+transport rather than just the text fallback.
+
+The 16.7ms native frame budget is not yet established: large-directory input
+handling alone exceeds it because each cursor change rebuilds the display
+snapshot. Idle CPU met the below-1%-of-one-core target in the settled large fixture;
+short startup samples and other hardware can differ. These limits keep this an
+experiment rather than a stable native release.
 
 Tests cover captured copy targets surviving navigation, queue visibility before
 worker execution, real disposable copying, plain fallback at 100×30 and 60×21,

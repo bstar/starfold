@@ -556,6 +556,7 @@ impl Desktop {
                 "q" => {
                     window.remove_window();
                     cx.quit();
+                    return;
                 }
                 _ => {}
             }
@@ -650,6 +651,12 @@ impl Desktop {
             ("files", pane),
             count,
             cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                tracing::debug!(
+                    pane,
+                    first = range.start,
+                    end = range.end,
+                    "native visible rows"
+                );
                 range
                     .map(|i| {
                         let row = if this.app.commander {
@@ -798,6 +805,9 @@ impl Desktop {
             }),
         )
         .track_scroll(self.lists[pane].clone())
+        .with_sizing_behavior(ListSizingBehavior::Auto)
+        .h_full()
+        .min_h(px(0.))
         .flex_1();
         let mut panel = card(tokens)
             .id(("pane", pane))
@@ -949,32 +959,40 @@ impl Desktop {
             )
         } else {
             panel.child(
-                div().flex().flex_1().min_h(px(0.)).child(list).child(
-                    div()
-                        .id(("scrollbar", pane))
-                        .w(px(8.))
-                        .h_full()
-                        .rounded_full()
-                        .bg(rgb24(tokens.border))
-                        .cursor_pointer()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                this.scrollbar = Some(pane);
-                                this.scrollbar_to(pane, event.position.y);
-                                cx.notify();
-                            }),
-                        )
-                        .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                            if this.scrollbar == Some(pane)
-                                && event.pressed_button == Some(MouseButton::Left)
-                            {
-                                this.scrollbar_to(pane, event.position.y);
-                                cx.notify();
-                            }
-                        })),
-                ),
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_hidden()
+                    .child(list)
+                    .child(
+                        div()
+                            .id(("scrollbar", pane))
+                            .w(px(8.))
+                            .h_full()
+                            .rounded_full()
+                            .bg(rgb24(tokens.border))
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.scrollbar = Some(pane);
+                                    this.scrollbar_to(pane, event.position.y);
+                                    cx.notify();
+                                }),
+                            )
+                            .on_mouse_move(cx.listener(
+                                move |this, event: &MouseMoveEvent, _, cx| {
+                                    if this.scrollbar == Some(pane)
+                                        && event.pressed_button == Some(MouseButton::Left)
+                                    {
+                                        this.scrollbar_to(pane, event.position.y);
+                                        cx.notify();
+                                    }
+                                },
+                            )),
+                    ),
             )
         };
         if let Some((total, free)) = space {
