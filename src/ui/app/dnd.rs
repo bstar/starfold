@@ -693,7 +693,15 @@ impl App {
         let Some(rx) = &self.dnd.export_output else {
             return;
         };
-        for _ in 0..2048 {
+        #[cfg(feature = "terminal-graphics")]
+        let limit = if self.graphical.is_some() {
+            16.min(wire::graphical_space())
+        } else {
+            2048
+        };
+        #[cfg(not(feature = "terminal-graphics"))]
+        let limit = 2048;
+        for _ in 0..limit {
             let Ok(out) = rx.try_recv() else { break };
             if wire::send(&out.meta, out.payload.as_deref()).is_err() {
                 if let Some(id) = self.dnd.export_op {
@@ -705,6 +713,13 @@ impl App {
     }
 
     fn dnd_poll_export(&mut self) {
+        #[cfg(feature = "terminal-graphics")]
+        if self.graphical.as_ref().is_some_and(|state| {
+            state.output_pending || state.wire.as_ref().is_some_and(|rx| !rx.is_empty())
+        }) {
+            return;
+        }
+
         let Some(rx) = &self.dnd.export_done else {
             return;
         };
@@ -773,7 +788,7 @@ impl App {
         self.dnd_error_with("invalid drop data");
     }
 
-    fn dnd_sources(&self, x: i32, y: i32) -> Option<(usize, Vec<PathBuf>)> {
+    pub(super) fn dnd_sources(&self, x: i32, y: i32) -> Option<(usize, Vec<PathBuf>)> {
         let (stack_index, row) = self.dnd_hit_row(x, y)?;
         let state = self.core.state();
         let stack = state.tabs.active().stacks.get(stack_index)?;

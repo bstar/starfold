@@ -127,6 +127,13 @@ impl<A: Copy> Popup<A> {
             pointer: None,
         }
     }
+    #[cfg(feature = "terminal-graphics")]
+    pub fn graphical_rects(&mut self, area: Rect) -> Vec<Rect> {
+        self.panels(area)
+            .into_iter()
+            .map(|panel| panel.rect)
+            .collect()
+    }
     pub fn root_rect(&self, area: Rect) -> Rect {
         let w = self.levels[0].width().min(area.width);
         let h = (self.levels[0]

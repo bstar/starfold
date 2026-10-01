@@ -87,6 +87,31 @@ pub struct Overlays {
     current: Option<Overlay>,
 }
 
+#[cfg(feature = "terminal-graphics")]
+impl Overlays {
+    pub fn graphical_rects(&mut self, area: Rect) -> Vec<Rect> {
+        if let Some(Overlay::Context(menu) | Overlay::Drop(menu)) = self.current.as_mut() {
+            return menu.popup.graphical_rects(area);
+        }
+        self.graphical_rect(area).into_iter().collect()
+    }
+    pub fn graphical_rect(&self, area: Rect) -> Option<Rect> {
+        Some(match self.current.as_ref()? {
+            Overlay::Context(menu) | Overlay::Drop(menu) => menu.popup.root_rect(area),
+            Overlay::Destination(_) => context::Destination::rect(area),
+            Overlay::Help { .. } => help_rect(area),
+            Overlay::Failure(_) => failure::rect(area),
+            Overlay::Confirm(prompt) => confirm::layout(area, prompt)?.rect,
+            Overlay::TrashWarning(_) => trash_warning::layout(area)?,
+            Overlay::Create(_) => create::rect(area),
+            Overlay::Rename(_) | Overlay::ConflictRename(_) => rename::rect(area),
+            Overlay::Search(_) => search::rect(area),
+            Overlay::Sort(_) => sort::Picker::rect(area),
+            Overlay::Conflict(prompt) => conflict::layout(area, prompt)?.rect,
+        })
+    }
+}
+
 /// What handling a key or a click did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {

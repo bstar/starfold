@@ -2814,14 +2814,17 @@ dependencies = [
 [[package]]
 name = "starkit"
 version = "0.3.0"
-source = "git+https://github.com/bstar/starkit?rev=1d97ecb7d5174800bd7c85cda1095d8df912475b#1d97ecb7d5174800bd7c85cda1095d8df912475b"
+source = "git+https://github.com/bstar/starkit?rev=b7db3298acebc8659f1bb9dd7e68275a2c4b0f2a#b7db3298acebc8659f1bb9dd7e68275a2c4b0f2a"
 dependencies = [
  "anyhow",
+ "base64",
+ "crossbeam-channel",
  "crossterm",
  "image",
  "ratatui",
  "ratatui-image",
  "serde",
+ "serde_json",
  "toml",
  "tracing",
  "tracing-appender",

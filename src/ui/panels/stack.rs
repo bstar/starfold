@@ -432,6 +432,12 @@ fn columns(width: u16) -> Cols {
     }
 }
 
+#[cfg(feature = "terminal-graphics")]
+pub fn graphical_name_width(width: u16) -> u16 {
+    let cols = columns(width);
+    cols.name_w + cols.mark_w + GAP
+}
+
 fn render_list(area: Rect, buf: &mut Buffer, t: &Theme, v: &View<'_>) {
     if v.loading {
         empty(

@@ -183,7 +183,7 @@ mod tests {
         )
         .unwrap();
         let error = copy_with_command(helper.to_str().unwrap(), &[], "report").unwrap_err();
-        assert!(error.to_string().contains("rejected"));
+        assert!(error.to_string().contains("rejected"), "{error}");
 
         std::fs::write(&helper, "#!/bin/sh\nsleep 2\n").unwrap();
         let error = copy_with_command_timeout(

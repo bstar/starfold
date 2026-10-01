@@ -57,6 +57,13 @@ pub enum Answer {
 }
 
 impl Picker {
+    #[cfg(feature = "terminal-graphics")]
+    pub fn graphical_rects(&mut self, area: Rect) -> Vec<Rect> {
+        self.menu
+            .as_mut()
+            .map_or_else(|| vec![Self::rect(area)], |menu| menu.graphical_rects(area))
+    }
+
     pub fn new(items: Vec<Item>, active: TabId) -> Self {
         let cursor = items.iter().position(|i| i.id == active).unwrap_or(0);
         Self {

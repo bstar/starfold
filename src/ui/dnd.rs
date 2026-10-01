@@ -65,8 +65,41 @@ impl<'a> Message<'a> {
     }
 }
 
-/// Write one complete escape. Callers own stdout serialization with rendering.
+#[cfg(feature = "terminal-graphics")]
+thread_local! {static GRAPHICAL_OUTPUT: std::cell::RefCell<Option<crossbeam_channel::Sender<Outgoing>>> = const {std::cell::RefCell::new(None)};}
+#[cfg(feature = "terminal-graphics")]
+pub fn graphical_output(sender: crossbeam_channel::Sender<Outgoing>) {
+    GRAPHICAL_OUTPUT.with(|out| *out.borrow_mut() = Some(sender));
+}
+
+#[cfg(feature = "terminal-graphics")]
+pub fn graphical_space() -> usize {
+    GRAPHICAL_OUTPUT.with(|out| {
+        out.borrow()
+            .as_ref()
+            .map(|tx| tx.capacity().unwrap_or(0).saturating_sub(tx.len()))
+            .unwrap_or(usize::MAX)
+    })
+}
+
+/// Write one complete escape, or enqueue it for graphical presentation.
 pub fn send(meta: &str, payload: Option<&str>) -> io::Result<()> {
+    #[cfg(feature = "terminal-graphics")]
+    if let Some(result) = GRAPHICAL_OUTPUT.with(|out| {
+        out.borrow().as_ref().map(|tx| {
+            tx.try_send(Outgoing {
+                meta: meta.into(),
+                payload: payload.map(String::from),
+            })
+        })
+    }) {
+        return result.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Graphical drag/drop output is full",
+            )
+        });
+    }
     let mut out = io::stdout().lock();
     write!(out, "\x1b]72;{meta}")?;
     if let Some(payload) = payload {

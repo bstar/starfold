@@ -3,7 +3,7 @@ name: nix
 # Documentation-only changes do not rebuild anything.
 on:
   push:
-    branches: [main]
+    branches: [main, experiment/terminal-graphics]
     paths-ignore: &docs
       - '**/*.md'
       - 'docs/**'
@@ -30,4 +30,5 @@ jobs:
       # buildRustPackage runs `cargo test` itself, so this is a full check and
       # not just a link.
       - run: nix build .#default --print-build-logs
+      - run: nix build .#graphical --print-build-logs
       - run: nix flake check --print-build-logs

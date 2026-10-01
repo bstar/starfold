@@ -196,7 +196,7 @@ impl App {
             A::Mark => self.core.send(Command::ToggleMarkPath(target.clicked)),
             A::CopyCurrentPath => {
                 let path = target.create_dir.to_string_lossy().into_owned();
-                match crate::ui::clipboard::copy_text(&path) {
+                match self.copy_ui_text(&path) {
                     Ok(message) => {
                         self.note = Some((
                             format!("current path {message}"),

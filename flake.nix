@@ -103,13 +103,15 @@
         # libbz2-rs-sys is pure Rust despite its name. No system archive
         # libraries or bindgen are needed. Large image previews optionally
         # use vipsthumbnail when present on PATH.
-        mkStarfold = { pkgsFor ? pkgs }:
+        mkStarfold = { pkgsFor ? pkgs, graphical ? false }:
           pkgsFor.rustPlatform.buildRustPackage {
             # unrar_sys compiles the bundled RARLAB C++ engine.
             nativeBuildInputs = [ pkgsFor.stdenv.cc ];
             pname = "starfold";
             version = cargoToml.package.version;
             src = ./.;
+            cargoBuildFlags = pkgsFor.lib.optionals graphical [ "--features" "terminal-graphics" ];
+            cargoTestFlags = pkgsFor.lib.optionals graphical [ "--features" "terminal-graphics" ];
             cargoLock.lockFile = ./Cargo.lock;
             # STAR/KIT comes from a git tag rather than from crates.io, and
             # `cargoLock.lockFile` alone cannot fetch it: nix wants a hash for
@@ -154,6 +156,18 @@
       {
         packages.default = mkStarfold { };
         packages.starfold = mkStarfold { };
+        # The remote host package carries the protocol/controller, without Electron.
+        packages.graphical-host = mkStarfold { graphical = true; };
+        packages.graphical = pkgs.symlinkJoin {
+          name = "starfold-graphical-${cargoToml.package.version}";
+          paths = [ self.packages.${system}.graphical-host ];
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          postBuild = ''
+            makeWrapper $out/bin/starfold $out/bin/starfold-graphical \
+              --add-flags graphical \
+              --set STAR_GRAPHICS_ELECTRON ${pkgs.electron}/bin/electron
+          '';
+        };
 
         # buildRustPackage runs `cargo test` as part of building the package,
         # so naming it here makes `nix flake check` cover the test suite too.
@@ -173,7 +187,11 @@
         formatter = pkgs.nixpkgs-fmt;
 
         apps.default = flake-utils.lib.mkApp {
-          drv = self.packages.${system}.default;
+            drv = self.packages.${system}.default;
+        };
+        apps.graphical = flake-utils.lib.mkApp {
+          drv = self.packages.${system}.graphical;
+          exePath = "/bin/starfold-graphical";
         };
 
         devShells.default = pkgs.mkShell {

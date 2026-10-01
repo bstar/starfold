@@ -4,6 +4,8 @@ mod audio_embed;
 mod cli;
 mod config;
 mod fold;
+#[cfg(feature = "terminal-graphics")]
+mod graphical;
 mod paths;
 mod session;
 mod ui;
@@ -17,6 +19,10 @@ use clap::Parser as _;
 use paths::PATHS;
 
 fn main() -> Result<()> {
+    #[cfg(feature = "terminal-graphics")]
+    if graphical::handles_args() {
+        return graphical::main();
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--preview-worker")) {
         return fold::preview::connection::child_main();
     }
@@ -133,6 +139,14 @@ fn run_list(dir: PathBuf, hidden: bool, sort: cli::SortArg) -> Result<()> {
 /// already how the last session left it rather than the defaults for one
 /// redraw.
 fn run_tui(dir: Option<PathBuf>) -> Result<()> {
+    let (core, cfg, config_path, session_path) = window_parts(dir, None)?;
+    ui::app::App::run(core, cfg, config_path, Some(session_path))
+}
+
+fn window_parts(
+    dir: Option<PathBuf>,
+    session_override: Option<PathBuf>,
+) -> Result<(fold::Handle, config::Config, PathBuf, PathBuf)> {
     let config_path = PATHS.config_file()?;
     match config::Config::write_template(&config_path) {
         Ok(true) => tracing::info!("wrote a starting config.toml to {}", config_path.display()),
@@ -141,7 +155,7 @@ fn run_tui(dir: Option<PathBuf>) -> Result<()> {
     }
     let cfg = config::Config::load(&config_path)?;
 
-    let session_path = PATHS.session_file()?;
+    let session_path = session_override.unwrap_or(PATHS.session_file()?);
     let session = session::load(&session_path);
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -164,7 +178,7 @@ fn run_tui(dir: Option<PathBuf>) -> Result<()> {
         let (tabs, active) = restore_workspace(&session, explicit);
         core.send(fold::Command::RestoreTabs(tabs, active));
     }
-    ui::app::App::run(core, cfg, config_path, Some(session_path))
+    Ok((core, cfg, config_path, session_path))
 }
 
 /// An explicit location starts fresh in only the active pane. A restored

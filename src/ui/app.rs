@@ -41,6 +41,9 @@
 mod dnd;
 mod editing;
 mod file_actions;
+#[cfg(feature = "terminal-graphics")]
+mod graphical;
+mod rows;
 mod workspace;
 
 use std::collections::{HashMap, HashSet};
@@ -258,6 +261,9 @@ fn place_items(state: &crate::fold::State) -> Vec<super::places::PlaceItem> {
 }
 
 pub struct App {
+    row_stamps: [Option<rows::Stamp>; 3],
+    #[cfg(feature = "terminal-graphics")]
+    graphical: Option<graphical::State>,
     tab_ui: HashMap<crate::fold::tab::TabId, workspace::UiContext>,
     closed_tab_ui: Vec<workspace::UiContext>,
     tab_picker: Option<super::tabs::Picker>,
@@ -438,9 +444,13 @@ impl App {
     }
 
     fn audio_graphics_config(&self) -> Option<audio_embed::GraphicsConfig> {
+        #[cfg(feature = "terminal-graphics")]
+        let graphical = self.graphical.is_some();
+        #[cfg(not(feature = "terminal-graphics"))]
+        let graphical = false;
         if self.cfg.preview.audio_buttons != AudioButtons::Auto
             || !self.audio.transport_images_available()
-            || !self.graphics.pictures_available()
+            || (!self.graphics.pictures_available() && !graphical)
         {
             return None;
         }
@@ -789,6 +799,9 @@ impl App {
         let audio_cell_size = transport_cell_size(&mut graphics);
 
         let mut app = Self {
+            row_stamps: [None, None, None],
+            #[cfg(feature = "terminal-graphics")]
+            graphical: None,
             tab_ui: HashMap::new(),
             closed_tab_ui: vec![],
             tab_picker: None,
@@ -1255,6 +1268,7 @@ impl App {
         let now = self.now_override.unwrap_or_else(std::time::SystemTime::now);
         self.commander = state.commander && state.search.is_none();
         self.active_pane = state.commander_pane;
+        let mut old_panes = std::mem::take(&mut self.panes).into_iter();
         self.panes = state
             .tabs
             .active()
@@ -1265,16 +1279,26 @@ impl App {
             .map(|(index, stack)| {
                 let frame = stack.active();
                 let listing = state.listing_of(&frame.dir);
+                let mut old = old_panes.next();
+                let previous = rows::Snapshot {
+                    rows: old
+                        .as_mut()
+                        .map(|pane| std::mem::take(&mut pane.rows))
+                        .unwrap_or_default(),
+                };
+                let snapshot = rows::refresh(
+                    &mut self.row_stamps[index],
+                    previous,
+                    &state,
+                    frame,
+                    state.selection_for_stack(index),
+                    &self.tz,
+                    now,
+                );
                 PaneView {
                     dir: frame.dir.clone(),
                     key: (index, frame.id),
-                    rows: state
-                        .rows(frame)
-                        .into_iter()
-                        .map(|entry| {
-                            build_row(entry, state.selection_for_stack(index), &self.tz, now)
-                        })
-                        .collect(),
+                    rows: snapshot.rows,
                     cursor: frame.cursor,
                     filter: frame.filter.clone(),
                     loading: frame.loading,
@@ -1303,6 +1327,22 @@ impl App {
             places.set_items(place_items(&state));
             places.set_status(state.places.loading, state.places.error.clone(), unmounting);
         }
+        let mut snapshot = if state.search.is_some() {
+            self.row_stamps[0] = None;
+            rows::Snapshot::default()
+        } else {
+            rows::refresh(
+                &mut self.row_stamps[0],
+                rows::Snapshot {
+                    rows: std::mem::take(&mut self.view.rows),
+                },
+                &state,
+                active,
+                &state.selection,
+                &self.tz,
+                now,
+            )
+        };
         let rows: Vec<panels::stack::Row> = if let Some(search) = &state.search {
             search
                 .results
@@ -1322,11 +1362,7 @@ impl App {
                 })
                 .collect()
         } else {
-            state
-                .rows(active)
-                .into_iter()
-                .map(|entry| build_row(entry, &state.selection, &self.tz, now))
-                .collect()
+            std::mem::take(&mut snapshot.rows)
         };
 
         let listing = state.listing_of(&active.dir);
@@ -2021,7 +2057,7 @@ impl App {
                     operations_report(&state.queue, &self.view.home)
                 };
                 if let Some(report) = report {
-                    self.note = Some(match crate::ui::clipboard::copy_text(&report) {
+                    self.note = Some(match self.copy_ui_text(&report) {
                         Ok(message) => (
                             format!("operations {message}"),
                             NoteLevel::Info,
@@ -2876,6 +2912,19 @@ impl App {
             location: &self.view.location,
             graphics: self.graphics.name(),
         }
+    }
+
+    fn copy_ui_text(&mut self, text: &str) -> std::result::Result<&'static str, String> {
+        #[cfg(feature = "terminal-graphics")]
+        if let Some(graphical) = self.graphical.as_mut() {
+            graphical.effects.push(
+                starkit::terminal_graphics::protocol::ServerMessage::Clipboard {
+                    text: text.into(),
+                },
+            );
+            return Ok("copied to local clipboard");
+        }
+        crate::ui::clipboard::copy_text(text)
     }
 
     // -- drawing --------------------------------------------------------
