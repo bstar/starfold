@@ -825,7 +825,9 @@ fn resize_during_handshake_sends_latest_generation_with_play() {
 #[cfg(unix)]
 #[test]
 fn missing_player_falls_back_to_configured_external_opener() {
-    let temp = tempfile::tempdir().unwrap();
+    // The configured argv uses whitespace splitting, so keep this fixture
+    // under a path that does not require shell quotes.
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
     let opener = temp.path().join("opener");
     let log = temp.path().join("opened.txt");
     executable(
@@ -836,7 +838,7 @@ fn missing_player_falls_back_to_configured_external_opener() {
         ),
     );
     let mut cfg = Config::default();
-    cfg.open.command = format!("sh {}", shell_quote(&opener.display().to_string()));
+    cfg.open.command = format!("sh {}", opener.display());
     cfg.preview.audio_player = crate::config::AudioPlayer::Staramp;
     let (mut app, fake, selected, _other) = media_app_with_config(cfg);
     app.audio = AudioClient::with_executable(fake.fixture.path("missing-staramp"));
