@@ -1018,45 +1018,45 @@ impl Render for Desktop {
             .child(toolbar)
             .child(content);
         if self.sort_menu {
-            root =
-                root.child(
-                    card(tokens)
-                        .flex()
-                        .gap_2()
-                        .children(
-                            [
-                                SortKey::Name,
-                                SortKey::Size,
-                                SortKey::Time,
-                                SortKey::Created,
-                                SortKey::Accessed,
-                                SortKey::Ext,
-                                SortKey::Type,
-                            ]
-                            .into_iter()
-                            .map(|key| {
-                                menu_item(key.label(), tokens).id(key.label()).on_click(
-                                    cx.listener(move |this, _, _, cx| {
-                                        let mut order = this.app.view.sort;
-                                        order.key = key;
-                                        this.app.core.send(Command::SetSort(order));
-                                        this.sort_menu = false;
-                                        this.app.refresh();
-                                        cx.notify();
-                                    }),
-                                )
-                            }),
-                        )
-                        .child(menu_item("High / low", tokens).id("reverse").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                let mut sort = this.app.view.sort;
-                                sort.reverse = !sort.reverse;
-                                this.app.core.send(Command::SetSort(sort));
-                                this.app.refresh();
-                                cx.notify();
-                            }),
-                        )),
-                );
+            root = root.child(
+                card(tokens)
+                    .flex()
+                    .gap_2()
+                    .children(
+                        [
+                            SortKey::Name,
+                            SortKey::Size,
+                            SortKey::Time,
+                            SortKey::Created,
+                            SortKey::Accessed,
+                            SortKey::Ext,
+                            SortKey::Type,
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, key)| {
+                            menu_item(format!("{} · {}", key.label(), index + 1), tokens)
+                                .id(key.label())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let mut order = this.app.view.sort;
+                                    order.key = key;
+                                    this.app.core.send(Command::SetSort(order));
+                                    this.sort_menu = false;
+                                    this.app.refresh();
+                                    cx.notify();
+                                }))
+                        }),
+                    )
+                    .child(menu_item("High / low · H", tokens).id("reverse").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            let mut sort = this.app.view.sort;
+                            sort.reverse = !sort.reverse;
+                            this.app.core.send(Command::SetSort(sort));
+                            this.app.refresh();
+                            cx.notify();
+                        }),
+                    )),
+            );
         }
         if let Some(id) = self.tab_menu {
             root = root.child(
@@ -1134,7 +1134,7 @@ impl Render for Desktop {
                             })),
                     )
                     .child(
-                        menu_item("Copy", tokens)
+                        menu_item("Copy · C", tokens)
                             .id("copy-menu")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(target) = this.menu_target.take() {
@@ -1167,91 +1167,6 @@ impl Render for Desktop {
                                 this.menu = false;
                                 cx.notify();
                             })),
-                    ),
-            );
-        }
-        if let Some(prompt) = &self.prompt {
-            let label = match prompt {
-                Prompt::Filter(_) => "Filter",
-                Prompt::Path(_) => "Copy destination",
-                Prompt::TabName(_) => "Rename tab",
-                Prompt::Rename(_) => "Rename file",
-            };
-            root = root.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(rgba(0x00000088))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        card(tokens)
-                            .w(px(480.))
-                            .child(label)
-                            .child(
-                                div()
-                                    .bg(rgb24(if self.input_selected {
-                                        tokens.selected
-                                    } else {
-                                        tokens.surface
-                                    }))
-                                    .child(format!("{}│", self.input)),
-                            )
-                            .child("Enter to apply · Esc to cancel"),
-                    ),
-            );
-        }
-        let collisions: Vec<_> = self
-            .app
-            .core
-            .state()
-            .queue
-            .iter()
-            .filter(|op| op.status == OpStatus::NeedsPolicy)
-            .map(|op| (op.id, op.plan.as_ref().map_or(0, |p| p.conflicts.len())))
-            .collect();
-        for (id, count) in collisions.into_iter().take(1) {
-            root = root.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(rgba(0x00000088))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        card(tokens)
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(format!("{count} destination names already exist"))
-                            .children(
-                                [
-                                    (ConflictPolicy::Skip, "Skip · S"),
-                                    (ConflictPolicy::RenameNew, "Keep both (1) · R"),
-                                    (ConflictPolicy::Overwrite, "Replace · O"),
-                                ]
-                                .into_iter()
-                                .map(|(policy, label)| {
-                                    menu_item(label, tokens).id(label).on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            this.app.core.send(Command::SetPolicy(id, policy));
-                                            cx.notify();
-                                        },
-                                    ))
-                                }),
-                            )
-                            .child(
-                                menu_item("Cancel · Esc", tokens)
-                                    .id("conflict-cancel")
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.app.core.send(Command::Cancel(id));
-                                        cx.notify();
-                                    })),
-                            ),
                     ),
             );
         }
@@ -1376,6 +1291,94 @@ impl Render for Desktop {
                 "Alt+T theme · F6 view · / filter · Space mark · C copy · F2 rename tab".into()
             });
         root = root.child(div().text_xs().text_color(rgb24(tokens.muted)).child(note));
+        if let Some(prompt) = &self.prompt {
+            let label = match prompt {
+                Prompt::Filter(_) => "Filter",
+                Prompt::Path(_) => "Copy destination",
+                Prompt::TabName(_) => "Rename tab",
+                Prompt::Rename(_) => "Rename file",
+            };
+            root = root.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x00000088))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        card(tokens)
+                            .w(px(480.))
+                            .child(label)
+                            .child(
+                                div()
+                                    .bg(rgb24(if self.input_selected {
+                                        tokens.selected
+                                    } else {
+                                        tokens.surface
+                                    }))
+                                    .child(format!("{}│", self.input)),
+                            )
+                            .child("Enter to apply · Esc to cancel"),
+                    ),
+            );
+        }
+        let collisions: Vec<_> = self
+            .app
+            .core
+            .state()
+            .queue
+            .iter()
+            .filter(|op| op.status == OpStatus::NeedsPolicy)
+            .map(|op| (op.id, op.plan.as_ref().map_or(0, |p| p.conflicts.len())))
+            .collect();
+        for (id, count) in collisions
+            .into_iter()
+            .take(usize::from(self.prompt.is_none()))
+        {
+            root = root.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x00000088))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        card(tokens)
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(format!("{count} destination names already exist"))
+                            .children(
+                                [
+                                    (ConflictPolicy::Skip, "Skip · S"),
+                                    (ConflictPolicy::RenameNew, "Keep both (1) · R"),
+                                    (ConflictPolicy::Overwrite, "Replace · O"),
+                                ]
+                                .into_iter()
+                                .map(|(policy, label)| {
+                                    menu_item(label, tokens).id(label).on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.app.core.send(Command::SetPolicy(id, policy));
+                                            cx.notify();
+                                        },
+                                    ))
+                                }),
+                            )
+                            .child(
+                                menu_item("Cancel · Esc", tokens)
+                                    .id("conflict-cancel")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.app.core.send(Command::Cancel(id));
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            );
+        }
         self.metrics.frame(started.elapsed());
         root
     }
