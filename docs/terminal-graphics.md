@@ -146,6 +146,10 @@ independently while presentation waits for a slow connection.
   Shared Linux Kitty CI also checks actual pixels, keyboard/font resize and
   controlled renderer loss. macOS interactive Kitty and broader terminal
   verification remain promotion gates. This is still an experimental branch.
+- The current region presenter passed a fresh Ghostty 1.3.1 Linux check using
+  X11/software Mesa: navigation/marks, menus, font zoom with a new geometry
+  generation, and clean application/controller exit. This is one tested terminal
+  version/platform, not a claim about every graphics-capable terminal.
 - A fresh ten-minute local mixed workload completed 949 iterations after a
   checksum-verified 256 MiB copy. It exercised navigation, previews, actions,
   themes and repeated font zoom. All process memory samples were readable;
