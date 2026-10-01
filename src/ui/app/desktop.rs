@@ -31,8 +31,8 @@ impl Render for FileDrag {
     }
 }
 enum Prompt {
-    Filter,
-    Path,
+    Filter(usize),
+    Path(Vec<PathBuf>),
     TabName(TabId),
     Rename(PathBuf),
 }
@@ -258,7 +258,7 @@ impl Desktop {
             });
             self.app.refresh();
         } else {
-            self.prompt = Some(Prompt::Path);
+            self.prompt = Some(Prompt::Path(self.sources()));
             self.input = self.app.view.active_dir.to_string_lossy().into();
         }
     }
@@ -285,10 +285,15 @@ impl Desktop {
                     self.input.pop();
                 }
                 "enter" => match self.prompt.take().unwrap() {
-                    Prompt::Filter => self.app.core.send(Command::SetFilter(self.input.clone())),
-                    Prompt::Path => self.app.core.send(Command::QueueOperation {
+                    Prompt::Filter(pane) => {
+                        if self.app.commander {
+                            self.app.focus_pane(pane);
+                        }
+                        self.app.core.send(Command::SetFilter(self.input.clone()));
+                    }
+                    Prompt::Path(sources) => self.app.core.send(Command::QueueOperation {
                         kind: OpKind::Copy,
-                        sources: self.sources(),
+                        sources,
                         dest: Some(PathBuf::from(&self.input)),
                     }),
                     Prompt::TabName(id) => self
@@ -310,6 +315,122 @@ impl Desktop {
                     } else if let Some(text) = &event.keystroke.key_char {
                         self.input.push_str(text);
                     }
+                }
+            }
+            self.app.refresh();
+            cx.notify();
+            return;
+        }
+        let pending = self
+            .app
+            .core
+            .state()
+            .queue
+            .iter()
+            .find(|op| op.status == OpStatus::NeedsPolicy)
+            .map(|op| op.id);
+        if let Some(id) = pending {
+            match key.as_str() {
+                "s" => self
+                    .app
+                    .core
+                    .send(Command::SetPolicy(id, ConflictPolicy::Skip)),
+                "r" => self
+                    .app
+                    .core
+                    .send(Command::SetPolicy(id, ConflictPolicy::RenameNew)),
+                "o" => self
+                    .app
+                    .core
+                    .send(Command::SetPolicy(id, ConflictPolicy::Overwrite)),
+                "escape" => self.app.core.send(Command::Cancel(id)),
+                _ => {}
+            }
+            self.app.refresh();
+            cx.notify();
+            return;
+        }
+        if let Some(id) = self.tab_menu {
+            match key.as_str() {
+                "r" => {
+                    self.input = self.app.core.state().tab_label(id);
+                    self.prompt = Some(Prompt::TabName(id));
+                    self.input_selected = true;
+                    self.tab_menu = None;
+                }
+                "d" => {
+                    self.app.change_tab(Command::SwitchTab(id));
+                    self.app.change_tab(Command::NewTab { duplicate: true });
+                    self.tab_menu = None;
+                }
+                "x" => {
+                    self.app.change_tab(Command::CloseTab(id));
+                    self.tab_menu = None;
+                }
+                "escape" => self.tab_menu = None,
+                _ => {}
+            }
+            cx.notify();
+            return;
+        }
+        if self.menu {
+            if key == "escape" {
+                self.menu = false;
+            } else if matches!(key.as_str(), "o" | "m" | "c" | "r") {
+                if let Some(target) = self.menu_target.take() {
+                    match key.as_str() {
+                        "o" => self.app.core.send(if target.directory {
+                            Command::Push(target.path)
+                        } else {
+                            Command::OpenExternal(target.path)
+                        }),
+                        "m" => self.app.core.send(Command::ToggleMarkPath(target.path)),
+                        "c" => self.app.core.send(Command::QueueOperation {
+                            kind: OpKind::Copy,
+                            sources: target.sources,
+                            dest: Some(target.destination),
+                        }),
+                        "r" => {
+                            self.input = target
+                                .path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into();
+                            self.prompt = Some(Prompt::Rename(target.path));
+                            self.input_selected = true;
+                        }
+                        _ => {}
+                    }
+                }
+                self.menu = false;
+            }
+            self.app.refresh();
+            cx.notify();
+            return;
+        }
+        if self.sort_menu {
+            let keys = [
+                SortKey::Name,
+                SortKey::Size,
+                SortKey::Time,
+                SortKey::Created,
+                SortKey::Accessed,
+                SortKey::Ext,
+                SortKey::Type,
+            ];
+            if key == "escape" {
+                self.sort_menu = false;
+            } else if key == "h" {
+                let mut sort = self.app.view.sort;
+                sort.reverse = !sort.reverse;
+                self.app.core.send(Command::SetSort(sort));
+            } else if let Ok(index) = key.parse::<usize>() {
+                if let Some(key) = index.checked_sub(1).and_then(|i| keys.get(i)) {
+                    let mut sort = self.app.view.sort;
+                    sort.key = *key;
+                    self.app.core.send(Command::SetSort(sort));
+                    self.sort_menu = false;
                 }
             }
             self.app.refresh();
@@ -358,7 +479,7 @@ impl Desktop {
                 "l" | "right" | "enter" => self.app.core.send(Command::Enter),
                 "space" => self.app.core.send(Command::ToggleMark),
                 "/" => {
-                    self.prompt = Some(Prompt::Filter);
+                    self.prompt = Some(Prompt::Filter(self.app.active_pane));
                     self.input = self.app.view.filter.clone();
                     self.input_selected = true;
                 }
@@ -938,42 +1059,43 @@ impl Render for Desktop {
                 );
         }
         if let Some(id) = self.tab_menu {
-            root =
-                root.child(
-                    card(tokens)
-                        .absolute()
-                        .left(self.menu_pos.x)
-                        .top(self.menu_pos.y)
-                        .shadow_lg()
-                        .flex()
-                        .flex_col()
-                        .child(menu_item("Rename tab", tokens).id("tab-rename").on_click(
-                            cx.listener(move |this, _, _, cx| {
+            root = root.child(
+                card(tokens)
+                    .absolute()
+                    .left(self.menu_pos.x)
+                    .top(self.menu_pos.y)
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        menu_item("Rename tab · R", tokens)
+                            .id("tab-rename")
+                            .on_click(cx.listener(move |this, _, _, cx| {
                                 this.input = this.app.core.state().tab_label(id);
                                 this.input_selected = true;
                                 this.prompt = Some(Prompt::TabName(id));
                                 this.tab_menu = None;
                                 cx.notify();
-                            }),
-                        ))
-                        .child(
-                            menu_item("Duplicate tab", tokens)
-                                .id("tab-duplicate")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.app.change_tab(Command::SwitchTab(id));
-                                    this.app.change_tab(Command::NewTab { duplicate: true });
-                                    this.tab_menu = None;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(menu_item("Close tab", tokens).id("tab-close").on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                this.app.change_tab(Command::CloseTab(id));
+                            })),
+                    )
+                    .child(
+                        menu_item("Duplicate tab · D", tokens)
+                            .id("tab-duplicate")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.app.change_tab(Command::SwitchTab(id));
+                                this.app.change_tab(Command::NewTab { duplicate: true });
                                 this.tab_menu = None;
                                 cx.notify();
-                            }),
-                        )),
-                );
+                            })),
+                    )
+                    .child(menu_item("Close tab · X", tokens).id("tab-close").on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.app.change_tab(Command::CloseTab(id));
+                            this.tab_menu = None;
+                            cx.notify();
+                        }),
+                    )),
+            );
         }
         if self.menu {
             root = root.child(
@@ -985,28 +1107,32 @@ impl Render for Desktop {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(menu_item("Open", tokens).id("open").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            if let Some(target) = this.menu_target.take() {
-                                this.app.core.send(if target.directory {
-                                    Command::Push(target.path)
-                                } else {
-                                    Command::OpenExternal(target.path)
-                                });
-                            }
-                            this.menu = false;
-                            cx.notify();
-                        },
-                    )))
-                    .child(menu_item("Mark", tokens).id("mark").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            if let Some(target) = this.menu_target.take() {
-                                this.app.core.send(Command::ToggleMarkPath(target.path));
-                            }
-                            this.menu = false;
-                            cx.notify();
-                        },
-                    )))
+                    .child(
+                        menu_item("Open · O", tokens)
+                            .id("open")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(target) = this.menu_target.take() {
+                                    this.app.core.send(if target.directory {
+                                        Command::Push(target.path)
+                                    } else {
+                                        Command::OpenExternal(target.path)
+                                    });
+                                }
+                                this.menu = false;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        menu_item("Mark · M", tokens)
+                            .id("mark")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(target) = this.menu_target.take() {
+                                    this.app.core.send(Command::ToggleMarkPath(target.path));
+                                }
+                                this.menu = false;
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         menu_item("Copy", tokens)
                             .id("copy-menu")
@@ -1024,7 +1150,7 @@ impl Render for Desktop {
                             })),
                     )
                     .child(
-                        menu_item("Rename", tokens)
+                        menu_item("Rename · R", tokens)
                             .id("rename")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(path) =
@@ -1046,24 +1172,35 @@ impl Render for Desktop {
         }
         if let Some(prompt) = &self.prompt {
             let label = match prompt {
-                Prompt::Filter => "Filter",
-                Prompt::Path => "Copy destination",
+                Prompt::Filter(_) => "Filter",
+                Prompt::Path(_) => "Copy destination",
                 Prompt::TabName(_) => "Rename tab",
                 Prompt::Rename(_) => "Rename file",
             };
             root = root.child(
-                card(tokens)
-                    .child(label)
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x00000088))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
-                        div()
-                            .bg(rgb24(if self.input_selected {
-                                tokens.selected
-                            } else {
-                                tokens.surface
-                            }))
-                            .child(format!("{}│", self.input)),
-                    )
-                    .child("Enter to apply · Esc to cancel"),
+                        card(tokens)
+                            .w(px(480.))
+                            .child(label)
+                            .child(
+                                div()
+                                    .bg(rgb24(if self.input_selected {
+                                        tokens.selected
+                                    } else {
+                                        tokens.surface
+                                    }))
+                                    .child(format!("{}│", self.input)),
+                            )
+                            .child("Enter to apply · Esc to cancel"),
+                    ),
             );
         }
         let collisions: Vec<_> = self
@@ -1075,34 +1212,47 @@ impl Render for Desktop {
             .filter(|op| op.status == OpStatus::NeedsPolicy)
             .map(|op| (op.id, op.plan.as_ref().map_or(0, |p| p.conflicts.len())))
             .collect();
-        for (id, count) in collisions {
+        for (id, count) in collisions.into_iter().take(1) {
             root = root.child(
-                card(tokens)
+                div()
+                    .absolute()
+                    .inset_0()
                     .flex()
-                    .gap_2()
-                    .child(format!("{count} destination names already exist"))
-                    .children(
-                        [
-                            (ConflictPolicy::Skip, "Skip"),
-                            (ConflictPolicy::RenameNew, "Keep both (1)"),
-                            (ConflictPolicy::Overwrite, "Replace"),
-                        ]
-                        .into_iter()
-                        .map(|(policy, label)| {
-                            menu_item(label, tokens).id(label).on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.app.core.send(Command::SetPolicy(id, policy));
-                                    cx.notify();
-                                },
-                            ))
-                        }),
-                    )
-                    .child(menu_item("Cancel", tokens).id("conflict-cancel").on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.app.core.send(Command::Cancel(id));
-                            cx.notify();
-                        }),
-                    )),
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x00000088))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        card(tokens)
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(format!("{count} destination names already exist"))
+                            .children(
+                                [
+                                    (ConflictPolicy::Skip, "Skip · S"),
+                                    (ConflictPolicy::RenameNew, "Keep both (1) · R"),
+                                    (ConflictPolicy::Overwrite, "Replace · O"),
+                                ]
+                                .into_iter()
+                                .map(|(policy, label)| {
+                                    menu_item(label, tokens).id(label).on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.app.core.send(Command::SetPolicy(id, policy));
+                                            cx.notify();
+                                        },
+                                    ))
+                                }),
+                            )
+                            .child(
+                                menu_item("Cancel · Esc", tokens)
+                                    .id("conflict-cancel")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.app.core.send(Command::Cancel(id));
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
             );
         }
         if !self.app.view.ops.is_empty() {
