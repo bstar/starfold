@@ -4550,7 +4550,7 @@ mod tests {
         assert!(matches!(
             app.overlays.current(),
             Some(Overlay::Confirm(confirm))
-                if matches!(&confirm.pending, Pending::DeletePermanently(paths) if paths == &vec![source.clone()])
+                if matches!(&confirm.pending, Pending::QueueDelete(paths) if paths == &vec![source.clone()])
         ));
         app.key(key('n'));
         fk.pump();
