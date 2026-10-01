@@ -128,8 +128,13 @@ independently while presentation waits for a slow connection.
   copy with the default `set-clipboard=external` policy.
 - Ghostty 1.3.1 on Linux: actual graphical file view, Preview, Operations,
   actions-menu keyboard input, session reattachment, and font-size changes
-  rendered successfully. The isolated Nix test used X11/software Mesa after the
-  initial driver setup failed; native Wayland and Ghostty SSH remain unverified.
+  rendered successfully with X11/software Mesa. A separate native Wayland test
+  verified navigation/marks, menu pixels, font zoom with a new geometry generation,
+  and clean frontend/controller exit. Native Wayland also passed a real graphical
+  SSH test against a private loopback server: the remote controller had no display
+  environment, and marked 64 MiB and quoted/Unicode file copies matched SHA-256
+  checksums. Both local and remote processes exited cleanly. This proves the tested
+  platform and topology; WAN behavior remains dependent on the connection.
 - Changed-region presentation: lossless reconstruction, skipped-frame handling,
   resize/cleanup, decoder limits and bounded placements are tested in STAR/KIT.
   Real Kitty displays the FOLD actions menu and retires its regions when closed.
