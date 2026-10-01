@@ -465,6 +465,12 @@ impl Controller for App {
                             rect: (*rect).into(),
                             label: item.label.clone(),
                             active: *id == active,
+                            close: self.tab_hits.iter().find_map(|(rect, hit)| match hit {
+                                super::super::tabs::Hit::Close(close_id) if close_id == id => {
+                                    Some((*rect).into())
+                                }
+                                _ => None,
+                            }),
                         });
                     }
                 }
