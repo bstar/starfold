@@ -666,6 +666,8 @@ fn the_help_overlay() {
 #[test]
 fn three_queued_operations_with_the_module_focused() {
     let (mut app, fk) = build("terminal");
+    // Keep the frame deterministic and leave the system Trash untouched.
+    fk.state_mut().trash = crate::fold::TrashMode::Never;
 
     cursor_to(&mut app, &fk, "blob.bin");
     app.key(key(' '));

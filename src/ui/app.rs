@@ -4535,6 +4535,8 @@ mod tests {
     #[test]
     fn dd_confirms_the_captured_file_before_queueing_deletion() {
         let (mut app, fk, _dir) = app();
+        // This input/queue test must not touch the user's platform Trash.
+        fk.state_mut().trash = crate::fold::TrashMode::Never;
         let source = fk.home().join("blob.bin");
         let idx = row_index(&app, "blob.bin");
         app.core.send(Command::CursorTo(idx));
@@ -4548,7 +4550,7 @@ mod tests {
         assert!(matches!(
             app.overlays.current(),
             Some(Overlay::Confirm(confirm))
-                if matches!(&confirm.pending, Pending::QueueDelete(paths) if paths == &vec![source.clone()])
+                if matches!(&confirm.pending, Pending::DeletePermanently(paths) if paths == &vec![source.clone()])
         ));
         app.key(key('n'));
         fk.pump();
