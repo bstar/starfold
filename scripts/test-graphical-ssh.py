@@ -43,6 +43,7 @@ class Endpoint:
     def __init__(self, config, command, hello):
         self.process = subprocess.Popen(['ssh', '-F', str(config), 'star-graphics-test', command],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        self.closing = False
         self.messages = queue.Queue(maxsize=32)
         def read():
             try:
@@ -66,9 +67,14 @@ class Endpoint:
             message = self.messages.get(timeout=max(.01, deadline-time.monotonic()))
             if message['type'] == 'error':
                 raise RuntimeError(message['message'])
+            if message['type'] == 'scene' and not self.closing:
+                self.send({'type':'presented', 'revision':message['scene']['revision'],
+                    'generation':message['scene']['viewport']['generation']})
             if predicate(message):
                 return message
     def key(self, number, code):
+        if code == 'char:q':
+            self.closing = True
         self.send({'type':'input','id':number,'revision':0,'generation':1,
             'input':{'kind':'key','code':code,'modifiers':0}})
         return self.next(lambda m: m['type']=='ack' and m['id']==number)['accepted']
@@ -140,7 +146,10 @@ LogLevel ERROR
         (files/"two ' quoted.bin").write_bytes(b'captured marked path')
         command=' '.join(shlex.quote(s) for s in ['env','-u','DISPLAY','-u','WAYLAND_DISPLAY',
             f'STARFOLD_DIR={root}/app',str(binary),'--graphical-relay','proof','--directory',str(files)])
-        hello={'type':'hello','version':1,'client':'ssh-proof','viewport':
+        hello={'type':'hello','version':1,'client':'ssh-proof',
+            'capabilities':{'image_transport':'kitty','pixel_geometry':'measured',
+                'pointer_precision':'cells','keyboard':True,'paste':True,'presentation_ack':True},
+            'viewport':
             {'columns':100,'rows':40,'width':1200,'height':800,'generation':1}}
         start=time.monotonic()
         endpoint=Endpoint(root/'ssh_config',command,hello)

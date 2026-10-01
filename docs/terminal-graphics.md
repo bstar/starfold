@@ -100,6 +100,13 @@ Full filenames remain accessible through preview, rename and clipboard actions.
 Native terminal text selection and screen-reader text do not operate on PNG
 pixels; use the ordinary TUI when those are needed.
 
+The local presenter uploads only changed cell-aligned image regions and keeps
+at most 256 placements. Each update is compared with the pixels actually sent to
+the terminal, so dropped renderer frames remain safe. Acknowledgement-based scene
+pacing keeps one scene in flight and coalesces subsequent application updates;
+resize supersedes obsolete geometry without waiting. Filesystem workers continue
+independently while presentation waits for a slow connection.
+
 ## Verification
 
 - Linux: shared protocol/frame/queue tests, FOLD's existing controller suite and
@@ -109,7 +116,9 @@ pixels; use the ordinary TUI when those are needed.
   and duplicate input rejection pass. The fixture changes no user SSH settings.
 - `scripts/test-graphical-ssh.py --binary target/debug/starfold --rtt-ms 50 --bandwidth-mbps 10`
   reproduces the transport test. Modeled latency/bandwidth is applied to messages;
-  it is not a measurement of an actual WAN.
+  it is not a measurement of an actual WAN. The test now negotiates and
+  exercises presentation pacing; observed first listing was 313.4 ms and
+  input-to-ack p95 74.7 ms, with copy checksums and reattachment verified.
 - 100,000-file synthetic listing: cursor updates reuse row storage and publish
   only visible rows; measured controller+scene p95 1.848 ms and <100 KiB JSON.
 - Cell fallback: a real tmux session renders the full interface without Electron;
@@ -121,6 +130,9 @@ pixels; use the ordinary TUI when those are needed.
   actions-menu keyboard input, session reattachment, and font-size changes
   rendered successfully. The isolated Nix test used X11/software Mesa after the
   initial driver setup failed; native Wayland and Ghostty SSH remain unverified.
+- Changed-region presentation: lossless reconstruction, skipped-frame handling,
+  resize/cleanup, decoder limits and bounded placements are tested in STAR/KIT.
+  Real Kitty displays the FOLD actions menu and retires its regions when closed.
 - Local Kitty: the application pixels render inside the existing terminal with
   no visible native Electron window.
 - Live Kitty resize checks produce frames with the new geometry. The SSH view
