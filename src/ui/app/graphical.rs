@@ -10,6 +10,8 @@ pub(super) struct State {
     pub effects: Vec<ServerMessage>,
     pub output_pending: bool,
     image_source: Option<Arc<RgbaImage>>,
+    image_sequence: u64,
+    image_id: Option<String>,
     thumbnail: Option<starkit::terminal_graphics::assets::Thumbnailer>,
     image: Option<(String, String)>,
     audio_images: std::collections::HashMap<String, String>,
@@ -182,11 +184,7 @@ impl App {
             .as_ref()
             .and_then(|worker| worker.output.try_iter().last())
         {
-            if state
-                .image_source
-                .as_ref()
-                .is_some_and(|image| format!("preview-{:p}", Arc::as_ptr(image)) == id)
-            {
+            if state.image_id.as_ref() == Some(&id) {
                 state.image = Some((id, png));
             }
         }
@@ -197,9 +195,12 @@ impl App {
         };
         if changed {
             state.image = None;
+            state.image_id = None;
             state.image_source = source.clone();
             if let Some(source) = source {
-                let id = format!("preview-{:p}", Arc::as_ptr(&source));
+                state.image_sequence += 1;
+                let id = format!("preview-{}", state.image_sequence);
+                state.image_id = Some(id.clone());
                 state
                     .thumbnail
                     .get_or_insert_with(Default::default)
