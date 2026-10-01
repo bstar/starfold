@@ -135,6 +135,10 @@ independently while presentation waits for a slow connection.
   environment, and marked 64 MiB and quoted/Unicode file copies matched SHA-256
   checksums. Both local and remote processes exited cleanly. This proves the tested
   platform and topology; WAN behavior remains dependent on the connection.
+- Graphical pointer adapter: a real fixture copy test routes presses, dragging,
+  wheel input and releases through `Controller::input`. It verifies marked-source
+  identity and copied bytes, self-drop rejection, source scroll freeze, destination
+  edge scrolling and scrollbar ownership.
 - Changed-region presentation: lossless reconstruction, skipped-frame handling,
   resize/cleanup, decoder limits and bounded placements are tested in STAR/KIT.
   Real Kitty displays the FOLD actions menu and retires its regions when closed.

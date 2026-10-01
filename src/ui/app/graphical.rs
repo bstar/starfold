@@ -792,6 +792,168 @@ impl Controller for App {
 mod tests {
     use super::*;
     #[test]
+    fn graphical_drag_preserves_marks_scroll_ownership_and_copy_identity() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let source = fake.home().join("source");
+        let destination = fake.home().join("destination");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        for i in 0..60 {
+            std::fs::write(
+                source.join(format!("source-{i:02}")),
+                format!("payload {i}"),
+            )
+            .unwrap();
+            std::fs::write(destination.join(format!("filler-{i:02}")), b"filler").unwrap();
+        }
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.core.send(Command::RestoreCommander {
+            dirs: [source.clone(), destination.clone()],
+            active: 0,
+            enabled: true,
+        });
+        fake.pump();
+        app.tick();
+        let viewport = Viewport {
+            columns: 100,
+            rows: 30,
+            ..Viewport::default()
+        };
+        let scene = Controller::scene(&mut app, viewport);
+        let row = scene
+            .components
+            .iter()
+            .find_map(|c| match c {
+                Component::ListRow { rect, label, .. } if label == "source-00" => Some(*rect),
+                _ => None,
+            })
+            .unwrap();
+        let pointer = |app: &mut App, action: &str, x, y| {
+            Controller::input(
+                app,
+                Input::Pointer {
+                    action: action.into(),
+                    button: 0,
+                    x,
+                    y,
+                    modifiers: 0,
+                },
+            )
+        };
+        pointer(&mut app, "down", row.x + 4, row.y);
+        pointer(&mut app, "up", row.x + 4, row.y);
+        // Mark advances to the next row in the established file-manager UI.
+        for code in ["char: ", "char: "] {
+            Controller::input(
+                &mut app,
+                Input::Key {
+                    code: code.into(),
+                    modifiers: 0,
+                },
+            );
+            fake.pump();
+            app.tick();
+        }
+        Controller::scene(&mut app, viewport);
+        let source_track = app.bars.track_of(Bar::Commander(0)).unwrap();
+        let target_track = app.bars.track_of(Bar::Commander(1)).unwrap();
+        let source_key = app.panes[0].key;
+        let target_key = app.panes[1].key;
+        let source_scroll = app.scroll.get(&source_key).copied().unwrap_or(0);
+        let target_scroll = app.scroll.get(&target_key).copied().unwrap_or(0);
+
+        // Grabbing the bar must never capture file sources, even across panes.
+        pointer(&mut app, "down", source_track.x, source_track.y);
+        assert_eq!(app.bars.held(), Some(Bar::Commander(0)));
+        assert!(app.graphical.as_ref().unwrap().drag.is_none());
+        pointer(
+            &mut app,
+            "drag",
+            target_track.x - 4,
+            target_track.bottom() - 1,
+        );
+        assert!(!app.dnd.drag_active);
+        pointer(
+            &mut app,
+            "up",
+            target_track.x - 4,
+            target_track.bottom() - 1,
+        );
+        Controller::input(
+            &mut app,
+            Input::Key {
+                code: "home".into(),
+                modifiers: 0,
+            },
+        );
+        fake.pump();
+        app.tick();
+        Controller::scene(&mut app, viewport);
+
+        pointer(&mut app, "down", row.x + 4, row.y);
+        pointer(
+            &mut app,
+            "drag",
+            target_track.x - 4,
+            target_track.bottom() - 1,
+        );
+        assert_eq!(app.dnd.offer.as_ref().unwrap().sources.len(), 2);
+        app.dnd_autoscroll();
+        assert_eq!(app.scroll[&target_key], target_scroll + 1);
+        pointer(
+            &mut app,
+            "scroll_down",
+            row.x + 4,
+            source_track.bottom() - 1,
+        );
+        assert_eq!(app.scroll[&source_key], source_scroll);
+        pointer(&mut app, "drag", row.x + 4, source_track.bottom() - 1);
+        app.dnd_autoscroll();
+        assert_eq!(app.scroll[&source_key], source_scroll);
+        assert!(
+            app.dnd.hover.is_none(),
+            "copying into the source directory must be rejected"
+        );
+        pointer(&mut app, "up", row.x + 4, row.y);
+        fake.pump();
+        app.tick();
+        assert!(app.view.ops.is_empty(), "self-drop must not queue a copy");
+
+        Controller::scene(&mut app, viewport);
+        pointer(&mut app, "down", row.x + 4, row.y);
+        pointer(&mut app, "drag", target_track.x - 4, target_track.y + 3);
+        assert_eq!(app.dnd.hover.as_ref(), Some(&destination));
+        pointer(&mut app, "up", target_track.x - 4, target_track.y + 3);
+        fake.pump();
+        app.tick();
+        fake.pump();
+        app.tick();
+        for i in 0..2 {
+            let name = format!("source-{i:02}");
+            assert!(
+                destination.join(&name).exists(),
+                "missing {name}: {:?}",
+                app.view.ops
+            );
+            assert_eq!(
+                std::fs::read(destination.join(&name)).unwrap(),
+                std::fs::read(source.join(name)).unwrap()
+            );
+        }
+        assert!(!destination.join("source-02").exists());
+        assert!(!app.dnd.drag_active);
+        assert!(app.graphical.as_ref().unwrap().drag.is_none());
+    }
+
+    #[test]
     fn menus_preserve_graphical_rows_and_ignore_background_progress() {
         let cfg = Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
