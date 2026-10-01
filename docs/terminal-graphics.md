@@ -62,6 +62,12 @@ then run `target/release/starfold graphical`. Set `STAR_GRAPHICS_ELECTRON` to an
 Electron 43.6.0 executable when it is not named `electron` on PATH. Ordinary
 `starfold` and the earlier native GPUI launcher remain separate.
 
+The graphical layout now defaults to 150% scale for larger text and taller rows.
+Use `STAR_GRAPHICS_SCALE=100 starfold-graphical` for the original density, or a
+value up to 200 for larger controls. This affects pixel presentation only; the
+ordinary terminal interface retains its terminal cell grid. Pointer, scrollbar
+and desktop drag/drop coordinates are translated into the graphical layout.
+
 Without detected Kitty image support, the launcher automatically presents the
 same controller session using terminal cells. No Electron process is needed for
 this mode. Detach, reattach, SSH and file operations retain the same semantics.
