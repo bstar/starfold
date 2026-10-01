@@ -135,6 +135,11 @@ independently while presentation waits for a slow connection.
   environment, and marked 64 MiB and quoted/Unicode file copies matched SHA-256
   checksums. Both local and remote processes exited cleanly. This proves the tested
   platform and topology; WAN behavior remains dependent on the connection.
+- Small light/dark layouts: isolated Kitty X11 runs at 60×21 cells (420×336
+  pixels) passed navigation, menu opening/closing and clean exit using Catppuccin
+  Latte and Mocha. Actual screenshots were reviewed; Preview and Operations retain
+  their established placement. These are the minimum-size checks, separate from
+  the large-window workload and latency measurements.
 - Graphical pointer adapter: a real fixture copy test routes presses, dragging,
   wheel input and releases through `Controller::input`. It verifies marked-source
   identity and copied bytes, self-drop rejection, source scroll freeze, destination
