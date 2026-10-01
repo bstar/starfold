@@ -65,6 +65,7 @@ impl Host {
             .unwrap();
         write_message(
             &ClientMessage::Hello {
+                capabilities: None,
                 version: VERSION,
                 viewport: Viewport::default(),
                 client: "persistent-test".into(),
@@ -282,4 +283,40 @@ fn remote_desktop_drop_routes_acknowledged_effects_to_the_controller() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(fs::read(target).unwrap(), b"graphical remote drop");
+}
+
+#[test]
+fn capability_report_does_not_start_a_controller_or_require_electron() {
+    let directory = tempfile::tempdir().unwrap();
+    let base = directory.path().join("app");
+    let output = Command::new(env!("CARGO_BIN_EXE_starfold"))
+        .args(["graphical", "--capabilities"])
+        .env("STARFOLD_DIR", &base)
+        .env("STAR_GRAPHICS_ELECTRON", "/missing-runtime")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let capabilities: starkit::terminal_graphics::capabilities::Capabilities =
+        serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        capabilities.image_transport,
+        starkit::terminal_graphics::capabilities::ImageTransport::None
+    );
+    assert_eq!(
+        capabilities.pointer_precision,
+        starkit::terminal_graphics::capabilities::PointerPrecision::None
+    );
+    assert!(!capabilities.keyboard);
+    assert!(!capabilities.paste);
+    assert!(
+        !base.exists(),
+        "capability inspection started application state"
+    );
 }

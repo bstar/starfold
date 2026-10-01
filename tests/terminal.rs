@@ -167,6 +167,86 @@ fn assert_synchronized_frames(output: &[u8]) {
     assert!(frames > 0, "no synchronized frames emitted");
 }
 
+#[cfg(feature = "terminal-graphics")]
+#[test]
+fn graphical_session_falls_back_to_cells_and_copies_without_electron() {
+    let tmp = temporary_dir();
+    let config = tmp.path().join("app");
+    let files = tmp.path().join("files");
+    std::fs::create_dir_all(files.join("destination")).unwrap();
+    std::fs::write(files.join("a.txt"), b"fallback copy").unwrap();
+    let (master, slave) = pty();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_starfold"));
+    command
+        .args(["graphical", "--session", "fallback"])
+        .arg(&files)
+        .env("STARFOLD_DIR", &config)
+        .env("STARFOLD_CONFIG_DIR", &config)
+        .env("TMUX", "/isolated-test-multiplexer")
+        .env("TERM", "screen-256color")
+        .env("STAR_GRAPHICS_ELECTRON", "/missing-runtime-must-not-start")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .stdin(Stdio::from(slave.try_clone().unwrap()))
+        .stdout(Stdio::from(slave.try_clone().unwrap()))
+        .stderr(Stdio::from(slave.try_clone().unwrap()));
+    // SAFETY: only async-signal-safe calls run between fork and exec.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = Running {
+        child: command.spawn().unwrap(),
+        master: Some(master),
+    };
+    let mut output = frame(&mut child);
+    output.extend(collect_for(&mut child, Duration::from_millis(200)));
+    assert!(String::from_utf8_lossy(&output).contains("a.txt"));
+    // Directory first: select the file, yank it, enter the destination, paste.
+    for input in [b"j".as_slice(), b"y", b"k", b"\r", b"p"] {
+        child.master.as_mut().unwrap().write_all(input).unwrap();
+        output.extend(collect_for(&mut child, Duration::from_millis(150)));
+    }
+    let copied = files.join("destination/a.txt");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !copied.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "Copy did not finish: {}",
+            String::from_utf8_lossy(&output)
+        );
+        output.extend(collect_for(&mut child, Duration::from_millis(50)));
+    }
+    assert_eq!(std::fs::read(copied).unwrap(), b"fallback copy");
+    assert!(
+        !output.windows(3).any(|w| w == b"\x1b_G"),
+        "Cell fallback emitted image commands"
+    );
+    child.master.as_mut().unwrap().write_all(b"q").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut bytes = [0; 16384];
+        let _ = child.master.as_mut().unwrap().read(&mut bytes);
+        if let Some(status) = child.child.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "Fallback quit was not handled");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The frontend receives Closed before the host joins its workers and
+    // removes the socket; wait for that separate lifetime to finish too.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while config.join("graphical/fallback.sock").exists() {
+        assert!(Instant::now() < deadline, "Session outlived q");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn startup_redraw_and_resize_need_no_cursor_position_reply() {
     let tmp = temporary_dir();

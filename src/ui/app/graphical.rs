@@ -9,6 +9,7 @@ use starkit::terminal_graphics::{
 pub(super) struct State {
     pub effects: Vec<ServerMessage>,
     pub output_pending: bool,
+    pub(super) cell_mode: bool,
     image_source: Option<Arc<RgbaImage>>,
     image_sequence: u64,
     image_id: Option<String>,
@@ -171,7 +172,11 @@ impl App {
         });
     }
     fn graphical_image(&mut self, scene: &mut Scene, regions: &Regions) {
-        if self.editor.is_some() || self.audio_here() || !self.layout.preview_open {
+        if self.graphical.as_ref().unwrap().cell_mode
+            || self.editor.is_some()
+            || self.audio_here()
+            || !self.layout.preview_open
+        {
             return;
         }
         let source = match self.view.preview.as_deref() {
@@ -248,6 +253,18 @@ impl Controller for App {
     }
     fn attached(&mut self) {
         self.dnd.enabled = false;
+        self.graphical.as_mut().unwrap().cell_mode = false;
+        self.graphics.set_mode(Mode::Off);
+    }
+    fn capabilities(
+        &mut self,
+        capabilities: starkit::terminal_graphics::capabilities::Capabilities,
+    ) {
+        let cells = capabilities.image_transport
+            == starkit::terminal_graphics::capabilities::ImageTransport::None;
+        self.graphical.as_mut().unwrap().cell_mode = cells;
+        self.graphics
+            .set_mode(if cells { Mode::Blocks } else { Mode::Off });
     }
     fn detached(&mut self) {
         self.graphical.as_mut().unwrap().authorization = None;
@@ -581,6 +598,28 @@ impl Controller for App {
                 },
                 active: true,
             });
+            if self.graphical.as_ref().unwrap().cell_mode {
+                for line in 0..6 {
+                    let text = if line == 0 || line == 5 {
+                        format!(
+                            "{}{}{}",
+                            if line == 0 { '┌' } else { '└' },
+                            "─".repeat(usize::from(width.saturating_sub(2))),
+                            if line == 0 { '┐' } else { '┘' }
+                        )
+                    } else {
+                        format!("│{}│", " ".repeat(usize::from(width.saturating_sub(2))))
+                    };
+                    scene.spans.push(Span {
+                        x,
+                        y: y + line,
+                        text,
+                        foreground: hex(self.theme.fg),
+                        background: hex(self.theme.panel_bg),
+                        bold: false,
+                    });
+                }
+            }
             for (line, text) in [
                 "Administrator password · Esc cancels".to_string(),
                 "".into(),

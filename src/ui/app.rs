@@ -445,7 +445,10 @@ impl App {
 
     fn audio_graphics_config(&self) -> Option<audio_embed::GraphicsConfig> {
         #[cfg(feature = "terminal-graphics")]
-        let graphical = self.graphical.is_some();
+        let graphical = self
+            .graphical
+            .as_ref()
+            .is_some_and(|state| !state.cell_mode);
         #[cfg(not(feature = "terminal-graphics"))]
         let graphical = false;
         if self.cfg.preview.audio_buttons != AudioButtons::Auto

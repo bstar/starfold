@@ -31,6 +31,7 @@ starfold-graphical ~/Pictures
 starfold-graphical --session work ~/projects
 starfold-graphical --sessions
 starfold-graphical --attach --session work
+starfold-graphical --capabilities
 ```
 
 For SSH, install the feature-enabled Rust host on the remote machine:
@@ -60,6 +61,13 @@ hand, use `nix develop -c cargo build --release --features terminal-graphics`,
 then run `target/release/starfold graphical`. Set `STAR_GRAPHICS_ELECTRON` to an
 Electron 43.6.0 executable when it is not named `electron` on PATH. Ordinary
 `starfold` and the earlier native GPUI launcher remain separate.
+
+Without detected Kitty image support, the launcher automatically presents the
+same controller session using terminal cells. No Electron process is needed for
+this mode. Detach, reattach, SSH and file operations retain the same semantics.
+The capability report distinguishes image transport, measured or estimated pixel
+geometry, cell pointer precision, keyboard and paste support. Image support does
+not imply pixel-precise mouse input.
 
 ## Feature alignment
 
@@ -104,6 +112,11 @@ pixels; use the ordinary TUI when those are needed.
   it is not a measurement of an actual WAN.
 - 100,000-file synthetic listing: cursor updates reuse row storage and publish
   only visible rows; measured controller+scene p95 1.848 ms and <100 KiB JSON.
+- Cell fallback: a real tmux session renders the full interface without Electron;
+  a PTY regression test performs a copy and clean shutdown with no display server
+  and an unavailable Electron executable. Real tmux checks also verified resize,
+  Ctrl+Q detach, reattachment to the same controller process, and path clipboard
+  copy with the default `set-clipboard=external` policy.
 - Local Kitty: the application pixels render inside the existing terminal with
   no visible native Electron window.
 - Live Kitty resize checks produce frames with the new geometry. The SSH view

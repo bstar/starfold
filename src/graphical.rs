@@ -26,6 +26,9 @@ struct Options {
     attach: bool,
     #[arg(long)]
     sessions: bool,
+    /// Report local transport, geometry and input capabilities without attaching.
+    #[arg(long)]
+    capabilities: bool,
     #[arg(long, default_value = "starfold")]
     remote_executable: String,
     directory: Option<PathBuf>,
@@ -100,6 +103,16 @@ pub fn main() -> Result<()> {
         let args =
             std::iter::once("starfold-graphical".to_string()).chain(std::env::args().skip(2));
         let options = Options::parse_from(args);
+        if options.capabilities {
+            let graphics = starkit::graphics::Graphics::probe_if_tty(starkit::graphics::Mode::Auto);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &starkit::terminal_graphics::capabilities::Capabilities::detected(&graphics)
+                )?
+            );
+            return Ok(());
+        }
         session::socket_path(&root()?, &options.session)?;
         if options.sessions {
             if let Some(host) = options.ssh {
