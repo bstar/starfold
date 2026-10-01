@@ -40,6 +40,16 @@ fn main() -> Result<()> {
     }
     let cli = cli::Cli::parse();
 
+    #[cfg(feature = "visual")]
+    if matches!(cli.command, Some(cli::Command::Visual { .. })) {
+        // Done before workers start; the experiment never restores the regular workspace.
+        let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let isolated = std::env::var_os("STARFOLD_VISUAL_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/starfold-visual"));
+        std::env::set_var("STARFOLD_DIR", &isolated);
+        std::env::set_var("STARFOLD_CONFIG_DIR", &isolated);
+    }
     PATHS.init_private_dirs();
     // The guard must outlive everything that logs; dropping it early loses
     // whatever the writer thread had buffered.
@@ -47,6 +57,8 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(cli::Command::List { dir, hidden, sort }) => run_list(dir, hidden, sort),
+        #[cfg(feature = "visual")]
+        Some(cli::Command::Visual { backend, dir }) => run_window(dir, Some(backend)),
         None => run_tui(cli.dir),
     }
 }
@@ -133,6 +145,15 @@ fn run_list(dir: PathBuf, hidden: bool, sort: cli::SortArg) -> Result<()> {
 /// already how the last session left it rather than the defaults for one
 /// redraw.
 fn run_tui(dir: Option<PathBuf>) -> Result<()> {
+    run_window(dir, None)
+}
+
+#[cfg(not(feature = "visual"))]
+type Presentation = ();
+#[cfg(feature = "visual")]
+type Presentation = cli::Backend;
+
+fn run_window(dir: Option<PathBuf>, _presentation: Option<Presentation>) -> Result<()> {
     let config_path = PATHS.config_file()?;
     match config::Config::write_template(&config_path) {
         Ok(true) => tracing::info!("wrote a starting config.toml to {}", config_path.display()),
@@ -165,6 +186,28 @@ fn run_tui(dir: Option<PathBuf>) -> Result<()> {
     if !session.tabs.is_empty() {
         let (tabs, active) = restore_workspace(&session, explicit);
         core.send(fold::Command::RestoreTabs(tabs, active));
+    }
+    #[cfg(feature = "visual")]
+    if let Some(backend) = _presentation {
+        return match backend {
+            cli::Backend::Terminal => {
+                ui::app::App::run_visual(core, cfg, config_path, Some(session_path), true)
+            }
+            cli::Backend::Plain => {
+                ui::app::App::run_visual(core, cfg, config_path, Some(session_path), false)
+            }
+            cli::Backend::Desktop => {
+                #[cfg(feature = "desktop")]
+                {
+                    ui::app::desktop::run(core, cfg, config_path, Some(session_path))
+                }
+                #[cfg(not(feature = "desktop"))]
+                {
+                    core.send(fold::Command::Shutdown);
+                    anyhow::bail!("Build with --features desktop to enable the desktop window")
+                }
+            }
+        };
     }
     ui::app::App::run(core, cfg, config_path, Some(session_path))
 }

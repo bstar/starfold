@@ -212,7 +212,55 @@ impl Overlays {
         self.current = Some(Overlay::Search(search::Search::new(query, mode)));
     }
 
+    #[cfg(feature = "desktop")]
+    pub fn native_input_mut(&mut self) -> Option<&mut starkit::input::TextInput> {
+        match self.current.as_mut()? {
+            Overlay::Rename(form) => {
+                form.error = None;
+                Some(&mut form.input)
+            }
+            Overlay::Create(form) => {
+                form.error = None;
+                Some(&mut form.input)
+            }
+            Overlay::Destination(form) => {
+                form.error = None;
+                Some(&mut form.input)
+            }
+            Overlay::Search(form) => {
+                form.error = None;
+                Some(&mut form.input)
+            }
+            Overlay::ConflictRename(sequence) => {
+                sequence.form.error = None;
+                Some(&mut sequence.form.input)
+            }
+            Overlay::Recovery(browser) => browser.rename.as_mut().map(|form| {
+                form.error = None;
+                &mut form.input
+            }),
+            _ => None,
+        }
+    }
     pub fn paste(&mut self, text: &str) -> bool {
+        match self.current.as_mut() {
+            Some(Overlay::Rename(form)) => {
+                form.input.paste(text);
+                form.error = None;
+                return true;
+            }
+            Some(Overlay::Create(form)) => {
+                form.input.paste(text);
+                form.error = None;
+                return true;
+            }
+            Some(Overlay::Destination(form)) => {
+                form.input.paste(text);
+                form.error = None;
+                return true;
+            }
+            _ => {}
+        }
         if let Some(Overlay::Recovery(browser)) = self.current.as_mut() {
             if let Some(form) = browser.rename.as_mut() {
                 form.input.paste(text);

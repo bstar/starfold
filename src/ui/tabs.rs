@@ -56,7 +56,45 @@ pub enum Answer {
     Consumed,
 }
 
+#[cfg(feature = "desktop")]
+pub enum NativeView {
+    Menu(Vec<super::popup::NativePanel<Action>>),
+    Rename(String, usize),
+    Browse(Vec<Item>, usize),
+}
 impl Picker {
+    #[cfg(feature = "desktop")]
+    pub fn native_input_mut(&mut self) -> Option<&mut TextInput> {
+        matches!(self.mode, Mode::Rename(_)).then_some(&mut self.input)
+    }
+    #[cfg(feature = "desktop")]
+    pub fn native_view(&mut self, area: Rect) -> NativeView {
+        if let Some(menu) = &mut self.menu {
+            return NativeView::Menu(menu.native_panels(area));
+        }
+        if matches!(self.mode, Mode::Rename(_)) {
+            return NativeView::Rename(self.input.text().to_owned(), self.input.cursor());
+        }
+        NativeView::Browse(self.items.clone(), self.cursor)
+    }
+    #[cfg(feature = "desktop")]
+    pub fn native_hover(&mut self, level: usize, index: usize) {
+        if let Some(menu) = &mut self.menu {
+            menu.native_hover(level, index);
+        }
+    }
+    #[cfg(feature = "desktop")]
+    pub fn native_activate(&mut self, level: usize, index: usize) -> Answer {
+        let Some(menu) = &mut self.menu else {
+            return Answer::Consumed;
+        };
+        let answer = menu.native_activate(level, index);
+        self.menu_answer(answer)
+    }
+    #[cfg(feature = "desktop")]
+    pub fn native_select(&mut self, index: usize) {
+        self.cursor = index.min(self.items.len().saturating_sub(1));
+    }
     pub fn new(items: Vec<Item>, active: TabId) -> Self {
         let cursor = items.iter().position(|i| i.id == active).unwrap_or(0);
         Self {

@@ -204,6 +204,16 @@ impl Editor {
             },
         );
         let body = content_rect(body);
+        self.render_cells(body, buf, theme)
+    }
+
+    /// Native presentation supplies its own module chrome and uses the same PTY screen.
+    #[cfg(feature = "desktop")]
+    pub fn render_native(&mut self, body: Rect, buf: &mut Buffer, theme: &Theme) -> Result<()> {
+        self.render_cells(body, buf, theme)
+    }
+
+    fn render_cells(&mut self, body: Rect, buf: &mut Buffer, theme: &Theme) -> Result<()> {
         if body.width == 0 || body.height == 0 {
             return Ok(());
         }

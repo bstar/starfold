@@ -35,6 +35,13 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Isolated graphical presentation experiment.
+    #[cfg(feature = "visual")]
+    Visual {
+        #[arg(long, value_enum, default_value_t = Backend::Terminal)]
+        backend: Backend,
+        dir: Option<PathBuf>,
+    },
     /// List a directory and exit, with no terminal involved.
     List {
         /// The directory to list.
@@ -152,5 +159,35 @@ mod tests {
     fn verbose_is_accepted_before_and_after_the_subcommand() {
         assert!(Cli::parse_from(["starfold", "--verbose", "list", "/tmp"]).verbose);
         assert!(Cli::parse_from(["starfold", "list", "/tmp", "--verbose"]).verbose);
+    }
+}
+
+#[cfg(feature = "visual")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Backend {
+    Terminal,
+    Plain,
+    Desktop,
+}
+
+#[cfg(all(test, feature = "visual"))]
+mod visual_tests {
+    use super::*;
+    #[test]
+    fn desktop_is_explicit_and_terminal_is_default() {
+        assert!(matches!(
+            Cli::parse_from(["starfold", "visual"]).command,
+            Some(Command::Visual {
+                backend: Backend::Terminal,
+                ..
+            })
+        ));
+        assert!(matches!(
+            Cli::parse_from(["starfold", "visual", "--backend", "desktop", "/tmp"]).command,
+            Some(Command::Visual {
+                backend: Backend::Desktop,
+                dir: Some(_)
+            })
+        ));
     }
 }

@@ -485,7 +485,7 @@ fn draw_centered(area: Rect, buf: &mut Buffer, text: &str, style: Style) {
     buf.set_string(x, y, trimmed, style);
 }
 
-fn kind_fg(t: &Theme, kind: Kind) -> Rgb {
+pub(crate) fn kind_fg(t: &Theme, kind: Kind) -> Rgb {
     match kind {
         Kind::Dir => t.fold.dir_fg,
         Kind::Symlink { broken: true } => t.fold.error_fg,

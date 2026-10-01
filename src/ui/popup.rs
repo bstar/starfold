@@ -118,6 +118,18 @@ pub struct Popup<A> {
     pending: Option<(usize, usize, Instant)>,
     pointer: Option<(u16, u16)>,
 }
+#[cfg(feature = "desktop")]
+pub struct NativePanel<A> {
+    pub level: usize,
+    pub rect: Rect,
+    pub rows: Vec<NativeRow<A>>,
+}
+#[cfg(feature = "desktop")]
+pub struct NativeRow<A> {
+    pub index: usize,
+    pub entry: Entry<A>,
+    pub selected: bool,
+}
 impl<A: Copy> Popup<A> {
     pub fn new(entries: Vec<Entry<A>>, anchor: (u16, u16)) -> Self {
         Self {
@@ -126,6 +138,70 @@ impl<A: Copy> Popup<A> {
             pending: None,
             pointer: None,
         }
+    }
+    /// Presentation snapshot for renderers that do not draw terminal cells.
+    #[cfg(feature = "desktop")]
+    pub fn native_panels(&mut self, area: Rect) -> Vec<NativePanel<A>> {
+        self.panels(area)
+            .into_iter()
+            .map(|panel| {
+                let level = &self.levels[panel.level];
+                NativePanel {
+                    level: panel.level,
+                    rect: panel.rect,
+                    rows: level
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .skip(level.scroll)
+                        .take(usize::from(panel.rect.height.saturating_sub(2)))
+                        .map(|(index, entry)| NativeRow {
+                            index,
+                            entry: entry.clone(),
+                            selected: index == level.cursor,
+                        })
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+    #[cfg(feature = "desktop")]
+    pub fn native_hover(&mut self, level: usize, index: usize) {
+        let Some(menu) = self.levels.get(level) else {
+            return;
+        };
+        if !menu.entries.get(index).is_some_and(Entry::selectable) {
+            return;
+        }
+        let pointer = (level as u16, index as u16);
+        if self.pointer == Some(pointer) {
+            return;
+        }
+        self.pointer = Some(pointer);
+        self.pending = None;
+        if menu.cursor != index {
+            self.levels.truncate(level + 1);
+        }
+        self.levels[level].cursor = index;
+        if self.levels.len() == level + 1
+            && matches!(self.levels[level].entries[index], Entry::Submenu { .. })
+        {
+            self.pending = Some((level, index, Instant::now()));
+        }
+    }
+    /// Uses the same enabled checks and submenu transition as terminal clicks.
+    #[cfg(feature = "desktop")]
+    pub fn native_activate(&mut self, level: usize, index: usize) -> Answer<A> {
+        let Some(menu) = self.levels.get(level) else {
+            return Answer::Consumed;
+        };
+        if !menu.entries.get(index).is_some_and(Entry::selectable) {
+            return Answer::Consumed;
+        }
+        self.pending = None;
+        self.levels.truncate(level + 1);
+        self.levels[level].cursor = index;
+        self.activate()
     }
     pub fn root_rect(&self, area: Rect) -> Rect {
         let w = self.levels[0].width().min(area.width);

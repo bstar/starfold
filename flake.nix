@@ -98,15 +98,20 @@
         # One version, read rather than repeated. scripts/check-version.sh
         # asserts the copies that cannot be derived (Cargo.lock).
         cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+        visualLibs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (with pkgs; [ fontconfig freetype libxkbcommon wayland libX11 libxcb vulkan-loader mesa ]);
 
         # RAR uses bundled UnRAR C++ compiled by unrar_sys. BZip2's
         # libbz2-rs-sys is pure Rust despite its name. No system archive
         # libraries or bindgen are needed. Large image previews optionally
         # use vipsthumbnail when present on PATH.
-        mkStarfold = { pkgsFor ? pkgs }:
+        mkStarfold = { pkgsFor ? pkgs, graphical ? false }:
           pkgsFor.rustPlatform.buildRustPackage {
             # unrar_sys compiles the bundled RARLAB C++ engine.
-            nativeBuildInputs = [ pkgsFor.stdenv.cc ];
+            nativeBuildInputs = [ pkgsFor.stdenv.cc ] ++ pkgsFor.lib.optionals graphical ([ pkgsFor.pkg-config pkgsFor.makeWrapper ] ++ pkgsFor.lib.optionals pkgsFor.stdenv.hostPlatform.isDarwin [ pkgsFor.libclang ]);
+            buildInputs = pkgsFor.lib.optionals graphical visualLibs;
+            buildFeatures = pkgsFor.lib.optionals graphical [ "desktop" ];
+            checkFeatures = pkgsFor.lib.optionals graphical [ "desktop" ];
+            LIBCLANG_PATH = pkgsFor.lib.optionalString (graphical && pkgsFor.stdenv.hostPlatform.isDarwin) "${pkgsFor.libclang.lib}/lib";
             pname = "starfold";
             version = cargoToml.package.version;
             src = ./.;
@@ -131,7 +136,12 @@
             cargoLock.allowBuiltinFetchGit = true;
 
             # freedesktop assets, which mean nothing on macOS.
-            postInstall = ''
+            postInstall = pkgsFor.lib.optionalString graphical ''
+              wrapProgram $out/bin/starfold --prefix LD_LIBRARY_PATH : "${pkgsFor.lib.makeLibraryPath visualLibs}"
+              makeWrapper $out/bin/starfold $out/bin/starfold-visual --add-flags visual
+            '' + pkgsFor.lib.optionalString (graphical && pkgsFor.stdenv.hostPlatform.isLinux) ''
+              wrapProgram $out/bin/starfold-visual --prefix XDG_DATA_DIRS : "${pkgsFor.mesa}/share"
+            '' + ''
               install -Dm644 LICENSES/UnRAR.txt $out/share/licenses/starfold/UnRAR.txt
             '' + pkgsFor.lib.optionalString pkgsFor.stdenv.hostPlatform.isLinux ''
               install -Dm644 packaging/starfold.desktop \
@@ -146,13 +156,14 @@
               description = "A stack-based terminal file manager in the STAR family";
               homepage = "https://github.com/bstar/starfold";
               license = licenses.mit;
-              mainProgram = "starfold";
+              mainProgram = if graphical then "starfold-visual" else "starfold";
               platforms = platforms.linux ++ platforms.darwin;
             };
           };
       in
       {
         packages.default = mkStarfold { };
+        packages.visual = mkStarfold { graphical = true; };
         packages.starfold = mkStarfold { };
 
         # buildRustPackage runs `cargo test` as part of building the package,
@@ -172,13 +183,19 @@
 
         formatter = pkgs.nixpkgs-fmt;
 
+        apps.visual = flake-utils.lib.mkApp { drv = self.packages.${system}.visual; };
+
         apps.default = flake-utils.lib.mkApp {
           drv = self.packages.${system}.default;
         };
 
         devShells.default = pkgs.mkShell {
-          packages = (with pkgs; [
+          buildInputs = visualLibs;
+          LIBCLANG_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${pkgs.libclang.lib}/lib";
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath visualLibs;
+          packages = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libclang ] ++ (with pkgs; [
             stdenv.cc
+            pkg-config
             rustc
             cargo
             rustfmt
@@ -199,7 +216,9 @@
             cargo-deny
           ]);
 
-          shellHook = ''
+          shellHook = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+            export XDG_DATA_DIRS="${pkgs.mesa}/share:''${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+          '' + ''
             echo "STAR/FOLD devshell · rustc $(rustc --version | cut -d' ' -f2)"
           '';
         };

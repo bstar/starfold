@@ -120,7 +120,101 @@ const UNMOUNT_YES: &str = "y unmount";
 const EMPTY_TRASH_YES: &str = "y empty trash";
 const REMOVE_GAP: u16 = 3;
 
+#[cfg(feature = "desktop")]
+pub enum NativeView {
+    Browse {
+        query: String,
+        cursor: usize,
+        selected: usize,
+        items: Vec<PlaceItem>,
+        status: Option<String>,
+    },
+    Form {
+        title: String,
+        detail: String,
+        text: String,
+        cursor: usize,
+        error: Option<String>,
+    },
+    Details(Vec<String>),
+    Confirm(String, String),
+}
 impl Places {
+    #[cfg(feature = "desktop")]
+    pub fn native_input_mut(&mut self) -> Option<&mut TextInput> {
+        match &mut self.mode {
+            Mode::Browse => {
+                self.selected = 0;
+                self.scroll = 0;
+                Some(&mut self.search)
+            }
+            Mode::Edit { input, error, .. } => {
+                *error = None;
+                Some(input)
+            }
+            _ => None,
+        }
+    }
+    #[cfg(feature = "desktop")]
+    pub fn native_view(&self) -> NativeView {
+        match &self.mode {
+            Mode::Browse => NativeView::Browse {
+                query: self.search.text().to_owned(),
+                cursor: self.search.cursor(),
+                selected: self.selected,
+                items: self
+                    .filtered_items()
+                    .into_iter()
+                    .map(|index| self.items[index].clone())
+                    .collect(),
+                status: self
+                    .error
+                    .clone()
+                    .or_else(|| self.notice.clone())
+                    .or_else(|| self.loading.then(|| format!("{} Reading…", self.spinner))),
+            },
+            Mode::Edit {
+                path,
+                input,
+                rename,
+                error,
+            } => NativeView::Form {
+                title: if *rename {
+                    "Rename bookmark"
+                } else {
+                    "Bookmark directory"
+                }
+                .into(),
+                detail: path.display().to_string(),
+                text: input.text().to_owned(),
+                cursor: input.cursor(),
+                error: error.map(str::to_owned),
+            },
+            Mode::Details => NativeView::Details(
+                detail_lines(self.selected_item())
+                    .into_iter()
+                    .map(|(label, value)| format!("{label}: {value}"))
+                    .collect(),
+            ),
+            Mode::ConfirmRemove { name, path } => NativeView::Confirm(
+                format!("Remove bookmark {name}?"),
+                path.display().to_string(),
+            ),
+            Mode::ConfirmUnmount { name, path, .. } => {
+                NativeView::Confirm(format!("Unmount {name}?"), path.display().to_string())
+            }
+            Mode::ConfirmEmptyTrash { name, path } => NativeView::Confirm(
+                format!("Empty Trash on {name}?"),
+                path.display().to_string(),
+            ),
+        }
+    }
+    #[cfg(feature = "desktop")]
+    pub fn native_select(&mut self, index: usize) {
+        if matches!(self.mode, Mode::Browse) {
+            self.selected = index.min(self.filtered_items().len().saturating_sub(1));
+        }
+    }
     pub fn new(items: Vec<PlaceItem>) -> Self {
         Self {
             items,
@@ -610,13 +704,7 @@ pub fn rect(area: Rect) -> Rect {
     overlay::rect(area, (38, 108), 24, 9, Anchor::Centre)
 }
 
-fn render_details(area: Rect, buf: &mut Buffer, theme: &Theme, item: Option<&PlaceItem>) {
-    if area.width < 20 || area.height == 0 {
-        return;
-    }
-    let heading = Style::default().fg(rgb(theme.accent));
-    let body = Style::default().fg(rgb(theme.fg));
-    let dim = Style::default().fg(rgb(theme.dim));
+fn detail_lines(item: Option<&PlaceItem>) -> Vec<(&'static str, String)> {
     let mut lines: Vec<(&str, String)> = Vec::new();
     match item {
         Some(item) => {
@@ -650,6 +738,16 @@ fn render_details(area: Rect, buf: &mut Buffer, theme: &Theme, item: Option<&Pla
         }
         None => lines.push(("SELECTED PLACE", "Choose a drive to inspect".into())),
     }
+    lines
+}
+fn render_details(area: Rect, buf: &mut Buffer, theme: &Theme, item: Option<&PlaceItem>) {
+    if area.width < 20 || area.height == 0 {
+        return;
+    }
+    let heading = Style::default().fg(rgb(theme.accent));
+    let body = Style::default().fg(rgb(theme.fg));
+    let dim = Style::default().fg(rgb(theme.dim));
+    let lines = detail_lines(item);
     let mut y = area.y;
     for (line, (label, value)) in lines.into_iter().enumerate() {
         if y >= area.bottom() {

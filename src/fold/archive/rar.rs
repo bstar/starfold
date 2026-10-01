@@ -54,6 +54,8 @@ impl Reader {
         );
         Ok(reader)
     }
+    // unrar wchar_t is signed on x86_64 and unsigned on Linux ARM64.
+    #[allow(clippy::unnecessary_cast)]
     pub fn next(&mut self) -> anyhow::Result<Option<ArchiveEntry>> {
         let mut h: sys::HeaderDataEx = unsafe { std::mem::zeroed() };
         let code = unsafe { sys::RARReadHeaderEx(self.handle, std::ptr::addr_of_mut!(h)) };

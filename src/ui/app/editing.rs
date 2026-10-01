@@ -69,7 +69,7 @@ impl App {
         }
     }
 
-    fn finish_editor(&mut self, error: Option<String>) {
+    pub(super) fn finish_editor(&mut self, error: Option<String>) {
         let Some(editor) = self.editor.take() else {
             return;
         };
