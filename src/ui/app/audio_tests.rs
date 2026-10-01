@@ -840,13 +840,24 @@ fn decoder_error_after_handshake_stays_in_embedded_preview() {
     cfg.open.command = "/bin/true".into();
     let (mut app, fake, selected, _other) = media_app_with_config(cfg);
     let error = r#"{"type":"error","message":"decoder failed"}"#;
-    let (program, _log) = fake_player(&fake, "error-staramp", false, error);
+    let (program, log) = fake_player(&fake, "error-staramp", false, error);
     app.audio = AudioClient::with_executable(program);
     app.key(key(KeyCode::Enter));
-    wait_for(|| {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
         app.tick();
-        app.audio_error.as_deref() == Some("decoder failed")
-    });
+        if app.audio_error.as_deref() == Some("decoder failed") {
+            break;
+        }
+        assert!(
+            app.audio_path.is_some() && Instant::now() < deadline,
+            "fake player did not report decoder error: note={:?}, error={:?}, messages={:?}",
+            app.note,
+            app.audio_error,
+            messages(&log)
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(app.audio_path, Some(selected));
     assert!(app.layout.audio_active);
     assert_eq!(app.audio_error.as_deref(), Some("decoder failed"));

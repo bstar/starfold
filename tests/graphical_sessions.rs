@@ -42,7 +42,7 @@ impl Host {
             .env_remove("WAYLAND_DISPLAY")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .unwrap();
         let socket = base.join("graphical/test.sock");

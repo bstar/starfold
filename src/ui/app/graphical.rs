@@ -169,13 +169,7 @@ impl App {
         });
     }
     fn graphical_image(&mut self, scene: &mut Scene, regions: &Regions) {
-        if self.overlays.is_open()
-            || self.places.is_some()
-            || self.tab_picker.is_some()
-            || self.editor.is_some()
-            || self.audio_here()
-            || !self.layout.preview_open
-        {
+        if self.editor.is_some() || self.audio_here() || !self.layout.preview_open {
             return;
         }
         let source = match self.view.preview.as_deref() {
@@ -380,28 +374,7 @@ impl Controller for App {
                 }
             }
         }
-        if modal {
-            for rect in modal_rects
-                .iter()
-                .copied()
-                .map(starkit::terminal_graphics::Rect::from)
-            {
-                scene.components.retain(|component| !matches!(component, Component::Panel { rect: r, .. } if *r == rect));
-                let menu = matches!(
-                    self.overlays.current(),
-                    Some(Overlay::Context(_) | Overlay::Drop(_) | Overlay::Sort(_))
-                );
-                scene.components.push(if menu {
-                    Component::Menu { rect }
-                } else {
-                    Component::Dialog {
-                        rect,
-                        title: String::new(),
-                    }
-                });
-            }
-        }
-        if !modal {
+        {
             let pane_count = if self.commander { self.panes.len() } else { 1 };
             for pane in 0..pane_count {
                 let rect = if self.commander {
@@ -521,7 +494,7 @@ impl Controller for App {
         }
         scene.interaction = targets.finish();
         self.graphical_image(&mut scene, &regions);
-        if !modal && self.audio_graphics_config().is_some() {
+        if self.audio_graphics_config().is_some() {
             if let Some(frame) = &self.audio_frame {
                 use std::hash::{Hash, Hasher};
                 let body = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
@@ -564,6 +537,27 @@ impl Controller for App {
                     }
                 }
                 cache.retain(|id, _| retained.contains(id));
+            }
+        }
+        if modal {
+            for rect in modal_rects
+                .iter()
+                .copied()
+                .map(starkit::terminal_graphics::Rect::from)
+            {
+                scene.components.retain(|component| !matches!(component, Component::Panel { rect: r, .. } if *r == rect));
+                let menu = matches!(
+                    self.overlays.current(),
+                    Some(Overlay::Context(_) | Overlay::Drop(_) | Overlay::Sort(_))
+                );
+                scene.components.push(if menu {
+                    Component::Menu { rect }
+                } else {
+                    Component::Dialog {
+                        rect,
+                        title: String::new(),
+                    }
+                });
             }
         }
         if let Some(auth) = self.graphical.as_ref().unwrap().authorization.as_ref() {
@@ -751,6 +745,50 @@ impl Controller for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn menus_preserve_graphical_rows_and_ignore_background_progress() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        let before = Controller::scene(&mut app, Viewport::default());
+        Controller::input(
+            &mut app,
+            Input::Key {
+                code: "char:c".into(),
+                modifiers: 0,
+            },
+        );
+        app.view.ops = vec![panels::operations::OpRow {
+            title: "COPY test".into(),
+            status: "copying 10%".into(),
+            bar: None,
+            tone: panels::operations::Tone::Running,
+        }];
+        let menu = Controller::scene(&mut app, Viewport::default());
+        assert!(matches!(
+            menu.components.last(),
+            Some(Component::Menu { .. })
+        ));
+        let rows = |scene: &Scene| {
+            scene
+                .components
+                .iter()
+                .filter(|c| matches!(c, Component::ListRow { .. }))
+                .count()
+        };
+        assert!(rows(&before) > 0);
+        assert_eq!(rows(&before), rows(&menu));
+        app.view.ops[0].status = "copying 75%".into();
+        let progress = Controller::scene(&mut app, Viewport::default());
+        assert_eq!(menu.interaction, progress.interaction);
+    }
     #[test]
     fn large_listing_reuses_rows_and_transmits_only_the_visible_range() {
         let cfg = Config::default();

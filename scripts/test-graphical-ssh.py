@@ -97,9 +97,16 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 UsePAM yes
 AllowUsers {getpass.getuser()}
-PerSourcePenalties no
 LogLevel ERROR
 ''')
+    # OpenSSH before 9.8 has no PerSourcePenalties setting. Probe the
+    # optional directive before adding it to this private fixture config.
+    config = root/'sshd_config'
+    probe = subprocess.run([sshd,'-T','-f',str(config),'-o','PerSourcePenalties=no'],
+        stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    if probe.returncode == 0:
+        with config.open('a') as file:
+            file.write('PerSourcePenalties no\n')
     (root/'ssh_config').write_text(f'''Host star-graphics-test
   HostName 127.0.0.1
   Port {port}
