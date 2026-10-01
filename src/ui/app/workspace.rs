@@ -174,7 +174,7 @@ impl App {
         self.seen_version = u64::MAX;
         self.repaint = true;
     }
-    fn change_tab(&mut self, command: Command) {
+    pub(super) fn change_tab(&mut self, command: Command) {
         let old = self.core.state().tabs.active().id;
         let context = self.take_tab_ui();
         self.tab_ui.insert(old, context);

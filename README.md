@@ -183,3 +183,23 @@ most people want first:
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Experimental graphical presentation
+
+The `experiment/graphical-presentation` branch adds a separate `starfold-visual`
+command, sharing the existing stack/fold core. The native GPUI view retains
+folded parent levels above the active directory, independent Commander stacks,
+tabs and the existing operation queue. The enhanced terminal view keeps ordinary
+text and adds graphical icons and selected-tab edges where supported.
+
+```sh
+./scripts/install-visual.sh
+starfold-visual                       # enhanced terminal
+starfold-visual --backend desktop     # native window
+starfold-visual --backend plain       # ordinary text fallback
+```
+
+Configuration, session and logs are isolated under `~/.local/starfold-visual`.
+See [the experiment report](docs/graphical-experiment.md) for its compatibility
+chart, measured performance, platform gates and remaining native parity gaps.
+This branch is a prototype; it does not replace the regular release or launcher.

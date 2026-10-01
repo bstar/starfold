@@ -79,3 +79,26 @@ allow = ["bzip2-1.0.6"]
 [[licenses.exceptions]]
 name = "ppmd-rust"
 allow = ["MIT-0"]
+
+# Optional GPUI dependencies; exceptions apply only to these unchanged crates.
+[[licenses.exceptions]]
+name = "hexf-parse"
+allow = ["CC0-1.0"]
+[[licenses.exceptions]]
+name = "tiny-keccak"
+allow = ["CC0-1.0"]
+[[licenses.exceptions]]
+name = "libfuzzer-sys"
+allow = ["NCSA"]
+[[licenses.exceptions]]
+name = "ring"
+allow = ["ISC"]
+[[licenses.exceptions]]
+name = "rustls-webpki"
+allow = ["ISC"]
+[[licenses.exceptions]]
+name = "libloading"
+allow = ["ISC"]
+[[licenses.exceptions]]
+name = "untrusted"
+allow = ["ISC"]

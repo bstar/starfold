@@ -43,6 +43,11 @@ mod editing;
 mod file_actions;
 mod workspace;
 
+#[cfg(feature = "desktop")]
+pub mod desktop;
+#[cfg(feature = "visual")]
+mod visual;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -109,6 +114,8 @@ pub struct ViewData {
     /// `"starwire/ ── 14 files · 3 dirs · 84.2 MB"`.
     pub rule: String,
     pub rows: Vec<panels::stack::Row>,
+    #[cfg(feature = "visual")]
+    pub paths: Vec<PathBuf>,
     pub cursor: usize,
     /// The path the cursor sits on, for `o`, `r` and for following the
     /// preview -- the stack panel's own `Row` carries no path, only a name.
@@ -156,6 +163,8 @@ impl ViewData {
             crumbs: Vec::new(),
             rule: String::new(),
             rows: Vec::new(),
+            #[cfg(feature = "visual")]
+            paths: Vec::new(),
             cursor: 0,
             cursor_path: None,
             search_active: false,
@@ -201,6 +210,8 @@ struct Scaled {
 }
 
 struct PaneView {
+    #[cfg(feature = "visual")]
+    paths: Vec<PathBuf>,
     dir: PathBuf,
     key: (usize, FrameId),
     rows: Vec<panels::stack::Row>,
@@ -258,6 +269,10 @@ fn place_items(state: &crate::fold::State) -> Vec<super::places::PlaceItem> {
 }
 
 pub struct App {
+    #[cfg(feature = "visual")]
+    visual: Option<visual::Decorations>,
+    #[cfg(feature = "visual")]
+    visual_rate: Option<Duration>,
     tab_ui: HashMap<crate::fold::tab::TabId, workspace::UiContext>,
     closed_tab_ui: Vec<workspace::UiContext>,
     tab_picker: Option<super::tabs::Picker>,
@@ -789,6 +804,10 @@ impl App {
         let audio_cell_size = transport_cell_size(&mut graphics);
 
         let mut app = Self {
+            #[cfg(feature = "visual")]
+            visual: None,
+            #[cfg(feature = "visual")]
+            visual_rate: None,
             tab_ui: HashMap::new(),
             closed_tab_ui: vec![],
             tab_picker: None,
@@ -899,7 +918,47 @@ impl App {
         result
     }
 
+    #[cfg(feature = "visual")]
+    pub fn run_visual(
+        core: Handle,
+        mut cfg: Config,
+        cfg_path: PathBuf,
+        session_path: Option<PathBuf>,
+        decorated: bool,
+    ) -> Result<()> {
+        if !decorated {
+            cfg.ui.graphics = "off".into();
+        }
+        let graphics = Graphics::probe_if_tty(Mode::parse(&cfg.ui.graphics));
+        graphics.log_capabilities();
+        let mut app = Self::new(core, cfg, cfg_path, session_path, graphics);
+        if decorated {
+            app.visual = Some(visual::Decorations::default());
+        }
+        app.visual_rate = Some(Duration::from_millis(
+            if std::env::var_os("SSH_CONNECTION").is_some() {
+                100
+            } else {
+                34
+            },
+        ));
+        let mut terminal = term::init()?;
+        app.dnd_query();
+        let result = app.event_loop(&mut terminal);
+        app.editor = None;
+        app.stop_audio();
+        app.dnd_stop();
+        term::restore()?;
+        app.save_workspace(true);
+        app.session_writer = None;
+        app.core.send(Command::Shutdown);
+        result
+    }
+
     fn event_loop(&mut self, term: &mut Tui) -> Result<()> {
+        #[cfg(feature = "visual")]
+        let (mut visual_pending, mut last_signature, mut last_draw) =
+            (true, None, Instant::now() - Duration::from_secs(1));
         while !self.quit {
             if let Some(op) = self.pending_elevated_delete.take() {
                 term::restore()?;
@@ -934,20 +993,53 @@ impl App {
             // frame. Otherwise a menu transition can expose the cleared
             // screen, or half of the popup, before the draw has finished.
             // Unsupported terminals ignore the synchronization sequences.
-            std::io::stdout().sync_update(|_| -> Result<()> {
-                if std::mem::take(&mut self.repaint) {
-                    // Terminal::clear queries the cursor and can time out
-                    // before the first frame. Resize invalidates the buffers
-                    // without that round trip, even at the same dimensions.
-                    term.resize(term.size()?.into())?;
+            #[cfg(feature = "visual")]
+            let signature = (
+                self.seen_version,
+                self.seen_search_progress,
+                self.view.running_bar.clone(),
+                self.note.as_ref().map(|n| n.0.clone()),
+            );
+            #[cfg(feature = "visual")]
+            let draw_now = self.visual_rate.is_none_or(|rate| {
+                (visual_pending
+                    || last_signature.as_ref() != Some(&signature)
+                    || self.repaint
+                    || self.view.loading
+                    || self.editor.is_some()
+                    || self.audio_here())
+                    && last_draw.elapsed() >= rate
+            });
+            #[cfg(not(feature = "visual"))]
+            let draw_now = true;
+            if draw_now {
+                std::io::stdout().sync_update(|_| -> Result<()> {
+                    if std::mem::take(&mut self.repaint) {
+                        // Terminal::clear queries the cursor and can time out
+                        // before the first frame. Resize invalidates the buffers
+                        // without that round trip, even at the same dimensions.
+                        term.resize(term.size()?.into())?;
+                    }
+                    term.draw(|f| {
+                        self.draw(f.area(), f.buffer_mut());
+                        #[cfg(feature = "visual")]
+                        self.decorate(f.area(), f.buffer_mut());
+                    })?;
+                    Ok(())
+                })??;
+                #[cfg(feature = "visual")]
+                {
+                    last_signature = Some(signature);
+                    visual_pending = false;
+                    last_draw = Instant::now();
                 }
-                term.draw(|f| {
-                    self.draw(f.area(), f.buffer_mut());
-                })?;
-                Ok(())
-            })??;
+            }
 
             if event::poll(FRAME)? {
+                #[cfg(feature = "visual")]
+                {
+                    visual_pending = true;
+                }
                 // OSC 72 file content arrives in 4 KiB chunks. Drain a
                 // bounded batch without delaying a repaint for seconds on a
                 // fast stream. More than one chunk still fits in each frame.
@@ -1267,6 +1359,12 @@ impl App {
                 let frame = stack.active();
                 let listing = state.listing_of(&frame.dir);
                 PaneView {
+                    #[cfg(feature = "visual")]
+                    paths: state
+                        .rows(frame)
+                        .into_iter()
+                        .map(|entry| entry.path.clone())
+                        .collect(),
                     dir: frame.dir.clone(),
                     key: (index, frame.id),
                     rows: state
@@ -1471,6 +1569,16 @@ impl App {
             },
             rule,
             rows,
+            #[cfg(feature = "visual")]
+            paths: if let Some(search) = &state.search {
+                search.results.iter().map(|e| e.path.clone()).collect()
+            } else {
+                state
+                    .rows(active)
+                    .into_iter()
+                    .map(|e| e.path.clone())
+                    .collect()
+            },
             cursor: state
                 .search
                 .as_ref()

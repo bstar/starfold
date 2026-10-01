@@ -10,6 +10,11 @@ repository = "https://github.com/bstar/starfold"
 keywords = ["file-manager", "tui", "files", "terminal"]
 categories = ["command-line-utilities", "filesystem"]
 
+[features]
+default = []
+visual = ["starkit/visual"]
+desktop = ["visual", "starkit/desktop"]
+
 [dependencies]
 # The shared terminal foundation: paths, logging, atomic and private file
 # writes, theming, terminal setup with a panic hook, text entry, wrapping, the
@@ -31,7 +36,7 @@ categories = ["command-line-utilities", "filesystem"]
 # The `version` is not redundant with the tag: cargo-deny counts a dependency
 # with no version requirement as a wildcard and `wildcards = "deny"` refuses
 # it, whether or not the source is a git URL pinned to a tag.
-starkit = { git = "https://github.com/bstar/starkit", rev = "1d97ecb7d5174800bd7c85cda1095d8df912475b", version = "0.3", default-features = false, features = [
+starkit = { git = "https://github.com/bstar/starkit", rev = "c19c393103ab0ea7b9d1dd88e7e934ac09256895", version = "0.3", default-features = false, features = [
     "image",
 ] }
 
