@@ -63,6 +63,11 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 /// dispatcher in `ui/app.rs` is a `match` on meaning, not on input.
 #[derive(Debug, Clone)]
 pub enum Command {
+    LoadRecovery(super::recovery::Mode),
+    QueueRecovery {
+        record: super::recovery::Record,
+        target: PathBuf,
+    },
     LoadPlaces(PathBuf),
     RefreshPlaces,
     UnmountPlace {
@@ -260,6 +265,7 @@ impl Note {
 /// module doc.
 #[derive(Debug, Clone)]
 pub enum Event {
+    Recovery,
     Places,
     Listing(PathBuf),
     Stack,

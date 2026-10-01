@@ -2788,6 +2788,7 @@ dependencies = [
  "mime_guess",
  "mp4parse",
  "nucleo-matcher",
+ "objc2-foundation",
  "pdf-extract",
  "percent-encoding",
  "portable-pty",

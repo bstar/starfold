@@ -352,3 +352,21 @@ runtime hashes and matching smoke/FUSE tests. Do not mix architectures in the
 AppImage target cache or artifact names.
 Branch release dispatches build artifacts without publishing, while version
 tags create a draft release.
+
+## Recovery
+
+`fold::recovery` owns recovery records and worker-only filesystem verification.
+Linux lists freedesktop Trash metadata through `trash::os_limited`; macOS uses
+NSFileManager's resulting URL and persists intent before moving a file, under
+`PATHS.base_dir()/recovery`. The journal preserves raw path bytes. It covers
+STAR/FOLD deletions made with this implementation, not arbitrary Finder history.
+Undo receipts are global across tabs, session-only, bounded to 100 items, and
+exclude overwrites, merged directories and incomplete operations. A SHA-256
+fingerprint of bounded metadata traversal detects source or descendant changes.
+Recovery queues a guarded rename with a RESTORE/UNDO label; the worker executes
+the guard instead of the ordinary rename policy and uses exclusive publication.
+Never offer overwrite for recovery. Cross-device recovery copies to private
+staging, revalidates, exclusively publishes, then removes the old copy; cleanup
+failures remain visible in OPERATIONS. Same-device recovery uses atomic rename.
+The Linux restart test sets Trash environment variables only in subprocesses,
+using disposable private bins; normal tests must not empty the user's Trash.

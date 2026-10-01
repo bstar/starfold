@@ -121,6 +121,7 @@ pub enum Action {
     OpenExternal,
     Rename,
     FileActions,
+    UndoRecovery,
     Search,
     Reload,
 
@@ -461,6 +462,12 @@ pub const BINDINGS: &[Binding] = &[
         action: Action::CancelRun,
         keys: "ctrl+x",
         label: "stop the running op",
+        group: "operations",
+    },
+    Binding {
+        action: Action::UndoRecovery,
+        keys: "ctrl+z",
+        label: "undo history",
         group: "operations",
     },
     // -- the operations queue's own keys -------------------------------------

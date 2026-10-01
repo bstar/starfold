@@ -173,6 +173,15 @@ impl App {
     ) {
         use overlays::context::{Action as A, Request};
         match action {
+            A::Trash | A::Undo => {
+                let mode = if action == A::Trash {
+                    crate::fold::recovery::Mode::Trash
+                } else {
+                    crate::fold::recovery::Mode::Undo
+                };
+                self.overlays.open_recovery(mode);
+                self.core.send(Command::LoadRecovery(mode));
+            }
             A::Tabs => self.open_tab_picker(None),
             A::Open => {
                 let current_matches = self

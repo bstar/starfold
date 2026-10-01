@@ -59,6 +59,10 @@ rest of it.
   start automatically in queue order, with progress, copy speed, estimated completion
   and cancellation. Deletes ask for confirmation and use Trash where available;
   permanent deletion is identified before proceeding.
+- **Recovery.** Open the file actions menu's Recovery submenu to browse Trash
+  or undo a move/rename; `ctrl+z` opens Undo directly. Restore collisions offer
+  an editable numbered name, and undo refuses changed items. See
+  [recovery](docs/recovery-validation.md) for platform behavior and limits.
 - **Native drag and drop.** In terminals that support the [OSC 72 protocol](https://sw.kovidgoyal.net/kitty/dnd-protocol/),
   drag files into Fold or Commander, between panes, or out to the desktop.
   Remote sessions can transfer files over the terminal connection.

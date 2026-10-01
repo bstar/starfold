@@ -40,6 +40,11 @@ use super::{FoldConfig, TrashMode};
 
 /// The whole of what the program knows, right now.
 pub struct State {
+    pub undo: Vec<super::recovery::Record>,
+    pub recovery_items: Vec<super::recovery::Item>,
+    pub recovery_error: Option<String>,
+    pub recovery_loading: bool,
+    pub recovery_generation: u64,
     pub places: places::PlacesState,
     pub commander: bool,
     pub commander_pane: usize,
@@ -114,6 +119,11 @@ impl State {
     /// One tab, one stack, one frame open on `start`.
     pub fn new(cfg: &FoldConfig, start: PathBuf, home: PathBuf, trash_available: bool) -> Self {
         Self {
+            undo: Vec::new(),
+            recovery_items: Vec::new(),
+            recovery_error: None,
+            recovery_loading: false,
+            recovery_generation: 0,
             places: places::PlacesState::default(),
             commander: false,
             commander_pane: 0,
@@ -345,6 +355,21 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             }
         }
         Command::SaveBookmark { name, path } => cmd_save_bookmark(state, name, path),
+        Command::LoadRecovery(mode) => {
+            state.recovery_generation += 1;
+            state.recovery_loading = true;
+            state.recovery_error = None;
+            state.recovery_items.clear();
+            Effects {
+                jobs: vec![Job::LoadRecovery {
+                    generation: state.recovery_generation,
+                    mode,
+                    undo: state.undo.clone(),
+                }],
+                events: vec![Event::Recovery],
+            }
+        }
+        Command::QueueRecovery { record, target } => cmd_queue_recovery(state, record, target),
         Command::RenameBookmark { path, name } => cmd_rename_bookmark(state, path, name),
         Command::RemoveBookmark(path) => cmd_remove_bookmark(state, path),
         Command::Notify(message) => Effects {
@@ -1051,6 +1076,20 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
         }
         Done::Planned { op, result } => done_planned(state, op, result),
         Done::ImportChecked { op, result } => done_import_checked(state, op, result),
+        Done::RecoveryLoaded { generation, result } => {
+            if generation != state.recovery_generation {
+                return Effects::default();
+            }
+            state.recovery_loading = false;
+            match result {
+                Ok(items) => state.recovery_items = items,
+                Err(error) => state.recovery_error = Some(error),
+            }
+            Effects {
+                jobs: vec![],
+                events: vec![Event::Recovery],
+            }
+        }
         Done::Finished { op, outcome } => done_finished(state, op, outcome),
         Done::Changed(dirs) => done_changed(state, dirs),
     }
@@ -2031,6 +2070,44 @@ fn cmd_empty_drive_trash(state: &mut State, mount: &Path) -> Effects {
     queued_effects(state, id)
 }
 
+fn cmd_queue_recovery(
+    state: &mut State,
+    record: super::recovery::Record,
+    target: PathBuf,
+) -> Effects {
+    if let Some(effects) = copy_lock_note(copy_lock_conflict(
+        state,
+        OpKind::Rename,
+        std::slice::from_ref(&record.from),
+        Some(&target),
+    )) {
+        return effects;
+    }
+    let id = state.queue.enqueue(
+        OpKind::Rename,
+        vec![record.from.clone()],
+        Some(target.clone()),
+        ConflictPolicy::Ask,
+    );
+    let op = state.queue.get_mut(id).expect("just enqueued");
+    op.label = Some(format!(
+        "{} {} → {}",
+        if record.mode == super::recovery::Mode::Trash {
+            "RESTORE"
+        } else {
+            "UNDO"
+        },
+        record
+            .from
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy(),
+        target.display()
+    ));
+    op.recovery = Some(Arc::new(super::recovery::Guard { record }));
+    queued_effects(state, id)
+}
+
 fn cmd_queue_rename(state: &mut State, from: PathBuf, to: PathBuf) -> Effects {
     if let Some(effects) = copy_lock_note(copy_lock_conflict(
         state,
@@ -2284,6 +2361,7 @@ fn run_next(state: &mut State) -> Effects {
         op.progress.set_total(plan.total_bytes);
         return Effects {
             jobs: vec![Job::Run {
+                recovery: op.recovery.clone(),
                 op: id,
                 kind,
                 plan,
@@ -2665,7 +2743,12 @@ fn done_planned(
             effects
         }
         Ok(plan) => {
-            let has_conflicts = !plan.conflicts.is_empty();
+            let has_conflicts = !plan.conflicts.is_empty()
+                && state
+                    .queue
+                    .iter()
+                    .find(|op| op.id == op_id)
+                    .is_none_or(|op| op.recovery.is_none());
             let mut jobs = Vec::new();
             let mut events = vec![Event::Queue(op_id)];
             if let Some(op) = state.queue.get_mut(op_id) {
@@ -2679,6 +2762,7 @@ fn done_planned(
                     op.status = OpStatus::Running;
                     op.progress.set_total(plan.total_bytes);
                     jobs.push(Job::Run {
+                        recovery: op.recovery.clone(),
                         op: op_id,
                         kind,
                         plan,
@@ -2700,6 +2784,10 @@ fn done_planned(
 /// runnable op -- the queue does not wait for `Command::Run` again once it
 /// has been told to go.
 fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -> Effects {
+    state.undo.extend(outcome.reversible.iter().cloned());
+    if state.undo.len() > 100 {
+        state.undo.drain(..state.undo.len() - 100);
+    }
     let mut events = vec![Event::Queue(op_id)];
     let mut touch_dirs: BTreeSet<PathBuf> = BTreeSet::new();
     let mut moved_or_deleted: Vec<PathBuf> = Vec::new();
@@ -2732,6 +2820,11 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
             }
         }
 
+        if outcome.done > 0 {
+            if let Some(guard) = &op.recovery {
+                state.undo.retain(|record| record != &guard.record);
+            }
+        }
         // Every kind consumes its marks. A move, a delete and a rename have
         // taken the paths away; a copy has not, but the marks were the thing
         // being copied, and a `d` pressed afterwards that deleted the
@@ -2752,7 +2845,10 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
 
         if let Some(dest) = &op.dest {
             touch_dirs.insert(dest.clone());
-            if matches!(op.kind, OpKind::Compress(_) | OpKind::Extract) {
+            if matches!(
+                op.kind,
+                OpKind::Rename | OpKind::Compress(_) | OpKind::Extract
+            ) {
                 if let Some(parent) = dest.parent() {
                     touch_dirs.insert(parent.to_path_buf());
                 }
@@ -3855,6 +3951,7 @@ mod tests {
         );
 
         let outcome = super::super::ops::Outcome {
+            reversible: Vec::new(),
             done: 1,
             skipped: 0,
             failed: Vec::new(),

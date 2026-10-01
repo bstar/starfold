@@ -26,6 +26,7 @@ pub mod create;
 pub mod elevated;
 pub mod file_type;
 mod process;
+pub mod recovery;
 
 pub mod entry;
 pub mod filter;
@@ -94,6 +95,7 @@ pub struct OpenConfig {
 /// config file itself.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FoldConfig {
+    pub recovery_dir: Option<std::path::PathBuf>,
     pub list: listing::ListConfig,
     pub preview: preview::PreviewConfig,
     pub trash: TrashMode,
