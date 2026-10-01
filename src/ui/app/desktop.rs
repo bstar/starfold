@@ -36,12 +36,14 @@ enum Prompt {
     TabName(TabId),
     Rename(PathBuf),
 }
+type ViewportKey = (TabId, (usize, FrameId));
 struct Desktop {
     app: super::App,
     focus: FocusHandle,
     lists: [UniformListScrollHandle; 2],
     tabs_scroll: ScrollHandle,
     visible_tab: Option<TabId>,
+    rendered_frames: [Option<ViewportKey>; 2],
     prompt: Option<Prompt>,
     input: String,
     menu: bool,
@@ -64,6 +66,7 @@ struct Desktop {
 }
 impl Drop for Desktop {
     fn drop(&mut self) {
+        self.remember_scroll();
         self.app.save_workspace(true);
         self.app.session_writer = None;
         self.app.stop_audio();
@@ -151,6 +154,7 @@ pub fn run(core: Handle, cfg: Config, path: PathBuf, session: Option<PathBuf>) -
                         ],
                         tabs_scroll: ScrollHandle::new(),
                         visible_tab: None,
+                        rendered_frames: [None, None],
                         prompt: None,
                         input: String::new(),
                         menu: false,
@@ -222,6 +226,27 @@ impl Desktop {
         }
         self.icons.push((key, image.clone()));
         Some(image)
+    }
+    fn remember_scroll(&mut self) {
+        let tab = self.app.core.state().tabs.active().id;
+        for (pane, frame) in self.rendered_frames.iter().enumerate() {
+            if let Some((shown_tab, key)) = frame {
+                if *shown_tab == tab {
+                    let offset = self.lists[pane].0.borrow().base_handle.offset();
+                    self.app
+                        .scroll
+                        .insert(*key, ((-offset.y / px(30.)).max(0.)) as usize);
+                }
+            }
+        }
+    }
+    fn change_tab(&mut self, command: Command) {
+        self.remember_scroll();
+        self.app.change_tab(command);
+    }
+    fn cycle_tab(&mut self, delta: i32) {
+        self.remember_scroll();
+        self.app.cycle_tab(delta);
     }
     fn scrollbar_to(&mut self, pane: usize, y: Pixels) {
         let bounds = self.lists[pane].0.borrow().base_handle.bounds();
@@ -389,12 +414,12 @@ impl Desktop {
                     self.tab_menu = None;
                 }
                 "d" => {
-                    self.app.change_tab(Command::SwitchTab(id));
-                    self.app.change_tab(Command::NewTab { duplicate: true });
+                    self.change_tab(Command::SwitchTab(id));
+                    self.change_tab(Command::NewTab { duplicate: true });
                     self.tab_menu = None;
                 }
                 "x" => {
-                    self.app.change_tab(Command::CloseTab(id));
+                    self.change_tab(Command::CloseTab(id));
                     self.tab_menu = None;
                 }
                 "escape" => self.tab_menu = None,
@@ -472,10 +497,10 @@ impl Desktop {
         if mods.alt && key == "t" {
             self.app.cycle_theme(false);
         } else if (mods.control || mods.platform) && key == "t" {
-            self.app.change_tab(Command::NewTab { duplicate: false });
+            self.change_tab(Command::NewTab { duplicate: false });
         } else if (mods.control || mods.platform) && key == "w" {
             let id = self.app.core.state().tabs.active().id;
-            self.app.change_tab(Command::CloseTab(id));
+            self.change_tab(Command::CloseTab(id));
         } else if mods.alt && key == "up" {
             let levels = self.app.visual_levels(if self.app.commander {
                 self.app.active_pane
@@ -488,9 +513,9 @@ impl Desktop {
         } else if mods.alt && key == "down" {
             self.app.core.send(Command::Forward);
         } else if mods.control && key == "pagedown" {
-            self.app.cycle_tab(1);
+            self.cycle_tab(1);
         } else if mods.control && key == "pageup" {
-            self.app.cycle_tab(-1);
+            self.cycle_tab(-1);
         } else {
             match key.as_str() {
                 "escape" => {
@@ -541,11 +566,35 @@ impl Desktop {
         } else {
             0
         };
-        self.lists[pane].scroll_to_item(self.app.view.cursor, ScrollStrategy::Top);
+        self.reveal_cursor(pane);
+        let weak = cx.entity().downgrade();
+        window.on_next_frame(move |_, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                this.reveal_cursor(pane);
+                cx.notify();
+            });
+        });
         self.input_metrics.frame(input_started.elapsed());
         cx.notify();
     }
-    fn pane(&mut self, pane: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn reveal_cursor(&self, pane: usize) {
+        let cursor = if self.app.commander {
+            self.app.panes[pane].cursor
+        } else {
+            self.app.view.cursor
+        };
+        let handle = self.lists[pane].0.borrow().base_handle.clone();
+        let mut offset = handle.offset();
+        let top = px(cursor as f32 * 30.);
+        let height = handle.bounds().size.height;
+        if top < -offset.y {
+            offset.y = -top;
+        } else if top + px(30.) > -offset.y + height {
+            offset.y = -(top + px(30.) - height).max(px(0.));
+        }
+        handle.set_offset(offset);
+    }
+    fn pane(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let tokens = Tokens::from_theme(&self.app.theme);
         let commander = self.app.commander;
         let (dir, count, cursor, loading, error, space) = if commander {
@@ -574,6 +623,26 @@ impl Desktop {
         } else {
             self.app.view.truncated
         };
+        let frame = if commander {
+            self.app.panes[pane].key
+        } else {
+            self.app.view.frame_id
+        };
+        let stamp = (self.app.core.state().tabs.active().id, frame);
+        if !loading && self.rendered_frames[pane] != Some(stamp) {
+            self.rendered_frames[pane] = Some(stamp);
+            let row = self.app.scroll.get(&frame).copied().unwrap_or(cursor);
+            let weak = cx.entity().downgrade();
+            window.on_next_frame(move |_, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    if this.rendered_frames[pane] == Some(stamp) {
+                        let handle = this.lists[pane].0.borrow().base_handle.clone();
+                        handle.set_offset(point(px(0.), -px(row as f32 * 30.)));
+                        cx.notify();
+                    }
+                });
+            });
+        }
         let active = !commander || pane == self.app.active_pane;
         let destination = dir.clone();
         let external = dir.clone();
@@ -935,6 +1004,7 @@ impl Desktop {
 impl Render for Desktop {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let started = Instant::now();
+        self.remember_scroll();
         self.app.refresh();
         let tokens = Tokens::from_theme(&self.app.theme);
         let active = self.app.core.state().tabs.active().id;
@@ -942,6 +1012,15 @@ impl Render for Desktop {
         if self.visible_tab != Some(active) {
             if let Some(index) = tabs.iter().position(|tab| tab.id == active) {
                 self.tabs_scroll.scroll_to_item(index);
+                let weak = cx.entity().downgrade();
+                _window.on_next_frame(move |_, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        if this.app.core.state().tabs.active().id == active {
+                            this.tabs_scroll.scroll_to_item(index);
+                            cx.notify();
+                        }
+                    });
+                });
             }
             self.visible_tab = Some(active);
         }
@@ -976,13 +1055,13 @@ impl Render for Desktop {
                             }),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.app.change_tab(Command::SwitchTab(item.id));
+                            this.change_tab(Command::SwitchTab(item.id));
                             cx.notify();
                         }))
                         .child(menu_item("×", tokens).id(("close", item.id.0)).on_click(
                             cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
-                                this.app.change_tab(Command::CloseTab(item.id));
+                                this.change_tab(Command::CloseTab(item.id));
                                 cx.notify();
                             }),
                         ))
@@ -996,7 +1075,7 @@ impl Render for Desktop {
                 .child(tab_rail)
                 .child(menu_item("+", tokens).id("new-tab").on_click(cx.listener(
                     |this, _, _, cx| {
-                        this.app.change_tab(Command::NewTab { duplicate: false });
+                        this.change_tab(Command::NewTab { duplicate: false });
                         cx.notify();
                     },
                 )))
@@ -1029,9 +1108,9 @@ impl Render for Desktop {
             .flex_1()
             .min_h(px(100.))
             .gap_3()
-            .child(self.pane(0, cx));
+            .child(self.pane(0, _window, cx));
         if self.app.commander {
-            content = content.child(self.pane(1, cx));
+            content = content.child(self.pane(1, _window, cx));
         } else {
             let mut preview = card(tokens)
                 .flex()
@@ -1182,8 +1261,8 @@ impl Render for Desktop {
                         self.menu_option("Duplicate tab · D", 1, tokens)
                             .id("tab-duplicate")
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.app.change_tab(Command::SwitchTab(id));
-                                this.app.change_tab(Command::NewTab { duplicate: true });
+                                this.change_tab(Command::SwitchTab(id));
+                                this.change_tab(Command::NewTab { duplicate: true });
                                 this.tab_menu = None;
                                 cx.notify();
                             })),
@@ -1192,7 +1271,7 @@ impl Render for Desktop {
                         self.menu_option("Close tab · X", 2, tokens)
                             .id("tab-close")
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.app.change_tab(Command::CloseTab(id));
+                                this.change_tab(Command::CloseTab(id));
                                 this.tab_menu = None;
                                 cx.notify();
                             })),
