@@ -117,6 +117,10 @@ pixels; use the ordinary TUI when those are needed.
   and an unavailable Electron executable. Real tmux checks also verified resize,
   Ctrl+Q detach, reattachment to the same controller process, and path clipboard
   copy with the default `set-clipboard=external` policy.
+- Ghostty 1.3.1 on Linux: actual graphical file view, Preview, Operations,
+  actions-menu keyboard input, session reattachment, and font-size changes
+  rendered successfully. The isolated Nix test used X11/software Mesa after the
+  initial driver setup failed; native Wayland and Ghostty SSH remain unverified.
 - Local Kitty: the application pixels render inside the existing terminal with
   no visible native Electron window.
 - Live Kitty resize checks produce frames with the new geometry. The SSH view
