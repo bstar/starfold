@@ -41,6 +41,7 @@
 mod dnd;
 mod editing;
 mod file_actions;
+mod rows;
 mod workspace;
 
 #[cfg(feature = "desktop")]
@@ -318,9 +319,16 @@ pub struct App {
     g_pending: bool,
     d_pending: bool,
     note: Option<(String, NoteLevel, Instant)>,
+    #[cfg(feature = "desktop")]
+    native_clipboard: bool,
+    #[cfg(feature = "desktop")]
+    native_drop: Option<(Vec<PathBuf>, PathBuf)>,
+    #[cfg(feature = "desktop")]
+    clipboard_output: Option<String>,
     view: ViewData,
     seen_version: u64,
     seen_search_progress: usize,
+    row_stamps: [Option<rows::Stamp>; 3],
     /// Per-frame list scroll, keyed by `FrameId` so a level's scroll survives
     /// backing out and returning to it.
     scroll: HashMap<(usize, FrameId), usize>,
@@ -641,6 +649,10 @@ impl App {
             },
         );
         let body = audio_body(area);
+        self.draw_audio_cells(body, buf);
+    }
+
+    fn draw_audio_cells(&mut self, body: Rect, buf: &mut Buffer) {
         let mut presentation = self.audio_presentation_for(body);
         if self.audio_presentation.as_ref() != Some(&presentation) {
             self.audio_generation = self.audio_generation.wrapping_add(1);
@@ -848,12 +860,19 @@ impl App {
             g_pending: false,
             d_pending: false,
             note: None,
+            #[cfg(feature = "desktop")]
+            native_clipboard: false,
+            #[cfg(feature = "desktop")]
+            native_drop: None,
+            #[cfg(feature = "desktop")]
+            clipboard_output: None,
             view: ViewData::empty(),
             // Never equal to a fresh `State`'s starting version, so the
             // first `refresh` always copies a `ViewData` out rather than
             // seeing "nothing changed" and leaving the empty one in place.
             seen_version: u64::MAX,
             seen_search_progress: usize::MAX,
+            row_stamps: [None, None, None],
             scroll: HashMap::new(),
             preview_scroll: 0,
             pdf_requested: None,
@@ -1057,17 +1076,7 @@ impl App {
                             self.audio_graphics.clear(&mut self.graphics);
                             self.repaint = true;
                         }
-                        TermEvent::Paste(text) => {
-                            if self.editor.is_some() {
-                                self.editor_paste(&text);
-                            } else if self.overlays.paste(&text) {
-                                self.repaint = true;
-                            } else if let Some(input) = self.filter.as_mut() {
-                                input.paste(&text);
-                                let text = input.text().to_string();
-                                self.core.send(Command::SetFilter(text));
-                            }
-                        }
+                        TermEvent::Paste(text) => self.paste_text(&text),
                         TermEvent::FocusGained | TermEvent::FocusLost => {}
                         _ => {}
                     }
@@ -1348,6 +1357,7 @@ impl App {
         let now = self.now_override.unwrap_or_else(std::time::SystemTime::now);
         self.commander = state.commander && state.search.is_none();
         self.active_pane = state.commander_pane;
+        let mut old_panes = std::mem::take(&mut self.panes).into_iter();
         self.panes = state
             .tabs
             .active()
@@ -1358,22 +1368,33 @@ impl App {
             .map(|(index, stack)| {
                 let frame = stack.active();
                 let listing = state.listing_of(&frame.dir);
+                let mut old = old_panes.next();
+                let previous = rows::Snapshot {
+                    rows: old
+                        .as_mut()
+                        .map(|pane| std::mem::take(&mut pane.rows))
+                        .unwrap_or_default(),
+                    #[cfg(feature = "visual")]
+                    paths: old
+                        .as_mut()
+                        .map(|pane| std::mem::take(&mut pane.paths))
+                        .unwrap_or_default(),
+                };
+                let snapshot = rows::refresh(
+                    &mut self.row_stamps[index],
+                    previous,
+                    &state,
+                    frame,
+                    state.selection_for_stack(index),
+                    &self.tz,
+                    now,
+                );
                 PaneView {
                     #[cfg(feature = "visual")]
-                    paths: state
-                        .rows(frame)
-                        .into_iter()
-                        .map(|entry| entry.path.clone())
-                        .collect(),
+                    paths: snapshot.paths,
                     dir: frame.dir.clone(),
                     key: (index, frame.id),
-                    rows: state
-                        .rows(frame)
-                        .into_iter()
-                        .map(|entry| {
-                            build_row(entry, state.selection_for_stack(index), &self.tz, now)
-                        })
-                        .collect(),
+                    rows: snapshot.rows,
                     cursor: frame.cursor,
                     filter: frame.filter.clone(),
                     loading: frame.loading,
@@ -1402,6 +1423,24 @@ impl App {
             places.set_items(place_items(&state));
             places.set_status(state.places.loading, state.places.error.clone(), unmounting);
         }
+        let mut snapshot = if state.search.is_some() {
+            self.row_stamps[0] = None;
+            rows::Snapshot::default()
+        } else {
+            rows::refresh(
+                &mut self.row_stamps[0],
+                rows::Snapshot {
+                    rows: std::mem::take(&mut self.view.rows),
+                    #[cfg(feature = "visual")]
+                    paths: std::mem::take(&mut self.view.paths),
+                },
+                &state,
+                active,
+                &state.selection,
+                &self.tz,
+                now,
+            )
+        };
         let rows: Vec<panels::stack::Row> = if let Some(search) = &state.search {
             search
                 .results
@@ -1421,11 +1460,7 @@ impl App {
                 })
                 .collect()
         } else {
-            state
-                .rows(active)
-                .into_iter()
-                .map(|entry| build_row(entry, &state.selection, &self.tz, now))
-                .collect()
+            std::mem::take(&mut snapshot.rows)
         };
 
         let listing = state.listing_of(&active.dir);
@@ -1573,11 +1608,7 @@ impl App {
             paths: if let Some(search) = &state.search {
                 search.results.iter().map(|e| e.path.clone()).collect()
             } else {
-                state
-                    .rows(active)
-                    .into_iter()
-                    .map(|e| e.path.clone())
-                    .collect()
+                snapshot.paths
             },
             cursor: state
                 .search
@@ -1832,13 +1863,47 @@ impl App {
         }
     }
 
+    fn paste_text(&mut self, text: &str) {
+        if self.editor.is_some() {
+            self.editor_paste(text);
+        } else if self.overlays.paste(text) {
+            self.repaint = true;
+        } else if let Some(input) = self.filter.as_mut() {
+            input.paste(text);
+            self.core.send(Command::SetFilter(input.text().to_owned()));
+        }
+    }
+
+    fn copy_ui_text(&mut self, text: &str) -> std::result::Result<&'static str, String> {
+        #[cfg(feature = "desktop")]
+        if self.native_clipboard {
+            self.clipboard_output = Some(text.to_owned());
+            return Ok("copied");
+        }
+        crate::ui::clipboard::copy_text(text)
+    }
+
     fn after_overlay_answer(&mut self, answer: Answer) {
         match answer {
             Answer::Recover(record, target) => {
                 self.core.send(Command::QueueRecovery { record, target })
             }
             Answer::RefreshRecovery(mode) => self.core.send(Command::LoadRecovery(mode)),
-            Answer::Drop(kind) => self.dnd_choose(kind),
+            Answer::Drop(kind) => {
+                #[cfg(feature = "desktop")]
+                if self.native_clipboard {
+                    if let Some((sources, dest)) = self.native_drop.take() {
+                        self.core.send(Command::QueueDrop {
+                            kind,
+                            sources,
+                            dest,
+                        });
+                    }
+                    self.repaint = true;
+                    return;
+                }
+                self.dnd_choose(kind);
+            }
             Answer::Context(target, action) => self.context_action(target, action),
             Answer::Operation(r) => {
                 if r.kind == OpKind::Extract && r.sources.len() > 1 {
@@ -1859,7 +1924,14 @@ impl App {
                 }
             }
             Answer::Consumed => return,
-            Answer::Closed => self.dnd_cancel_choice(),
+            Answer::Closed => {
+                #[cfg(feature = "desktop")]
+                if self.native_clipboard {
+                    self.native_drop = None;
+                    return;
+                }
+                self.dnd_cancel_choice();
+            }
             Answer::Confirmed(pending) => self.on_confirmed(pending),
             Answer::RetryFailedDelete(paths) => {
                 self.overlays
@@ -2140,7 +2212,7 @@ impl App {
                     operations_report(&state.queue, &self.view.home)
                 };
                 if let Some(report) = report {
-                    self.note = Some(match crate::ui::clipboard::copy_text(&report) {
+                    self.note = Some(match self.copy_ui_text(&report) {
                         Ok(message) => (
                             format!("operations {message}"),
                             NoteLevel::Info,
@@ -3784,6 +3856,92 @@ mod tests {
         let cfg_path = dir.path().join("config.toml");
         let app = App::new(core, cfg, cfg_path, None, Graphics::disabled());
         (app, fk, dir)
+    }
+
+    #[test]
+    fn presentation_rows_reuse_allocations_but_follow_marks_filters_and_reload() {
+        let (mut app, fk, _dir) = app();
+        fake::open(&app.core, &fk, "projects/starwire");
+        app.refresh();
+        assert!(!app.view.rows.is_empty());
+        let allocation = app.view.rows.as_ptr();
+        app.core.send(Command::CursorBy(1));
+        app.refresh();
+        assert_eq!(
+            app.view.rows.as_ptr(),
+            allocation,
+            "cursor changes reuse the listing"
+        );
+        app.core.send(Command::ToggleMark);
+        app.refresh();
+        assert!(app
+            .view
+            .rows
+            .iter()
+            .any(|row| row.mark == panels::stack::Mark::Marked));
+        app.core.send(Command::ClearMarks);
+        app.core.send(Command::SetFilter("Cargo".into()));
+        app.refresh();
+        assert!(app.view.rows.iter().all(|row| row.name.contains("Cargo")));
+        app.core.send(Command::ClearFilter);
+        app.core.send(Command::Reload);
+        app.refresh();
+        assert!(!app.view.rows.is_empty());
+        assert!(app
+            .view
+            .rows
+            .iter()
+            .all(|row| row.mark != panels::stack::Mark::Marked));
+        #[cfg(feature = "visual")]
+        assert_eq!(app.view.rows.len(), app.view.paths.len());
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn native_drop_uses_captured_paths_and_the_shared_copy_move_choice() {
+        let (mut app, fk, _dir) = app();
+        app.native_clipboard = true;
+        let source = fk.home().join("projects/starwire/Cargo.toml");
+        let destination = fk.home().join("empty");
+        app.native_drop = Some((vec![source.clone()], destination.clone()));
+        app.overlays.open_drop((0, 0));
+        app.key(key('m'));
+        assert!(!app.overlays.is_open());
+        assert!(app.native_drop.is_none());
+        let state = app.core.state();
+        let operation = state
+            .queue
+            .iter()
+            .next()
+            .expect("choice immediately queues the move");
+        assert_eq!(operation.kind, OpKind::Move);
+        assert_eq!(operation.sources, vec![source]);
+        assert_eq!(operation.dest.as_ref(), Some(&destination));
+        drop(state);
+        app.native_drop = Some((vec![], destination));
+        app.overlays.open_drop((0, 0));
+        app.key(code(KeyCode::Esc));
+        assert!(app.native_drop.is_none());
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn native_clipboard_routes_full_paths_without_a_terminal_transport() {
+        let (mut app, fk, _dir) = app();
+        app.native_clipboard = true;
+        fake::open(&app.core, &fk, "projects/starwire");
+        app.refresh();
+        app.open_file_menu(0, 0);
+        let Some(Overlay::Context(menu)) = app.overlays.current() else {
+            panic!("file menu");
+        };
+        let target = menu.target.clone();
+        let expected = target.create_dir.display().to_string();
+        app.context_action(
+            target,
+            super::super::overlays::context::Action::CopyCurrentPath,
+        );
+        assert_eq!(app.clipboard_output.as_deref(), Some(expected.as_str()));
     }
 
     #[test]

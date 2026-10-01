@@ -31,38 +31,50 @@ Each backend uses `~/.local/starfold-visual` for configuration, session and logs
 restores the regular STAR/FOLD workspace. Preview worker subprocess commands
 remain available in the same executable.
 
-## Implemented controls
+## Shared workflows and controls
 
-- Fold and Commander, folded-level jumps, back/forward navigation.
-- Filled tabs with padding and a close button; new, switch, rename and duplicate.
-- Alt+T cycles themes; a footer note identifies the theme.
-- Per-pane sorting, high/low direction, filtering, cursor and marked selection.
-- Text/document and image preview through the existing preview worker.
-- Copy selected/marked paths to the other pane; destination prompt in Fold.
-- Internal pane/folder drops and local external drops through the existing queue.
-- Copy gestures keep the source pane's scroll position; target edge scrolling
-  and the explicit scrollbar have separate handlers.
-- Immediate operations display, collision choices, complete copy progress,
-  rate/ETA text, native meters, cancellation, conditional resume and removal.
-- Persistent operation details and a Copy output button using the native clipboard.
-- Native file and tab context menus capture their target identities.
+The native frontend calls the same application controller, action menus and
+validation as terminal STAR/FOLD. The browser retains stack navigation; Commander
+splits only the browser. Preview and Operations remain below it and accessible.
+File rows have fixed height, single-line ellipsis and full-name tooltips.
 
-Native keys: j/k or arrows move, Enter/l opens, h/Backspace goes back, Space marks,
-Tab changes Commander pane, F6 toggles Commander, F5 reloads, / filters, S sorts,
-C copies, F2 renames the tab, Ctrl+T creates a tab, Ctrl+W closes it,
-Ctrl+PageUp/PageDown switches tabs, Alt+Up selects the previous folded level,
-Alt+Down goes forward, Q closes the window. Menus capture keyboard input: arrows or j/k select and Enter activates.
-File actions also use O/M/C/R, tab actions R/D/X,
-sort choices 1–7 and H for high/low, and collisions S/R/O or Escape.
-Input prompts accept Ctrl/Cmd+A,
-Ctrl/Cmd+V, Backspace, Enter and Escape. macOS also accepts Cmd+T/Cmd+W.
+Native menus expose Open, Preview, Edit, Mark, Copy, Move, Rename, Copy current
+path, New, Archive, Delete, Tabs and Recovery. All existing typed dialogs have
+native presentations, including editable collision names, search mode, sort
+settings, trash warnings with session suppression, persistent failures and recovery.
+Places includes bookmarks, drive details, refresh, unmount and empty-drive-trash
+confirmations. Native clipboard actions copy paths and complete operation reports.
+The embedded editor and player render through a shared STAR/KIT terminal surface.
+Administrator retries offer a native password field; authorization runs off the
+UI thread and can be cancelled. Operation execution stays in the existing workers.
+
+The [shared key reference](keys-and-mouse.md) applies to both frontends:
+
+- j/k or arrows move; Enter activates; h/Left/Backspace returns; Alt+Up/Down
+  jumps between retained stack levels; gh/gr opens home/root.
+- c opens Actions; r renames; Space marks; y then p copies captured paths;
+  m moves; dd asks before deletion; Ctrl+Z opens Undo history.
+- v toggles Commander; Tab changes panes; Alt+1/2/3 focuses browser/preview/operations.
+- i toggles preview; s opens sort, S reverses direction; / or f filters;
+  F3/Ctrl+F searches names/content; F5/Ctrl+R reloads.
+- b/e opens Places; B bookmarks; Places uses F2 rename, F3 details, F5 refresh,
+  F6 unmount and F7 empty trash.
+- Ctrl+T/W opens/closes tabs; Ctrl+PageUp/PageDown switches; Ctrl+P opens tab
+  actions; right-click tab menus support rename, duplicate, position and reopen.
+- Alt+T cycles the shared themes and identifies the theme in the footer.
+
+Native text fields support Unicode grapheme navigation, selection, paste and IME
+composition. Ctrl/Cmd+A/C/X/V uses the native clipboard; Enter submits and Escape
+cancels. Menus support arrows/j/k, nested submenus, disabled and dangerous actions.
+See the [alignment checklist](graphical-parity.md) for coverage and limits.
 
 ## Shared STAR/KIT scope
 
 Optional `visual` supplies theme tokens, seven antialiased vector icons,
 rounded terminal tab ends, a bounded LRU raster cache, independent capability
 flags and bounded timing diagnostics. Optional `desktop` pins official GPUI to
-exactly 0.2.2 and supplies native cards, tabs, menu items and meters. GPUI runtime
+exactly 0.2.2 and supplies native cards, tabs, menu items, meters, modal shells,
+controlled Unicode/IME text inputs and styled terminal surfaces. GPUI runtime
 Metal shader compilation avoids requiring a separate Metal compiler on macOS;
 SDK headers and libclang remain build requirements.
 
@@ -82,14 +94,15 @@ The plain backend disables images explicitly.
 Experimental terminal rendering is demand driven: at most 30 updates/sec locally
 and 10 over SSH, with redraws while loading, playing media, editing or responding
 to state/input changes. Native rendering notifies GPUI when state/progress/input
-changes; there is no decorative animation loop. The native core is polled every
+changes, with redraws for loading indicators, active tools and dialogs. The native core is polled every
 50ms. GPUI may redraw for compositor events and pointer interactions independently.
 
 The raster cache is capped at 64 MiB and each icon surface at 512×512 pixels.
 The existing transport cache is bounded by 64 entries; it is not a byte-count
 limit. Native icons are cached separately with at most 128 small surfaces, and
 one converted preview image is retained with its source allocation to preserve
-image identity. Existing preview resource limits still apply.
+image identity. Scaling and BGRA conversion run off the UI thread, with one
+conversion in flight; stale results are never displayed for another image. Existing preview resource limits still apply.
 
 | Presentation/environment | Graphics in this experiment | Verification |
 | --- | --- | --- |
@@ -139,7 +152,9 @@ a distant host or through tmux.
 
 Actual Linux renders with disposable fixtures (not mockups):
 
-<img src="visual/native-fold.png" width="800" alt="Native Fold with a folded parent level, active directory, icons and preview">
+<img src="visual/native-fold.png" width="800" alt="Native Fold with single-line rows, tabs, preview and operations below the browser">
+
+<img src="visual/native-commander.png" width="800" alt="Native Commander after a verified copy with operations below both panes">
 
 <img src="visual/kitty.png" width="800" alt="Enhanced terminal presentation in Kitty">
 
@@ -157,10 +172,11 @@ Release measurement on the development Linux machine:
 | Native idle CPU / RSS, XWayland | 0.33% / 85.7 MiB | Three-second sample, empty panes; includes GPUI and workers |
 | Native idle CPU / RSS, Wayland | 1.33% / 86.3 MiB | Three-second sample with image preview; not a settled long-term average |
 | Native element construction p95 | 0.084 ms | 37 frames in a small Wayland fixture; excludes layout and GPU work |
-| Native mapped-window latency, 100,000 files / 30 tabs | 112.7 ms | Warm tmpfs fixture; all 100,000 entries loaded, mapping is not first paint |
-| Native settled idle CPU / RSS, large fixture | 0.30% / 201.1 MiB | Ten-second Wayland sample after four seconds of warm-up |
-| Native element construction / input handling p95, large fixture | 0.199 ms / 30.490 ms | 196 frames; input includes rebuilding the core view snapshot, construction excludes layout and GPU work |
-| 24-megapixel PNG preview ready | 364 ms | Includes native startup; 6000×4000 source bounded to a 4096×2731 preview |
+| Native mapped-window latency, 100,000 files / 30 tabs | 162.6 ms | Warm tmpfs fixture; all 100,000 entries loaded, mapping is not first paint |
+| Native settled idle CPU / RSS, large fixture | 0.30% / 199.6 MiB | Ten-second Wayland sample after four seconds of warm-up |
+| Native element construction / input handling p95, large fixture | 0.295 ms / 0.738 ms | 186 frames; input reuses the cached listing snapshot, construction excludes layout and GPU work |
+| 24-megapixel PNG preview ready | 572.4 ms | Includes startup, worker decode and background scaling to the visible panel; 6000×4000 source |
+| Native element construction p95, large preview | 0.536 ms | Seven frames; scaling/conversion off the UI thread; excludes GPU work |
 | Native 256 MiB copy publication | 108.9 ms | Disposable tmpfs source/destination; SHA-256 matched; not a physical-drive throughput measurement |
 
 Reproduce with `nix develop -c cargo test --release --features visual
@@ -173,16 +189,19 @@ records element-construction and input-handling p95 and frame count on clean
 shutdown. GPU submission, presentation latency, encoded protocol byte counts and
 slow-mount first paint remain unmeasured. The large fixture passed 100 cursor
 moves, automatic viewport scrolling, active-tab visibility, tab rename, session
-save and clean exit. The copy fixture also passed a second copy with the native
-Keep both collision choice and matching contents in `large (1).bin`. Kitty's
+save and clean exit. The copy fixture also passed a second copy through the native
+destination/conflict dialogs, custom name `parity.bin` and matching SHA-256.
+Actual native checks also exercised bookmark/Places details, rename, a nested
+New action and keyboard input/lifecycle in an embedded PTY editor. Kitty's
 remote-control text dump contained image placeholder cells, confirming graphics
 transport rather than just the text fallback.
 
-The 16.7ms native frame budget is not yet established: large-directory input
-handling alone exceeds it because each cursor change rebuilds the display
-snapshot. Idle CPU met the below-1%-of-one-core target in the settled large fixture;
-short startup samples and other hardware can differ. These limits keep this an
-experiment rather than a stable native release.
+Cursor movement now reuses cached rows and full paths rather than rebuilding all
+100,000 labels. Listing generations, filters, marks and relative-time changes
+invalidate that cache. The former 30.490ms input p95 fell to 0.738ms in the same
+large fixture. This establishes CPU responsiveness for that fixture, not a full
+16.7ms GPU/presentation budget. Settled idle CPU met the below-1%-of-one-core target;
+other hardware and startup samples can differ.
 
 Tests cover captured copy targets surviving navigation, queue visibility before
 worker execution, real disposable copying, plain fallback at 100×30 and 60×21,
@@ -200,9 +219,9 @@ terminal frontend as the broad compatibility path; keep its graphical additions
 confined to dedicated slots rather than attempting to repaint every text row
 as an image. Kitty's cached placements are the preferred terminal graphics path.
 
-The native prototype does not yet embed the terminal editor/player, expose
-administrator authorization or deletion/recovery/archive workflows, or implement
-all terminal-only search and Places features. Native text entry is a prototype
-field, not a complete IME/accessibility implementation. Collision Keep both uses
-the core's automatic (1) naming policy. Those gaps require follow-up before
-claiming native feature parity or distributing a stable desktop release.
+The native presentation now exposes the shared file-manager workflows rather
+than a separate reduced action set. It remains experimental: physical USB/mount
+failures, successful administrator authorization with real credentials, assistive
+technology and hands-on macOS behavior need additional validation. Platform CI
+checks compilation and tests, not those device/display interactions. Native GPU
+presentation latency and distant-SSH performance remain unmeasured.

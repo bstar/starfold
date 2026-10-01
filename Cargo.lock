@@ -6525,7 +6525,7 @@ dependencies = [
 [[package]]
 name = "starkit"
 version = "0.3.0"
-source = "git+https://github.com/bstar/starkit?rev=c19c393103ab0ea7b9d1dd88e7e934ac09256895#c19c393103ab0ea7b9d1dd88e7e934ac09256895"
+source = "git+https://github.com/bstar/starkit?rev=333d9ecbe9dee7b57c524845038e176e9bcb6199#333d9ecbe9dee7b57c524845038e176e9bcb6199"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -6539,6 +6539,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "unicode-segmentation",
  "unicode-width",
 ]
 
