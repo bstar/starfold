@@ -306,6 +306,8 @@ impl Desktop {
             panels::words(module)
         };
         div()
+            .w_full()
+            .min_w(px(0.))
             .flex()
             .flex_wrap()
             .gap_1()
@@ -344,6 +346,7 @@ impl Desktop {
             .children(words.into_iter().map(|word| {
                 let label = starkit::chrome::header::Word::word(word).into_owned();
                 menu_item(label.clone(), tokens)
+                    .flex_shrink_0()
                     .px_1()
                     .py_1()
                     .id(SharedString::from(label))
@@ -2101,6 +2104,8 @@ impl Render for Desktop {
         heights[2] = heights[2].max(px(96.));
         heights[0] = (budget - heights[1] - heights[2]).max(px(180.));
         let mut content = div()
+            .w_full()
+            .min_w(px(0.))
             .flex()
             .h(heights[0])
             .flex_shrink_0()
@@ -2111,6 +2116,8 @@ impl Render for Desktop {
             content = content.child(self.pane(1, _window, cx));
         }
         let mut modules = div()
+            .w_full()
+            .min_w(px(0.))
             .flex()
             .flex_col()
             .flex_shrink_0()
