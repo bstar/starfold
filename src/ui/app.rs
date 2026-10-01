@@ -1003,6 +1003,7 @@ impl App {
         let batch: Vec<Event> = self.core.drain().take(DRAIN_CAP).collect();
         for event in batch {
             match event {
+                Event::Recovery => self.overlays.sync_recovery(&self.core.state()),
                 Event::Note(note) => {
                     self.note = Some((note.text, note.level, Instant::now()));
                 }
@@ -1725,6 +1726,10 @@ impl App {
 
     fn after_overlay_answer(&mut self, answer: Answer) {
         match answer {
+            Answer::Recover(record, target) => {
+                self.core.send(Command::QueueRecovery { record, target })
+            }
+            Answer::RefreshRecovery(mode) => self.core.send(Command::LoadRecovery(mode)),
             Answer::Drop(kind) => self.dnd_choose(kind),
             Answer::Context(target, action) => self.context_action(target, action),
             Answer::Operation(r) => {
@@ -1881,6 +1886,12 @@ impl App {
             } else {
                 Command::Back
             }),
+            Action::UndoRecovery => {
+                self.overlays
+                    .open_recovery(crate::fold::recovery::Mode::Undo);
+                self.core
+                    .send(Command::LoadRecovery(crate::fold::recovery::Mode::Undo));
+            }
             Action::FileActions => self.open_actions_modal(),
             Action::Search => {
                 let current = self.core.state();
@@ -4524,6 +4535,8 @@ mod tests {
     #[test]
     fn dd_confirms_the_captured_file_before_queueing_deletion() {
         let (mut app, fk, _dir) = app();
+        // This input/queue test must not touch the user's platform Trash.
+        fk.state_mut().trash = crate::fold::TrashMode::Never;
         let source = fk.home().join("blob.bin");
         let idx = row_index(&app, "blob.bin");
         app.core.send(Command::CursorTo(idx));

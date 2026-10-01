@@ -20,8 +20,8 @@ expression: submenu
 ║ │  Delete             │                                                                          ║
 ╚═│─────────────────────│ree / 500.0 GB total══════════════════════════════════════════════════════╝
 ╔═│  Tabs…              │══════════════════════════════════════════════════════════════════════════╗
-║ └─────────────────────┘                                                                    close ║
-║                                                                                    File metadata ║
+║ │  Recovery         › │                                                                    close ║
+║ └─────────────────────┘                                                            File metadata ║
 ║ Type: application/octet-stream                                                                   ║
 ║ Size: 256 B                                                                                      ║
 ║ Permissions: -rw-r--r--                                                                          ║

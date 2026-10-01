@@ -5,6 +5,11 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- Trash recovery and session-only undo for eligible completed moves and renames,
+  with worker-backed menus, safe collision handling, and `Ctrl+Z`.
+
 ## [0.0.2] - 2026-09-30
 
 ### Added

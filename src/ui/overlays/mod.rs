@@ -28,6 +28,7 @@ pub mod conflict;
 pub mod context;
 pub mod create;
 pub mod failure;
+pub mod recovery;
 pub mod rename;
 pub mod search;
 pub mod sort;
@@ -73,6 +74,7 @@ pub enum Overlay {
     Confirm(confirm::Confirm),
     TrashWarning(trash_warning::Prompt),
     Create(create::Create),
+    Recovery(recovery::Browser),
     Rename(rename::Rename),
     Search(search::Search),
     Sort(sort::Picker),
@@ -90,6 +92,8 @@ pub struct Overlays {
 /// What handling a key or a click did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
+    Recover(crate::fold::recovery::Record, PathBuf),
+    RefreshRecovery(crate::fold::recovery::Mode),
     Context(context::Target, context::Action),
     Drop(crate::fold::ops::OpKind),
     Operation(context::Request),
@@ -188,6 +192,14 @@ impl Overlays {
         self.current = Some(Overlay::Destination(context::Destination::new(request)));
     }
 
+    pub fn open_recovery(&mut self, mode: crate::fold::recovery::Mode) {
+        self.current = Some(Overlay::Recovery(recovery::Browser::new(mode)));
+    }
+    pub fn sync_recovery(&mut self, state: &crate::fold::State) {
+        if let Some(Overlay::Recovery(browser)) = self.current.as_mut() {
+            browser.sync(state);
+        }
+    }
     pub fn open_rename(&mut self, from: PathBuf) {
         self.current = Some(Overlay::Rename(rename::Rename::new(from)));
     }
@@ -201,6 +213,13 @@ impl Overlays {
     }
 
     pub fn paste(&mut self, text: &str) -> bool {
+        if let Some(Overlay::Recovery(browser)) = self.current.as_mut() {
+            if let Some(form) = browser.rename.as_mut() {
+                form.input.paste(text);
+                form.error = None;
+                return true;
+            }
+        }
         if let Some(Overlay::Search(form)) = self.current.as_mut() {
             form.input.paste(text);
             form.error = None;
@@ -250,6 +269,11 @@ impl Overlays {
         let overlay = self.current.as_mut().expect("checked above");
         let mut start_rename = None;
         let (close, answer) = match overlay {
+            Overlay::Recovery(browser) => match browser.handle(k) {
+                recovery::Action::Taken => (false, Answer::Consumed),
+                recovery::Action::Refresh => (false, Answer::RefreshRecovery(browser.mode)),
+                recovery::Action::Submit(record, target) => (true, Answer::Recover(record, target)),
+            },
             Overlay::Drop(m) => match k.code {
                 KeyCode::Char('c') => (true, Answer::Drop(crate::fold::ops::OpKind::Copy)),
                 KeyCode::Char('m') => (true, Answer::Drop(crate::fold::ops::OpKind::Move)),
@@ -445,6 +469,24 @@ impl Overlays {
         let overlay = self.current.as_mut().expect("checked above");
         let mut start_rename = None;
         let (close, answer) = match overlay {
+            Overlay::Recovery(browser) => {
+                let r = if browser.rename.is_some() {
+                    rename::rect(area)
+                } else {
+                    recovery::rect(area)
+                };
+                if !inside(r, x, y) {
+                    (true, Answer::Closed)
+                } else {
+                    if browser.rename.is_none() && y > r.y && y < r.bottom().saturating_sub(1) {
+                        let rows = (r.height.saturating_sub(2) as usize / 2).max(1);
+                        let start = browser.cursor.saturating_sub(rows - 1);
+                        browser.cursor = (start + (y - r.y - 1) as usize / 2)
+                            .min(browser.items.len().saturating_sub(1));
+                    }
+                    (false, Answer::Consumed)
+                }
+            }
             Overlay::Drop(m) => match m.popup.click(area, x, y) {
                 super::popup::Answer::Selected(context::Action::Copy) => {
                     (true, Answer::Drop(crate::fold::ops::OpKind::Copy))
@@ -588,6 +630,16 @@ impl Overlays {
     /// prompt hold a list long enough to scroll.
     pub fn scroll(&mut self, up: bool) {
         match self.current.as_mut() {
+            Some(Overlay::Recovery(browser)) => {
+                browser.cursor = if up {
+                    browser.cursor.saturating_sub(3)
+                } else {
+                    browser
+                        .cursor
+                        .saturating_add(3)
+                        .min(browser.items.len().saturating_sub(1))
+                };
+            }
             Some(Overlay::Help { scroll }) => {
                 *scroll = if up {
                     scroll.saturating_sub(3)
@@ -628,6 +680,7 @@ impl Overlays {
         bars: &mut Bars,
     ) -> Option<(u16, u16)> {
         match self.current.as_mut()? {
+            Overlay::Recovery(browser) => recovery::render(area, buf, theme, browser),
             Overlay::Drop(m) => {
                 m.render(area, buf, theme);
                 None

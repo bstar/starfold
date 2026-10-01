@@ -152,7 +152,9 @@ fn run_tui(dir: Option<PathBuf>) -> Result<()> {
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .unwrap_or_else(|| restored.fold.path.clone());
 
-    let core = fold::Handle::spawn_startup(cfg.core(), restored, home, fold::Handle::probe_trash());
+    let mut core_cfg = cfg.core();
+    core_cfg.recovery_dir = Some(PATHS.base_dir()?.join("recovery"));
+    let core = fold::Handle::spawn_startup(core_cfg, restored, home, fold::Handle::probe_trash());
     if let Some(hidden) = session.show_hidden {
         core.send(fold::Command::SetHidden(hidden));
     }

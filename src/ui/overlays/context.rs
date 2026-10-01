@@ -30,6 +30,8 @@ pub struct Target {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Tabs,
+    Trash,
+    Undo,
     Open,
     Preview,
     Edit,
@@ -47,6 +49,8 @@ pub enum Action {
 impl Action {
     fn label(self) -> &'static str {
         match self {
+            Self::Trash => "Trash…",
+            Self::Undo => "Undo…",
             Self::Tabs => "Tabs…",
             Self::Open => "Open",
             Self::Preview => "Preview",
@@ -146,6 +150,10 @@ impl Menu {
         }
         entries.push(Entry::Separator);
         entries.push(action(Action::Tabs));
+        entries.push(Entry::submenu(
+            "Recovery",
+            vec![action(Action::Trash), action(Action::Undo)],
+        ));
         Self {
             target,
             #[cfg(test)]

@@ -666,6 +666,8 @@ fn the_help_overlay() {
 #[test]
 fn three_queued_operations_with_the_module_focused() {
     let (mut app, fk) = build("terminal");
+    // Keep the frame deterministic and leave the system Trash untouched.
+    fk.state_mut().trash = crate::fold::TrashMode::Never;
 
     cursor_to(&mut app, &fk, "blob.bin");
     app.key(key(' '));
@@ -770,5 +772,39 @@ fn workspace_tabs_fit_the_floor_in_light_and_dark_themes() {
         insta::assert_snapshot!(format!("{name}-actions"), actions);
         app.key(code(KeyCode::Esc));
         assert!(render(&mut app, 60, 21).contains("TABS"));
+    }
+}
+
+#[test]
+fn recovery_picker_frames_in_light_and_dark_themes() {
+    for theme in ["catppuccin-mocha", "catppuccin-latte"] {
+        let (mut app, fake) = build(theme);
+        cursor_to(&mut app, &fake, "blob.bin");
+        app.key(key('r'));
+        app.key(code(KeyCode::Home));
+        for _ in 0..8 {
+            app.key(code(KeyCode::Delete));
+        }
+        for ch in "renamed.bin".chars() {
+            app.key(key(ch));
+        }
+        app.key(code(KeyCode::Enter));
+        settle(&mut app, &fake);
+        assert_eq!(fake.state().undo.len(), 1);
+        app.key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
+        for _ in 0..25 {
+            app.key(code(KeyCode::Down));
+        }
+        app.key(code(KeyCode::Right));
+        app.key(code(KeyCode::Down));
+        app.key(code(KeyCode::Enter));
+        settle(&mut app, &fake);
+        for (width, height) in [(100, 30), (60, 21)] {
+            let output =
+                render(&mut app, width, height).replace(fake.home().to_str().unwrap(), "~");
+            assert!(output.contains("UNDO"), "{output}");
+            assert!(output.contains("blob.bin"));
+            insta::assert_snapshot!(format!("recovery-undo-{theme}-{width}x{height}"), output);
+        }
     }
 }

@@ -33,6 +33,8 @@ grouped by what you are trying to do.
   and directories in Fold and Commander.
 - [Content search validation](content-search-validation.md): milestone 2b checks
   nested text matches, skips, cancellation, and result actions.
+- [Recovery validation](recovery-validation.md): Trash restore and safe session undo,
+  including platform limits and disposable checks.
 - [Status](status.md): what is done, what is in progress, and what is not
   started.
 - [Contributing](../CONTRIBUTING.md), [Security](../SECURITY.md),
