@@ -334,8 +334,40 @@ pub fn rail(
 ) -> Vec<(Rect, Hit)> {
     let active_index = items.iter().position(|i| i.id == active).unwrap_or(0);
     *offset = (*offset).min(active_index);
-    let capacity = usize::from(area.width.saturating_sub(7) / 24).max(1);
-    if active_index >= *offset + capacity {
+    let native = area.height > 1;
+    let tab_width = |item: &Item| {
+        if native {
+            (starkit::wrap::width_of(&item.label) + 8).clamp(12, 36)
+        } else {
+            24
+        }
+    };
+    if native {
+        while *offset < active_index
+            && items[*offset..=active_index]
+                .iter()
+                .map(|item| u32::from(tab_width(item)))
+                .sum::<u32>()
+                > u32::from(area.width.saturating_sub(7))
+        {
+            *offset += 1;
+        }
+    }
+    let capacity = if native {
+        let mut used: u16 = 0;
+        items
+            .iter()
+            .skip(*offset)
+            .take_while(|item| {
+                used = used.saturating_add(tab_width(item));
+                used <= area.width.saturating_sub(7)
+            })
+            .count()
+            .max(1)
+    } else {
+        usize::from(area.width.saturating_sub(7) / 24).max(1)
+    };
+    if !native && active_index >= *offset + capacity {
         *offset = active_index + 1 - capacity;
     }
     let normal = Style::default().fg(rgb(theme.dim)).bg(rgb(theme.bg));
@@ -347,7 +379,7 @@ pub fn rail(
     let mut hits = vec![];
     let mut x = area.x;
     for (i, item) in items.iter().enumerate().skip(*offset).take(capacity) {
-        let w = (area.right().saturating_sub(x + 7)).min(24);
+        let w = (area.right().saturating_sub(x + 7)).min(tab_width(item));
         if w < 9 {
             break;
         }
@@ -414,6 +446,34 @@ mod tests {
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
+    #[test]
+    fn native_tabs_keep_active_and_close_targets_visible_with_mixed_widths() {
+        let mut items = items();
+        for (i, item) in items.iter_mut().enumerate() {
+            item.label = if i % 2 == 0 {
+                "x".into()
+            } else {
+                "a very long workspace name that must truncate".into()
+            };
+        }
+        let (theme, _) = crate::ui::theme::registry().resolve_named("catppuccin-latte");
+        for width in [60, 90, 180] {
+            let area = Rect::new(0, 0, width, 2);
+            let mut offset = 0;
+            for active in &items {
+                let mut buffer = Buffer::empty(area);
+                let hits = rail(area, &items, active.id, &mut offset, &mut buffer, &theme);
+                assert!(hits
+                    .iter()
+                    .any(|(_, hit)| matches!(hit, Hit::Tab(id) if *id == active.id)));
+                assert!(hits
+                    .iter()
+                    .any(|(_, hit)| matches!(hit, Hit::Close(id) if *id == active.id)));
+                assert!(hits.iter().all(|(rect, _)| rect.right() <= area.right()));
+            }
+        }
+    }
+
     #[test]
     fn picker_switches_tabs_and_renames_through_actions() {
         let mut picker = Picker::new(items(), TabId(0));

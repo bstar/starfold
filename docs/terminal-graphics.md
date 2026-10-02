@@ -96,3 +96,22 @@ do not describe the native replacement.
 Sessions and controller logs live under `~/.local/starfold/graphical` (or
 `STARFOLD_DIR/graphical`). Application debug logs remain in the usual log directory.
 The source of the shared renderer is in STAR/KIT's `src/terminal_graphics/native.rs`.
+
+### Native chrome and embedded player ownership
+
+The graphical presentation uses KIT native surfaces for compact pane toolbars,
+continuous storage meters, and the padded status bar. Tabs keep their close
+buttons and grow with the label within a bounded width. Operations collapses to
+an idle/history strip and expands for active work, failures, or explicit focus.
+These surfaces are negotiated using the `native_surfaces` frontend capability.
+
+STAR/AMP's native player lives in STAR/AMP (`src/embed/native.rs`). The optional
+`native_surface_v1` embed extension returns KIT primitives and owns transport,
+seek, volume and visualizer hit geometry. FOLD places the returned surface and
+forwards input through the existing supervised child protocol. Older helpers
+continue to provide cells. Local animation is capped at 30 FPS and SSH at 15 FPS;
+hidden native players stop publishing frames while audio continues.
+
+The graphical Nix package includes a matching helper. For a manual build, put the
+matching STAR/AMP experimental build on the graphical launcher's private PATH.
+This does not require replacing the normal `staramp` command.

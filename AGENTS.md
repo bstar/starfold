@@ -365,3 +365,12 @@ ordinary `starfold` link intact. Bundled font licensing ships in
 `LICENSES/OFL-Liberation.txt`. Renderer tests belong in KIT; FOLD tests cover
 application behavior and the relay. Physical macOS Kitty interaction remains
 a separate gate from headless CI.
+
+## Native surface experiment
+
+Pixel chrome uses structured panel regions and KIT surfaces; it must not infer
+panels by scanning border characters. The cell controller remains the geometry
+source for terminal input until the transport offers actual pixel pointers.
+STAR/AMP owns `native_surface_v1`; this repository only negotiates, validates,
+places and forwards input. The graphical Nix package pins its matching helper
+on a private runtime PATH, leaving the ordinary STAR/AMP command independent.

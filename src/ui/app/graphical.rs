@@ -10,6 +10,7 @@ pub(super) struct State {
     pub effects: Vec<ServerMessage>,
     pub output_pending: bool,
     pub(super) cell_mode: bool,
+    pub(super) surface_mode: bool,
     padded_chrome: bool,
     image_source: Option<Arc<RgbaImage>>,
     image_sequence: u64,
@@ -85,6 +86,7 @@ impl App {
         wire_dnd::graphical_output(tx);
         self.graphical = Some(State {
             wire: Some(rx),
+            surface_mode: true,
             ..State::default()
         });
     }
@@ -224,6 +226,54 @@ impl App {
         }
     }
 }
+fn native_header(
+    rect: Rect,
+    title: &str,
+    words: &[panels::Word],
+    theme: &Theme,
+    cw: u16,
+    ch: u16,
+) -> Component {
+    use starkit::chrome::header::{self, Word as _};
+    use starkit::native_surface::{Metrics, PixelRect as R, Surface};
+    let area = Rect::new(
+        rect.x + 1,
+        rect.y + 1,
+        rect.width.saturating_sub(2),
+        2.min(rect.height.saturating_sub(2)),
+    );
+    let mut surface = Surface::new(
+        area.width * cw,
+        area.height.max(1) * ch,
+        hex(theme.panel_bg),
+    );
+    let font = Metrics::from_cell(cw, ch).font;
+    let slots = header::slots(rect, words);
+    let end = slots.iter().map(|(_, r)| r.x).min().unwrap_or(area.right());
+    let inset = 12u16.saturating_sub(cw).max(4);
+    let title_width = (end - area.x).saturating_mul(cw).saturating_sub(inset + 8);
+    surface.text(
+        R::new(inset, 0, title_width, ch),
+        title,
+        &hex(theme.header_fg),
+        font,
+        true,
+    );
+    for (word, slot) in slots {
+        surface.text(
+            R::new((slot.x - area.x) * cw, 0, slot.width * cw, ch),
+            word.word().into_owned(),
+            &hex(theme.dim),
+            font,
+            false,
+        );
+    }
+    Component::Surface {
+        rect: area.into(),
+        surface,
+    }
+}
+
 impl Controller for App {
     fn frame_interval(&self) -> Duration {
         let graphics = self.graphical.as_ref().unwrap();
@@ -254,7 +304,11 @@ impl Controller for App {
                 )
             });
         if busy {
-            Duration::from_millis(33)
+            Duration::from_millis(if std::env::var_os("SSH_CONNECTION").is_some() {
+                67
+            } else {
+                33
+            })
         } else {
             Duration::from_secs(1)
         }
@@ -265,6 +319,7 @@ impl Controller for App {
     fn attached(&mut self) {
         self.dnd.enabled = false;
         self.graphical.as_mut().unwrap().cell_mode = false;
+        self.graphical.as_mut().unwrap().surface_mode = false;
         self.graphics.set_mode(Mode::Off);
     }
     fn capabilities(
@@ -274,6 +329,7 @@ impl Controller for App {
         let cells = capabilities.image_transport
             == starkit::terminal_graphics::capabilities::ImageTransport::None;
         self.graphical.as_mut().unwrap().cell_mode = cells;
+        self.graphical.as_mut().unwrap().surface_mode = capabilities.native_surfaces;
         self.graphics
             .set_mode(if cells { Mode::Blocks } else { Mode::Off });
     }
@@ -351,6 +407,7 @@ impl Controller for App {
         let state = self.graphical.as_mut().unwrap();
         // Keep compact chrome at the established terminal floor.
         state.padded_chrome = !state.cell_mode
+            && state.surface_mode
             && viewport.rows
                 >= (layout::MIN_ROWS + 8)
                     .saturating_add(self.cfg.ui.padding_y.max(1).saturating_mul(2));
@@ -387,29 +444,88 @@ impl Controller for App {
                 modal_rects = picker.graphical_rects(area);
             }
         }
-        // All controller-rendered modal chrome gets a pixel border too.
-        for y in 0..viewport.rows {
-            for x in 0..viewport.columns {
-                if !matches!(buffer[(x, y)].symbol(), "╔" | "┌" | "╭") {
+        let native = !self.graphical.as_ref().unwrap().cell_mode
+            && self.graphical.as_ref().unwrap().surface_mode;
+        let cw = (viewport.width / u32::from(viewport.columns)).max(1) as u16;
+        let ch = (viewport.height / u32::from(viewport.rows)).max(1) as u16;
+        if native && self.graphical.as_ref().unwrap().padded_chrome {
+            for module in [ModuleId::Stack, ModuleId::Preview, ModuleId::Operations] {
+                if module == ModuleId::Stack {
                     continue;
                 }
-                let right = (x + 1..viewport.columns)
-                    .find(|xx| matches!(buffer[(*xx, y)].symbol(), "╗" | "┐" | "╮"));
-                if let Some(right) = right {
-                    let bottom = (y + 1..viewport.rows)
-                        .find(|yy| matches!(buffer[(x, *yy)].symbol(), "╚" | "└" | "╰"));
-                    if let Some(bottom) = bottom {
-                        scene.components.push(Component::Panel {
-                            rect: starkit::terminal_graphics::Rect {
-                                x,
-                                y,
-                                width: right - x + 1,
-                                height: bottom - y + 1,
-                            },
-                            active: buffer[(x, y)].fg == panels::rgb(self.theme.border_focused),
-                        });
-                    }
+                let rect = regions.rect_of(module);
+                if module == ModuleId::Operations && rect.height == 2 {
+                    use starkit::native_surface::{Metrics, PixelRect as R, Surface};
+                    let mut surface =
+                        Surface::new(rect.width * cw, rect.height * ch, hex(self.theme.panel_bg));
+                    let text = if self.view.ops.is_empty() {
+                        "Operations · idle".to_string()
+                    } else {
+                        format!(
+                            "Operations · {} items · select to inspect",
+                            self.view.ops.len()
+                        )
+                    };
+                    surface.text(
+                        R::new(
+                            12.min(surface.width),
+                            0,
+                            surface.width.saturating_sub(24),
+                            surface.height,
+                        ),
+                        text,
+                        &hex(self.theme.dim),
+                        Metrics::from_cell(cw, ch).font,
+                        false,
+                    );
+                    scene.components.push(Component::Surface {
+                        rect: rect.into(),
+                        surface,
+                    });
+                } else {
+                    scene.components.push(Component::Panel {
+                        rect: rect.into(),
+                        active: self.layout.focus() == module,
+                    });
+                    let title = if module == ModuleId::Preview {
+                        if self.audio_here() {
+                            "STAR/AMP".to_string()
+                        } else {
+                            format!(
+                                "Preview · {}",
+                                self.view.preview_name.as_deref().unwrap_or("")
+                            )
+                        }
+                    } else {
+                        "Operations".into()
+                    };
+                    let words = if module == ModuleId::Operations {
+                        let view = self.operations_view();
+                        panels::operations::header_words(view.paused, view.active, view.focused)
+                    } else {
+                        panels::words(module)
+                    };
+                    scene
+                        .components
+                        .push(native_header(rect, &title, &words, &self.theme, cw, ch));
                 }
+            }
+            scene.components.push(Component::Surface {
+                rect: regions.status.into(),
+                surface: status::native_surface(
+                    regions.status,
+                    &self.status_view(Instant::now()),
+                    cw,
+                    ch,
+                ),
+            });
+        }
+        if !native || !self.graphical.as_ref().unwrap().padded_chrome {
+            for module in [ModuleId::Preview, ModuleId::Operations] {
+                scene.components.push(Component::Panel {
+                    rect: regions.rect_of(module).into(),
+                    active: self.layout.focus() == module,
+                });
             }
         }
         {
@@ -429,24 +545,70 @@ impl Controller for App {
                 let list = panels::stack::split(body, view.crumbs.len(), view.fold_rows).list;
                 // Existing column arithmetic determines metadata boundaries.
                 let width = panels::stack::graphical_name_width(list.width);
-                if let Some((total, available)) = view.space.filter(|(total, _)| *total > 0) {
-                    let y = rect.bottom().saturating_sub(1);
-                    let x = rect.x + 2;
-                    let width = (x..rect.right())
-                        .take_while(|x| buffer[(*x, y)].symbol() == "■")
-                        .count() as u16;
-                    if width > 0 {
-                        scene.components.push(Component::Meter {
-                            rect: starkit::terminal_graphics::Rect {
-                                x,
-                                y,
-                                width,
-                                height: 1,
-                            },
-                            value: ((u128::from(total.saturating_sub(available.min(total))) * 1000)
-                                / u128::from(total)) as u16,
-                            foreground: hex(self.theme.fold.progress_fg),
-                            background: hex(self.theme.border),
+                scene.components.push(Component::Panel {
+                    rect: rect.into(),
+                    active: view.focused,
+                });
+                if native && self.graphical.as_ref().unwrap().padded_chrome {
+                    let title = if self.commander {
+                        if pane == 0 {
+                            "STAR/FOLD · Left"
+                        } else {
+                            "Right"
+                        }
+                    } else {
+                        "STAR/FOLD"
+                    };
+                    scene.components.push(native_header(
+                        rect,
+                        title,
+                        &panels::words(ModuleId::Stack),
+                        &self.theme,
+                        cw,
+                        ch,
+                    ));
+                    if let Some((total, available)) = view.space.filter(|(total, _)| *total > 0) {
+                        use starkit::native_surface::{Metrics, PixelRect as R, Surface};
+                        let footer = Rect::new(
+                            rect.x + 1,
+                            rect.bottom() - 2,
+                            rect.width.saturating_sub(2),
+                            1,
+                        );
+                        let mut surface =
+                            Surface::new(footer.width * cw, ch, hex(self.theme.panel_bg));
+                        let inset = 12u16.saturating_sub(cw).max(4);
+                        let width = 96.min(surface.width / 4);
+                        let top = ch.saturating_sub(4) / 2;
+                        surface.fill(
+                            R::new(inset, top, width, 4.min(ch)),
+                            &hex(self.theme.border),
+                            2,
+                        );
+                        let used = (u128::from(total.saturating_sub(available.min(total)))
+                            * u128::from(width)
+                            / u128::from(total)) as u16;
+                        surface.fill(
+                            R::new(inset, top, used, 4.min(ch)),
+                            &hex(self.theme.fold.progress_fg),
+                            2,
+                        );
+                        let x = inset + width + 12;
+                        let text = format!(
+                            "{} free / {} total",
+                            crate::fold::format::size(available),
+                            crate::fold::format::size(total)
+                        );
+                        surface.text(
+                            R::new(x, 0, surface.width.saturating_sub(x + 8), ch),
+                            text,
+                            &hex(self.theme.dim),
+                            Metrics::from_cell(cw, ch).font,
+                            false,
+                        );
+                        scene.components.push(Component::Surface {
+                            rect: footer.into(),
+                            surface,
                         });
                     }
                 }
@@ -568,7 +730,13 @@ impl Controller for App {
         if self.audio_graphics_config().is_some() {
             if let Some(frame) = &self.audio_frame {
                 use std::hash::{Hash, Hasher};
-                let body = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
+                let body = audio_body(regions.rect_of(ModuleId::Preview));
+                if let Some(surface) = &frame.surface {
+                    scene.components.push(Component::Surface {
+                        rect: body.into(),
+                        surface: surface.clone(),
+                    });
+                }
                 let cache = &mut self.graphical.as_mut().unwrap().audio_images;
                 let mut retained = std::collections::HashSet::new();
                 for image in frame.images.iter().take(5) {
@@ -840,6 +1008,72 @@ impl Controller for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_chrome_surfaces_fit_at_resize_and_keep_operations_compact() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        for (columns, rows, width, height) in [
+            (80, 36, 640, 576),
+            (160, 54, 1600, 1080),
+            (220, 70, 2640, 1680),
+        ] {
+            let viewport = Viewport {
+                columns,
+                rows,
+                width,
+                height,
+                generation: 1,
+            };
+            let scene = Controller::scene(&mut app, viewport);
+            let surfaces = scene
+                .components
+                .iter()
+                .filter_map(|c| match c {
+                    Component::Surface { surface, .. } => Some(surface),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!surfaces.is_empty());
+            for surface in surfaces {
+                surface.validate().unwrap();
+            }
+            assert_eq!(
+                app.layout
+                    .last
+                    .as_ref()
+                    .unwrap()
+                    .rect_of(ModuleId::Operations)
+                    .height,
+                2
+            );
+            app.layout.focus_set(ModuleId::Operations);
+            let scene = Controller::scene(&mut app, viewport);
+            assert!(
+                app.layout
+                    .last
+                    .as_ref()
+                    .unwrap()
+                    .rect_of(ModuleId::Operations)
+                    .height
+                    > 2
+            );
+            for component in scene.components {
+                if let Component::Surface { surface, .. } = component {
+                    surface.validate().unwrap();
+                }
+            }
+            app.layout.focus_set(ModuleId::Stack);
+        }
+    }
+
     #[test]
     fn completed_graphical_thumbnail_wakes_an_idle_scene() {
         let cfg = Config::default();

@@ -253,7 +253,8 @@ pub fn fields(area: Rect, v: &View<'_>) -> Fields {
 
 pub fn hit(area: Rect, v: &View<'_>, x: u16, y: u16) -> Option<Hit> {
     let f = fields(area, v);
-    let inside = |r: Rect| r.width > 0 && y == r.y && x >= r.x && x < r.x + r.width;
+    let inside =
+        |r: Rect| r.width > 0 && y >= r.y && y < area.bottom() && x >= r.x && x < r.x + r.width;
     if inside(f.help) {
         return Some(Hit::Help);
     }
@@ -394,6 +395,82 @@ fn render_hints(
             desc_style,
         );
     }
+}
+
+#[cfg(feature = "terminal-graphics")]
+pub fn native_surface(
+    area: Rect,
+    v: &View<'_>,
+    cw: u16,
+    ch: u16,
+) -> starkit::native_surface::Surface {
+    use starkit::native_surface::{Metrics, PixelRect as R, Surface};
+    let hex = |c: starkit::theme::color::Rgb| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
+    let mut s = Surface::new(area.width * cw, area.height * ch, hex(v.theme.panel_bg));
+    let m = Metrics::from_cell(cw, ch);
+    let h = s.height;
+    let fg = hex(v.theme.fg);
+    let dim = hex(v.theme.dim);
+    let border = hex(v.theme.border);
+    s.fill(R::new(0, 0, s.width, 1), &border, 0);
+    let f = fields(area, v);
+    s.text(
+        R::new(4, 1, f.help.width * cw - 4, h - 1),
+        HELP,
+        &fg,
+        m.font,
+        false,
+    );
+    let (middle, kind) = v.middle();
+    let x = (f.middle.x - area.x) * cw;
+    let w = f.middle.width * cw;
+    if matches!(kind, MiddleKind::Hints) {
+        let mut left = x;
+        for (key, desc) in v.hints {
+            let kw = (key.chars().count() as u16 * cw + 8).max(ch);
+            let dw = desc.chars().count() as u16 * cw;
+            if left + kw + dw + 12 > x + w {
+                break;
+            }
+            s.fill(R::new(left, 5, kw, h.saturating_sub(10)), &border, 3);
+            s.text(
+                R::new(left + 4, 5, kw - 8, h.saturating_sub(10)),
+                *key,
+                &fg,
+                m.font,
+                true,
+            );
+            s.text(
+                R::new(left + kw + 4, 1, dw, h - 1),
+                *desc,
+                &dim,
+                m.font,
+                false,
+            );
+            left += kw + dw + 12;
+        }
+    } else {
+        let color = if matches!(kind, MiddleKind::Note(NoteLevel::Error)) {
+            hex(v.theme.error)
+        } else {
+            fg.clone()
+        };
+        let text: String = middle
+            .chars()
+            .filter(|c| !matches!(c, '█' | '░' | '▓' | '▒'))
+            .collect();
+        s.text(R::new(x, 1, w, h - 1), text, &color, m.font, false);
+    }
+    let (right, _) = right_field(area, f.help.width, v);
+    let width = width_of(&right).min(area.width) * cw;
+    s.text(
+        R::new(s.width - width, 1, width, h - 1),
+        right,
+        &dim,
+        m.font,
+        false,
+    );
+    s
 }
 
 #[cfg(test)]

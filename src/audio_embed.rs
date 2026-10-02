@@ -52,6 +52,8 @@ pub struct Presentation {
     pub focused: bool,
     pub theme: Palette,
     pub graphics: Option<GraphicsConfig>,
+    pub native_surface: bool,
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -69,6 +71,7 @@ pub struct Frame {
     pub height: u16,
     pub cells: Vec<Cell>,
     pub images: Vec<TransportImage>,
+    pub surface: Option<starkit::native_surface::Surface>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -138,6 +141,7 @@ struct Shared {
     extensions: Option<Vec<String>>,
     transport_images: bool,
     player_styles: bool,
+    native_surface: bool,
     frame: Option<Frame>,
     events: VecDeque<Event>,
 }
@@ -259,6 +263,10 @@ enum HostMessage<'a> {
         graphics: Option<&'a GraphicsConfig>,
         #[serde(skip_serializing_if = "Option::is_none")]
         profile: Option<&'a str>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        native_surface: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        visible: Option<bool>,
     },
     Play {
         generation: u64,
@@ -293,6 +301,8 @@ enum ChildMessage {
         cells: Vec<Cell>,
         #[serde(default)]
         images: Vec<TransportImage>,
+        #[serde(default)]
+        surface: Option<starkit::native_surface::Surface>,
     },
     Status {
         playing: bool,
@@ -336,6 +346,7 @@ struct Running {
     extensions: Vec<String>,
     transport_images: bool,
     player_styles: bool,
+    native_surface: bool,
 }
 
 /// A nonblocking owner for one embedded player. `new` starts only a cheap
@@ -826,6 +837,7 @@ fn spawn_child(
         extensions: Vec::new(),
         transport_images: false,
         player_styles: false,
+        native_surface: false,
     })
 }
 
@@ -865,6 +877,7 @@ fn spawn_reader(
                             height,
                             cells,
                             images,
+                            surface,
                         }) => {
                             *frames
                                 .lock()
@@ -875,6 +888,7 @@ fn spawn_reader(
                                     height,
                                     cells,
                                     images,
+                                    surface,
                                 });
                         }
                         Ok(message) => {
@@ -964,6 +978,8 @@ fn send_configure(player: &mut Running) -> Result<u64, String> {
                 None
             },
             profile: player.player_styles.then_some("starfold"),
+            native_surface: player.native_surface && p.native_surface,
+            visible: player.native_surface.then_some(p.visible),
         },
     )
 }
@@ -1050,12 +1066,16 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
                 .map(|s| s.trim_start_matches('.').to_ascii_lowercase())
                 .collect();
             player.transport_images = capabilities.iter().any(|value| value == "transport_images");
+            player.native_surface = capabilities
+                .iter()
+                .any(|value| value == "native_surface_v1");
             player.player_styles = capabilities.iter().any(|value| value == "player_styles");
             {
                 let mut data = lock(shared);
                 data.extensions = Some(player.extensions.clone());
                 data.transport_images = player.transport_images;
                 data.player_styles = player.player_styles;
+                data.native_surface = player.native_surface;
             }
             if let Err(message) = queue_play(player, shared) {
                 push_event(
@@ -1074,6 +1094,7 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
             height,
             cells,
             images,
+            surface,
         }) => {
             if player.accepted {
                 let frame = Frame {
@@ -1082,6 +1103,7 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
                     height,
                     cells,
                     images,
+                    surface,
                 };
                 // A resize or button-mode change can overtake a frame in the
                 // reader slot. Its images belong to the old negotiation, so
@@ -1099,7 +1121,13 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
                     .then_some(player.activation.presentation.graphics)
                     .flatten();
                 let graphics = graphics.as_ref().filter(|config| valid_graphics(config));
-                let validation = validate_frame(&frame, graphics);
+                let validation = if frame.surface.is_some()
+                    && !(player.native_surface && player.activation.presentation.native_surface)
+                {
+                    Err("STAR/AMP sent an unnegotiated native surface".into())
+                } else {
+                    validate_frame(&frame, graphics)
+                };
                 let mut data = lock(shared);
                 if !current(&data) {
                     return false;
@@ -1242,8 +1270,21 @@ fn valid_graphics(config: &GraphicsConfig) -> bool {
 }
 
 fn validate_frame(frame: &Frame, graphics: Option<&GraphicsConfig>) -> Result<(), String> {
+    if let Some(surface) = &frame.surface {
+        let g = graphics.ok_or("native surface requires pixel geometry")?;
+        surface.validate().map_err(|e| e.to_string())?;
+        if surface.width != frame.width.saturating_mul(g.cell_width).min(8192)
+            || surface.height != frame.height.saturating_mul(g.cell_height).min(2048)
+        {
+            return Err("native surface geometry does not match presentation".into());
+        }
+    }
     let count = usize::from(frame.width).saturating_mul(usize::from(frame.height));
-    if frame.width == 0 || frame.height == 0 || count > MAX_CELLS || frame.cells.len() != count {
+    if frame.width == 0
+        || frame.height == 0
+        || count > MAX_CELLS
+        || (frame.cells.len() != count && !(frame.surface.is_some() && frame.cells.is_empty()))
+    {
         return Err("STAR/AMP sent an invalid frame size".into());
     }
     for cell in &frame.cells {
@@ -1327,6 +1368,7 @@ mod tests {
                 usize::from(width) * usize::from(height)
             ],
             images: Vec::new(),
+            surface: None,
         }
     }
 
@@ -1370,6 +1412,8 @@ mod tests {
                 error: [255, 0, 0],
             },
             graphics: None,
+            native_surface: false,
+            visible: true,
         }
     }
 
@@ -1388,6 +1432,7 @@ mod tests {
                 height: 1,
                 cells: vec![cell],
                 images: vec![],
+                surface: None,
             },
             None
         )
@@ -1399,6 +1444,7 @@ mod tests {
                 height: 1,
                 cells: vec![],
                 images: vec![],
+                surface: None,
             },
             None
         )
@@ -1421,6 +1467,7 @@ mod tests {
             height,
             cells,
             images,
+            surface,
         } = old_frame
         else {
             panic!("frame expected")
@@ -1431,6 +1478,7 @@ mod tests {
             height,
             cells,
             images,
+            surface,
         };
         assert!(frame.images.is_empty());
         assert!(validate_frame(&frame, None).is_ok());
@@ -1443,6 +1491,8 @@ mod tests {
             focused: true,
             theme: &theme,
             graphics: None,
+            native_surface: false,
+            visible: None,
             profile: None,
         })
         .unwrap();
@@ -1460,6 +1510,8 @@ mod tests {
             theme: &theme,
             graphics: Some(&config),
             profile: Some("starfold"),
+            native_surface: false,
+            visible: None,
         })
         .unwrap();
         assert_eq!(extended["graphics"]["cell_width"], 8);

@@ -193,9 +193,10 @@ impl LayoutState {
 
         // The status line first, off the bottom, because it is never hidden,
         // never focused and never resized.
+        let status_rows = if extra > 0 { 2 } else { 1 };
         let status = Rect {
-            y: area.y + area.height - 1,
-            height: 1,
+            y: area.y + area.height - status_rows,
+            height: status_rows,
             ..area
         };
         let tab_rows = if self.tabs_visible {
@@ -209,7 +210,7 @@ impl LayoutState {
             .then(|| Rect::new(area.x, area.y, area.width, tab_rows));
         let body = Rect {
             y: area.y + tab_rows,
-            height: area.height - 1 - tab_rows,
+            height: area.height - status_rows - tab_rows,
             ..area
         };
 
@@ -222,7 +223,14 @@ impl LayoutState {
             STACK_MIN_ROWS + extra
         }
         .saturating_sub(tab_rows);
-        let room = body.height - gutters - stack_min - 2 * collapsed_rows;
+        let ops_floor = if extra > 0 && !self.ops_active && self.focus != ModuleId::Operations {
+            2
+        } else {
+            collapsed_rows
+        };
+        let room = body
+            .height
+            .saturating_sub(gutters + stack_min + collapsed_rows + ops_floor);
 
         // OPERATIONS only grows while focused, and then it is served first:
         // focusing it is asking to see the queue, and a queue that could not
@@ -265,7 +273,7 @@ impl LayoutState {
         let height = |m: ModuleId| match m {
             ModuleId::Stack => stack_min + stack_extra,
             ModuleId::Preview => collapsed_rows + preview_extra,
-            ModuleId::Operations => collapsed_rows + ops_extra,
+            ModuleId::Operations => ops_floor + ops_extra,
         };
 
         let mut modules = [Rect::new(0, 0, 0, 0); 3];

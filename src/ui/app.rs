@@ -431,6 +431,19 @@ impl App {
             height: body.height,
             focused: self.layout.focus() == ModuleId::Preview,
             graphics: self.audio_graphics_config(),
+            visible: self.audio_here() && self.layout.preview_open,
+            native_surface: {
+                #[cfg(feature = "terminal-graphics")]
+                {
+                    self.graphical
+                        .as_ref()
+                        .is_some_and(|state| !state.cell_mode && state.surface_mode)
+                }
+                #[cfg(not(feature = "terminal-graphics"))]
+                {
+                    false
+                }
+            },
             theme: audio_embed::Palette {
                 bg: rgb(self.theme.panel_bg),
                 fg: rgb(self.theme.panel_fg),
@@ -501,6 +514,17 @@ impl App {
     }
 
     fn poll_audio(&mut self) {
+        let visible = self.audio_here() && self.layout.preview_open;
+        if let Some(presentation) = self
+            .audio_presentation
+            .as_mut()
+            .filter(|p| p.native_surface && p.visible != visible)
+        {
+            presentation.visible = visible;
+            if let Err(error) = self.audio.configure(presentation.clone()) {
+                self.audio_error = Some(error);
+            }
+        }
         for event in self.audio.take_events() {
             match event {
                 audio_embed::Event::Accepted { generation }
@@ -2960,7 +2984,7 @@ impl App {
                 .is_some_and(|state| !state.cell_mode);
             self.layout.tab_rows = if pixels { 2 } else { 1 };
             if pixels && area.width >= layout::MIN_COLS + 4 && area.height >= layout::MIN_ROWS + 2 {
-                padding = (padding.0.max(2), padding.1.max(1));
+                padding = (1, 0);
             }
         }
         let incoming = self.dnd.receiving_uri && self.dnd.choice.is_some();

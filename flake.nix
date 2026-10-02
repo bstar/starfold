@@ -4,9 +4,14 @@
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    staramp-native = {
+      url = "github:bstar/staramp/8d0537eb24e8e3074e16a2befd982d5d8bda81fe";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, staramp-native }:
     let
       # Home-manager module, so STAR/FOLD can be installed and configured
       # declaratively the way the rest of a NixOS setup is.
@@ -158,7 +163,15 @@
         packages.default = mkStarfold { };
         packages.starfold = mkStarfold { };
         # Both local and remote graphical packages are native Rust.
-        packages.graphical-host = mkStarfold { graphical = true; };
+        packages.graphical-host = pkgs.symlinkJoin {
+          name = "starfold-graphical-host-${cargoToml.package.version}";
+          paths = [ (mkStarfold { graphical = true; }) ];
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          postBuild = ''
+            wrapProgram $out/bin/starfold \
+              --prefix PATH : ${staramp-native.packages.${system}.default}/bin
+          '';
+        };
         packages.graphical = pkgs.symlinkJoin {
           name = "starfold-graphical-${cargoToml.package.version}";
           paths = [ self.packages.${system}.graphical-host ];

@@ -35,7 +35,32 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "staramp-native": "staramp-native"
+      }
+    },
+    "staramp-native": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790947561,
+        "narHash": "sha256-KDfYrEit9vzeiqDsRGmJ/4lpXidZVYxNiCOtiyZaCY0=",
+        "owner": "bstar",
+        "repo": "staramp",
+        "rev": "8d0537eb24e8e3074e16a2befd982d5d8bda81fe",
+        "type": "github"
+      },
+      "original": {
+        "owner": "bstar",
+        "repo": "staramp",
+        "rev": "8d0537eb24e8e3074e16a2befd982d5d8bda81fe",
+        "type": "github"
       }
     },
     "systems": {

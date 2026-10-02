@@ -148,7 +148,7 @@ LogLevel ERROR
             f'STARFOLD_DIR={root}/app',str(binary),'--graphical-relay','proof','--directory',str(files)])
         hello={'type':'hello','version':1,'client':'ssh-proof',
             'capabilities':{'image_transport':'kitty','pixel_geometry':'measured',
-                'pointer_precision':'cells','keyboard':True,'paste':True,'presentation_ack':True},
+                'pointer_precision':'cells','keyboard':True,'paste':True,'presentation_ack':True,'native_surfaces':True},
             'viewport':
             {'columns':100,'rows':40,'width':1200,'height':800,'generation':1}}
         start=time.monotonic()

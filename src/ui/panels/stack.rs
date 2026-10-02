@@ -247,7 +247,9 @@ pub fn render_named(
     // next frame has something to answer to.
     let track = scrollbar::track(area, s.list);
     bars.draw(bar, track, buf, t, v.rows.len() as u32, v.scroll as u32);
-    render_space(area, buf, t, v.space);
+    if starkit::chrome::frame::extra_rows() == 0 {
+        render_space(area, buf, t, v.space);
+    }
 }
 
 /// A filesystem's used fraction and free/total values on this pane's lower

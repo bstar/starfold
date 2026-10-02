@@ -66,6 +66,7 @@ fn fake_frame(presentation: &Presentation, symbol: &str) -> audio_embed::Frame {
             usize::from(presentation.width) * usize::from(presentation.height)
         ],
         images: Vec::new(),
+        surface: None,
     }
 }
 
