@@ -374,3 +374,15 @@ source for terminal input until the transport offers actual pixel pointers.
 STAR/AMP owns `native_surface_v1`; this repository only negotiates, validates,
 places and forwards input. The graphical Nix package pins its matching helper
 on a private runtime PATH, leaving the ordinary STAR/AMP command independent.
+
+### Completion audit: native pixel layout still open
+
+The native chrome migration is not complete: `ui/layout.rs::pane_rect` still
+uses two terminal columns as the Commander gap, and `LayoutState::regions`
+uses a terminal row between modules. At 10×20 px cells those are both 20 px,
+while KIT's `native_surface::Metrics` requests a 9 px gap for that font size.
+Replace this remaining cell-derived spacing with a shared pixel layout and
+matching input mapping before declaring the cohesive native layout plan done.
+Rerun the full native screen/hit fixtures after that migration. Physical macOS
+Kitty interaction remains separately unverified; green headless CI is not that
+proof.
