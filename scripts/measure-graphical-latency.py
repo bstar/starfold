@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--kitten", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--samples", type=int, default=30)
+    parser.add_argument("--preview", choices=["open", "closed"], default="open")
     options = parser.parse_args()
     assert 3 <= options.samples <= 300
     output = Path(options.output).resolve()
@@ -42,6 +43,7 @@ def main():
                            STARFOLD_CONFIG_DIR=str(root / "config"))
         address = f"unix:{root}/kitty.sock"
         session_path = root / "app/graphical/latency.sock"
+        started_app = time.monotonic()
         with (output / "kitty.log").open("w") as log:
             terminal = subprocess.Popen([
                 options.kitty, "--hold", "--config", "/dev/null", "--listen-on", address,
@@ -92,7 +94,23 @@ def main():
                         pass
                     assert time.monotonic() < deadline, "Pixel frontend startup timed out"
                     time.sleep(.1)
-                time.sleep(1)
+                # Prove startup before sending any input: a stale connecting
+                # image must not pass merely because navigation refreshes it.
+                deadline = time.monotonic() + 10
+                while True:
+                    dimensions, raw = pixels()
+                    image = Image.frombytes("RGB", dimensions, raw)
+                    width, height = dimensions
+                    body = image.crop((0, height // 5, width * 3 // 4, height * 2 // 5))
+                    foreground = sum(count for count, color in body.getcolors(body.width * body.height)
+                                     if min(color) > 140)
+                    if foreground > 500:
+                        break
+                    assert time.monotonic() < deadline, "Initial file listing did not appear without input"
+                startup_ms = (time.monotonic() - started_app) * 1000
+                (output / "startup.png").write_bytes((output / "current.png").read_bytes())
+                if options.preview == "closed":
+                    rc("send-text", "--match", "id:1", "i")
                 results = []
                 for index in range(options.samples):
                     if index % 3 == 0:
@@ -112,7 +130,7 @@ def main():
                         (output / f"action-{index}.png").write_bytes((output / "current.png").read_bytes())
                     time.sleep(.2)
                 ordered = sorted(r["observed_ms"] for r in results)
-                report = {"samples": results, "p95_observed_ms": ordered[(len(ordered)-1)*95//100],
+                report = {"preview": options.preview, "startup_observed_ms": startup_ms, "startup_listing_without_input": True, "samples": results, "p95_observed_ms": ordered[(len(ordered)-1)*95//100],
                           "median_observed_ms": ordered[len(ordered)//2], "terminal_pixels": before[0],
                           "method": "input API through pixel change; includes API/capture overhead"}
                 (output / "result.json").write_text(json.dumps(report, indent=2) + "\n")

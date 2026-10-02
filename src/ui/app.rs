@@ -3069,6 +3069,18 @@ impl App {
                 name: self.view.preview_name.as_deref(),
                 preview: self.view.preview.as_deref(),
                 scroll: self.preview_scroll,
+                pixel_image: {
+                    #[cfg(feature = "terminal-graphics")]
+                    {
+                        self.graphical
+                            .as_ref()
+                            .is_some_and(|state| !state.cell_mode)
+                    }
+                    #[cfg(not(feature = "terminal-graphics"))]
+                    {
+                        false
+                    }
+                },
                 graphics: Some(&mut self.graphics),
                 scale: self.cfg.preview.image_scale,
             };

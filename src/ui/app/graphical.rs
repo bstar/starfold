@@ -225,7 +225,17 @@ impl App {
 }
 impl Controller for App {
     fn frame_interval(&self) -> Duration {
-        if self.graphical.as_ref().unwrap().rendered_version != self.seen_version {
+        let graphics = self.graphical.as_ref().unwrap();
+        if graphics.rendered_version != self.seen_version
+            || (self.layout.preview_open
+                && self.editor.is_none()
+                && !self.audio_here()
+                && !graphics.cell_mode
+                && graphics
+                    .thumbnail
+                    .as_ref()
+                    .is_some_and(|worker| !worker.output.is_empty()))
+        {
             return Duration::ZERO;
         }
         let busy = self.view.loading
@@ -791,6 +801,38 @@ impl Controller for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_graphical_thumbnail_wakes_an_idle_scene() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        Controller::scene(&mut app, Viewport::default());
+        let idle = Controller::frame_interval(&app);
+        assert!(idle > Duration::ZERO);
+        let worker = starkit::terminal_graphics::assets::Thumbnailer::default();
+        worker.request("ready".into(), Arc::new(RgbaImage::new(8, 8)));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while worker.output.is_empty() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.graphical.as_mut().unwrap().thumbnail = Some(worker);
+        assert_eq!(Controller::frame_interval(&app), Duration::ZERO);
+        app.layout.preview_open = false;
+        assert_eq!(Controller::frame_interval(&app), idle);
+        app.layout.preview_open = true;
+        let state = app.graphical.as_mut().unwrap();
+        state.thumbnail.as_ref().unwrap().output.try_recv().unwrap();
+        assert_eq!(Controller::frame_interval(&app), idle);
+    }
+
     #[test]
     fn graphical_drag_preserves_marks_scroll_ownership_and_copy_identity() {
         let cfg = Config::default();

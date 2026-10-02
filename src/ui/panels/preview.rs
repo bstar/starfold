@@ -262,6 +262,8 @@ pub struct View<'a> {
     /// `None` means draw with half blocks or a quiet placeholder rather
     /// than a real protocol -- see the module doc.
     pub graphics: Option<&'a mut Graphics>,
+    /// A pixel renderer draws this image separately; retain metadata only.
+    pub pixel_image: bool,
     /// How much a picture smaller than the panel is grown by. See [`plan`].
     pub scale: Scale,
 }
@@ -713,7 +715,9 @@ fn render_image(
         .map(Graphics::pictures_available)
         .unwrap_or(false);
 
-    let placement = if usable {
+    let placement = if v.pixel_image {
+        None
+    } else if usable {
         // Left for the app's second pass -- see the module doc.
         let source = ImageId::of_arc(data);
         Some(Placement {
@@ -832,6 +836,7 @@ mod tests {
             preview,
             scroll: 0,
             graphics: None,
+            pixel_image: false,
             scale: Scale::default(),
         }
     }
@@ -1183,6 +1188,25 @@ mod tests {
             // The label is a string for every factor, decimal or not.
             prop_assert!(!scale_label(mode, p.factor).is_empty());
         }
+    }
+
+    #[test]
+    fn a_graphical_image_keeps_metadata_without_duplicate_half_blocks() {
+        let t = theme("terminal");
+        let data = Arc::new(RgbaImage::from_pixel(
+            4,
+            4,
+            starkit::image::Rgba([200, 100, 50, 255]),
+        ));
+        let mut v = view(&t, None, Some("harbour.png"));
+        v.pixel_image = true;
+        let body = Rect::new(0, 0, 40, 8);
+        let mut buf = Buffer::empty(body);
+        assert!(render_image(body, &mut buf, &mut v, &data, 4, 4, "png").is_none());
+        let text: String = buf.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(!text.contains('▀'));
+        assert!(text.contains("png"));
+        assert!(text.contains("4 × 4"));
     }
 
     #[test]
