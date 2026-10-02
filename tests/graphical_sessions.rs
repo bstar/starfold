@@ -59,7 +59,23 @@ impl Host {
         }
     }
     fn connect(&self) -> (UnixStream, BufReader<UnixStream>) {
-        let mut socket = UnixStream::connect(&self.socket).unwrap();
+        // bind creates the filesystem entry before listen completes. macOS
+        // can expose that short interval to the test's existence check.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut socket = loop {
+            match UnixStream::connect(&self.socket) {
+                Ok(socket) => break socket,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                    ) && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                Err(error) => panic!("connect to graphical fixture: {error}"),
+            }
+        };
         socket
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
