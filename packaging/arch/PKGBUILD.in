@@ -46,5 +46,6 @@ package() {
     install -Dm644 packaging/starfold.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/starfold.svg"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/starfold/LICENSE"
     install -Dm644 LICENSES/UnRAR.txt "$pkgdir/usr/share/licenses/starfold/UnRAR.txt"
+    install -Dm644 LICENSES/OFL-Liberation.txt "$pkgdir/usr/share/licenses/starfold/OFL-Liberation.txt"
     install -Dm644 README.md "$pkgdir/usr/share/doc/starfold/README.md"
 }

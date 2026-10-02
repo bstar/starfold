@@ -135,6 +135,7 @@
             # freedesktop assets, which mean nothing on macOS.
             postInstall = ''
               install -Dm644 LICENSES/UnRAR.txt $out/share/licenses/starfold/UnRAR.txt
+              install -Dm644 LICENSES/OFL-Liberation.txt $out/share/licenses/starfold/OFL-Liberation.txt
             '' + pkgsFor.lib.optionalString pkgsFor.stdenv.hostPlatform.isLinux ''
               install -Dm644 packaging/starfold.desktop \
                 $out/share/applications/starfold.desktop
@@ -156,7 +157,7 @@
       {
         packages.default = mkStarfold { };
         packages.starfold = mkStarfold { };
-        # The remote host package carries the protocol/controller, without Electron.
+        # Both local and remote graphical packages are native Rust.
         packages.graphical-host = mkStarfold { graphical = true; };
         packages.graphical = pkgs.symlinkJoin {
           name = "starfold-graphical-${cargoToml.package.version}";
@@ -164,8 +165,7 @@
           nativeBuildInputs = [ pkgs.makeWrapper ];
           postBuild = ''
             makeWrapper $out/bin/starfold $out/bin/starfold-graphical \
-              --add-flags graphical \
-              --set STAR_GRAPHICS_ELECTRON ${pkgs.electron}/bin/electron
+              --add-flags graphical
           '';
         };
 

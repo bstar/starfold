@@ -352,3 +352,16 @@ runtime hashes and matching smoke/FUSE tests. Do not mix architectures in the
 AppImage target cache or artifact names.
 Branch release dispatches build artifacts without publishing, while version
 tags create a draft release.
+
+## Native terminal graphics experiment
+
+On `experiment/terminal-graphics`, STAR/KIT owns the native Rust pixel renderer
+(`tiny-skia` and `cosmic-text`). Do not add browser engines, Electron, webviews
+or JavaScript rendering. The persistent FOLD controller and SSH scene relay
+remain shared with the cell presentation. Build through `nix develop -c cargo
+build --release --features terminal-graphics`; the local `starfold-graphical`
+wrapper invokes this checkout with the `graphical` subcommand. Leave the
+ordinary `starfold` link intact. Bundled font licensing ships in
+`LICENSES/OFL-Liberation.txt`. Renderer tests belong in KIT; FOLD tests cover
+application behavior and the relay. Physical macOS Kitty interaction remains
+a separate gate from headless CI.

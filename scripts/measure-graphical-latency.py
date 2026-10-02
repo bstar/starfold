@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure API input to observed Kitty pixels on an isolated STAR/FOLD fixture.
 
-Requires Pillow, Kitty >= 0.49, a graphical build and STAR_GRAPHICS_ELECTRON.
+Requires Pillow, Kitty >= 0.49, a native graphical build.
 Includes remote-control and screenshot overhead; not pure display latency.
 Does not change user configuration or operate on user files.
 """
@@ -85,10 +85,9 @@ def main():
                     assert terminal.poll() is None, "Kitty exited; inspect kitty.log"
                     try:
                         current = window()
-                        ready = current["in_alternate_screen"] and session_path.exists() and any(
-                            "/main.cjs" in " ".join(p["cmdline"])
-                            and "electron" in " ".join(p["cmdline"]).lower()
-                            for p in current["foreground_processes"])
+                        log_path = root / "app/cache/starfold.log"
+                        ready = current["in_alternate_screen"] and session_path.exists() and log_path.exists() and "Native Rust graphical renderer started" in log_path.read_text()
+                        assert not any("electron" in " ".join(p["cmdline"]).lower() for p in current["foreground_processes"]), "Unexpected browser process"
                         if ready:
                             break
                     except (subprocess.SubprocessError, IndexError):

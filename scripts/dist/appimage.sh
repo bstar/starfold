@@ -53,6 +53,7 @@ install -Dm644 packaging/starfold.png         "$appdir/usr/share/icons/hicolor/2
 install -Dm644 packaging/starfold.svg         "$appdir/usr/share/icons/hicolor/scalable/apps/starfold.svg"
 install -Dm644 README.md LICENSE -t           "$appdir/usr/share/doc/starfold/"
 install -Dm644 LICENSES/UnRAR.txt "$appdir/usr/share/doc/starfold/LICENSES/UnRAR.txt"
+install -Dm644 LICENSES/OFL-Liberation.txt "$appdir/usr/share/doc/starfold/LICENSES/OFL-Liberation.txt"
 cp "$appdir/starfold.png" "$appdir/.DirIcon"
 mkdir -p "$appdir/usr/lib"
 
