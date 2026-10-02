@@ -119,7 +119,13 @@ hidden native players stop publishing frames while audio continues.
 
 The graphical Nix package includes a matching helper. For a manual build, put the
 matching STAR/AMP experimental build on the graphical launcher's private PATH.
-This does not require replacing the normal `staramp` command.
+This does not require replacing the normal `staramp` command. On Linux, a raw
+Nix-built helper also needs its dynamic ALSA plugins. In the STAR/AMP checkout,
+build `nix build .#alsa-plugins --out-link target/alsa-plugins`, then point the
+private helper link at STAR/AMP's `scripts/run-local.sh`. The packaged graphical
+app includes this runtime setup automatically. `scripts/test-native-playback.py`
+in STAR/AMP verifies playback and native pointer controls with silent audio on
+a real output device.
 
 Capture the native layout with an isolated fixture (Kitty 0.49 or newer):
 
