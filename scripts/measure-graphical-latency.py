@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--samples", type=int, default=30)
     parser.add_argument("--preview", choices=["open", "closed"], default="open")
+    parser.add_argument("--navigation-only", action="store_true")
     options = parser.parse_args()
     assert 3 <= options.samples <= 300
     output = Path(options.output).resolve()
@@ -117,8 +118,9 @@ def main():
                         rc("send-key", "--match", "id:1", "alt+1")
                         time.sleep(.2)
                     before = quiet_pixels()
-                    action, key = [("navigation/preview", "j"), ("menu open", "shift+f10"),
-                                   ("menu close", "escape")][index % 3]
+                    action, key = (("navigation/preview", "j") if options.navigation_only else
+                                   [("navigation/preview", "j"), ("menu open", "shift+f10"),
+                                    ("menu close", "escape")][index % 3])
                     started = time.monotonic()
                     rc("send-key", "--match", "id:1", key)
                     while pixels() == before:
