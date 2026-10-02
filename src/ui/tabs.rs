@@ -372,7 +372,7 @@ pub fn rail(
         } else {
             normal
         };
-        let rect = Rect::new(x, area.y, w, 1);
+        let rect = Rect::new(x, area.y, w, area.height);
         if item.id == active {
             buf.set_string(x, area.y, " ".repeat((w - 1) as usize), active_style);
         }
@@ -380,7 +380,10 @@ pub fn rail(
         buf.set_string(x + 3, area.y, label.trim_end(), style);
         buf.set_string(x + w - 3, area.y, "×", style);
         // The close target must win over the tab's surrounding click area.
-        hits.push((Rect::new(x + w - 4, area.y, 3, 1), Hit::Close(item.id)));
+        hits.push((
+            Rect::new(x + w - 4, area.y, 3, area.height),
+            Hit::Close(item.id),
+        ));
         hits.push((rect, Hit::Tab(item.id)));
         x += w;
     }
@@ -388,7 +391,7 @@ pub fn rail(
         let w = text.chars().count() as u16;
         if x + w <= area.right() {
             buf.set_string(x, area.y, text, normal);
-            hits.push((Rect::new(x, area.y, w, 1), hit));
+            hits.push((Rect::new(x, area.y, w, area.height), hit));
             x += w;
         }
     }

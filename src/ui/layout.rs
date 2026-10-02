@@ -127,6 +127,8 @@ pub struct LayoutState {
     /// with anything else.
     pub preview_open: bool,
     pub tabs_visible: bool,
+    /// Pixel presentation reserves extra vertical padding for tabs.
+    pub tab_rows: u16,
     /// An embedded player reserves ten body rows when possible, five at
     /// the terminal floor, temporarily borrowing rows from the file list.
     pub audio_active: bool,
@@ -156,6 +158,7 @@ impl LayoutState {
             focus: ModuleId::Stack,
             preview_open: true,
             tabs_visible: false,
+            tab_rows: 1,
             audio_active: false,
             editor_active: false,
             ops_active: false,
@@ -188,10 +191,15 @@ impl LayoutState {
             height: 1,
             ..area
         };
-        let tab_rows = u16::from(self.tabs_visible);
+        let tab_rows = if self.tabs_visible {
+            self.tab_rows
+                .clamp(1, area.height.saturating_sub(MIN_ROWS).saturating_add(1))
+        } else {
+            0
+        };
         let tabs = self
             .tabs_visible
-            .then(|| Rect::new(area.x, area.y, area.width, 1));
+            .then(|| Rect::new(area.x, area.y, area.width, tab_rows));
         let body = Rect {
             y: area.y + tab_rows,
             height: area.height - 1 - tab_rows,

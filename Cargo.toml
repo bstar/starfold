@@ -35,7 +35,7 @@ terminal-graphics = ["starkit/terminal-graphics"]
 # The `version` is not redundant with the tag: cargo-deny counts a dependency
 # with no version requirement as a wildcard and `wildcards = "deny"` refuses
 # it, whether or not the source is a git URL pinned to a tag.
-starkit = { git = "https://github.com/bstar/starkit", rev = "0a783fbf18d7e5d6cc66e6b35f9470b066fe674b", version = "0.3", default-features = false, features = [
+starkit = { git = "https://github.com/bstar/starkit", rev = "6276011cd780e35da6eb5c930c2bbc7367f87b79", version = "0.3", default-features = false, features = [
     "image",
 ] }
 

@@ -487,6 +487,20 @@ impl Controller for App {
             let items = self.tab_items();
             let active = self.core.state().tabs.active().id;
             for (rect, hit) in &self.tab_hits {
+                let control = match hit {
+                    super::super::tabs::Hit::Previous => Some("‹"),
+                    super::super::tabs::Hit::Next => Some("›"),
+                    super::super::tabs::Hit::New => Some("+"),
+                    _ => None,
+                };
+                if let Some(label) = control {
+                    scene.components.push(Component::Tab {
+                        rect: (*rect).into(),
+                        label: label.into(),
+                        active: false,
+                        close: None,
+                    });
+                }
                 if let super::super::tabs::Hit::Tab(id) = hit {
                     if let Some(item) = items.iter().find(|item| item.id == *id) {
                         scene.components.push(Component::Tab {
@@ -503,6 +517,19 @@ impl Controller for App {
                     }
                 }
             }
+        }
+        // Draw pixel scrollbars from the exact geometry used for pointer grabs.
+        // Add before modal chrome so menus can cover the underlying track.
+        for (track, thumb) in self.bars.visible() {
+            scene.components.push(Component::Scrollbar {
+                rect: track.into(),
+                thumb: starkit::terminal_graphics::Rect {
+                    x: track.x,
+                    y: track.y.saturating_add(thumb.start),
+                    width: track.width,
+                    height: thumb.len,
+                },
+            });
         }
         for component in &scene.components {
             match component {
@@ -904,9 +931,14 @@ mod tests {
             fake.pump();
             app.tick();
         }
-        Controller::scene(&mut app, viewport);
+        let scene = Controller::scene(&mut app, viewport);
         let source_track = app.bars.track_of(Bar::Commander(0)).unwrap();
         let target_track = app.bars.track_of(Bar::Commander(1)).unwrap();
+        for track in [source_track, target_track] {
+            assert!(scene.components.iter().any(|component| matches!(component,
+                Component::Scrollbar { rect, thumb } if *rect == track.into()
+                    && thumb.y >= rect.y && thumb.y + thumb.height <= rect.y + rect.height)));
+        }
         let source_key = app.panes[0].key;
         let target_key = app.panes[1].key;
         let source_scroll = app.scroll.get(&source_key).copied().unwrap_or(0);

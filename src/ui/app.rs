@@ -2947,7 +2947,19 @@ impl App {
         let mut bars = std::mem::take(&mut self.bars);
         bars.begin_frame();
 
-        let padding = (self.cfg.ui.padding_x, self.cfg.ui.padding_y);
+        #[allow(unused_mut)]
+        let mut padding = (self.cfg.ui.padding_x, self.cfg.ui.padding_y);
+        #[cfg(feature = "terminal-graphics")]
+        {
+            let pixels = self
+                .graphical
+                .as_ref()
+                .is_some_and(|state| !state.cell_mode);
+            self.layout.tab_rows = if pixels { 2 } else { 1 };
+            if pixels && area.width >= layout::MIN_COLS + 4 && area.height >= layout::MIN_ROWS + 2 {
+                padding = (padding.0.max(2), padding.1.max(1));
+            }
+        }
         let incoming = self.dnd.receiving_uri && self.dnd.choice.is_some();
         let queued = u16::try_from(
             self.view.ops.len()

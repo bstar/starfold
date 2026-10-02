@@ -25,10 +25,10 @@ target/release/starfold graphical ~/Pictures
 
 No separate graphical runtime or display server is required by the renderer.
 Kitty supplies the final image display. Normal `starfold` continues to use the
-standard CLI/TUI. The graphical layout defaults to 150% scale:
+standard CLI/TUI. The graphical layout defaults to the terminal’s measured size (100% scale):
 
 ```sh
-STAR_GRAPHICS_SCALE=100 starfold-graphical
+STAR_GRAPHICS_SCALE=150 starfold-graphical
 ```
 
 Accepted scale values are 100–200. File labels use shaped sans-serif text,
