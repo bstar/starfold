@@ -3207,7 +3207,7 @@ impl App {
 
         #[cfg(feature = "terminal-graphics")]
         if let Some(graphical) = &mut self.graphical {
-            if graphical.pixel_layout
+            if !graphical.cell_mode
                 && (self.overlays.is_open() || self.places.is_some() || self.tab_picker.is_some())
             {
                 graphical.base_buffer = Some(buf.clone());

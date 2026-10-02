@@ -29,6 +29,11 @@ pub(super) struct State {
     authorization: Option<Authorization>,
     pub(super) wire: Option<crossbeam_channel::Receiver<wire_dnd::Outgoing>>,
 }
+impl State {
+    pub(super) fn uses_pixel_layout(&self) -> bool {
+        self.pixel_layout && self.padded_chrome && self.surface_mode && !self.cell_mode
+    }
+}
 struct Drag {
     origin: (u16, u16),
     stack: usize,
@@ -538,7 +543,18 @@ impl Controller for App {
         }
     }
     fn scene(&mut self, viewport: Viewport) -> Scene {
+        if self
+            .graphical
+            .as_ref()
+            .unwrap()
+            .viewport
+            .is_some_and(|old| old != viewport)
+        {
+            Controller::input(self, Input::CancelPointer);
+        }
         let state = self.graphical.as_mut().unwrap();
+        state.placements.clear();
+        state.viewport = Some(viewport);
         // Keep compact chrome at the established terminal floor.
         state.padded_chrome = !state.cell_mode
             && state.surface_mode
@@ -559,7 +575,11 @@ impl Controller for App {
         let base_buffer = self.graphical.as_mut().unwrap().base_buffer.take();
         let background = base_buffer.as_ref().unwrap_or(&buffer);
         let base_scrollbars = std::mem::take(&mut self.graphical.as_mut().unwrap().base_scrollbars);
-        let mut scene = Scene::from_buffer(background, viewport, 0);
+        // Only pixel layers carry popup spans separately. Cell/legacy painters
+        // still receive the complete foreground buffer, while row styling uses
+        // the unoccluded snapshot whenever one is available.
+        let pixels = self.graphical.as_ref().unwrap().uses_pixel_layout();
+        let mut scene = Scene::from_buffer(if pixels { background } else { &buffer }, viewport, 0);
         scene.accent = hex(self.theme.accent);
         scene.border = hex(self.theme.border);
         let Some(regions) = self.layout.last.clone() else {
@@ -1008,7 +1028,7 @@ impl Controller for App {
         let state = self.graphical.as_mut().unwrap();
         state.placements.clear();
         state.viewport = Some(viewport);
-        if native && state.padded_chrome && state.pixel_layout && state.authorization.is_none() {
+        if state.uses_pixel_layout() && state.authorization.is_none() {
             let overlay_spans = if modal {
                 Scene::from_buffer(&buffer, viewport, 0).spans
             } else {
@@ -1240,6 +1260,45 @@ mod tests {
             }
         }
         panic!("logical cell {x},{y} is unreachable through cell-pointer input: {p:?}");
+    }
+
+    #[test]
+    fn graphical_fallback_keeps_popup_spans_when_pixel_layout_is_unavailable() {
+        for (cells, surfaces, rows) in [(true, true, 40), (false, true, 24), (false, false, 40)] {
+            let cfg = Config::default();
+            let (core, fake) = crate::ui::fake::handle(cfg.core());
+            let mut app = App::new(
+                core,
+                cfg,
+                fake.home().join("config.toml"),
+                None,
+                Graphics::disabled(),
+            );
+            app.enable_graphical();
+            let state = app.graphical.as_mut().unwrap();
+            state.pixel_layout = true;
+            state.cell_mode = cells;
+            state.surface_mode = surfaces;
+            let v = Viewport {
+                rows,
+                height: u32::from(rows) * 20,
+                ..Viewport::default()
+            };
+            Controller::scene(&mut app, v);
+            Controller::input(
+                &mut app,
+                Input::Key {
+                    code: "char:c".into(),
+                    modifiers: 0,
+                },
+            );
+            let menu = Controller::scene(&mut app, v);
+            assert!(menu.placements.is_empty());
+            assert!(
+                menu.spans.iter().any(|s| s.text.contains("Rename")),
+                "Fallback lost popup content"
+            );
+        }
     }
 
     #[test]
@@ -1559,6 +1618,21 @@ mod tests {
         pointer(&mut app, "down", source_track.x, source_track.y);
         assert_eq!(app.bars.held(), Some(Bar::Commander(0)));
         assert!(app.graphical.as_ref().unwrap().drag.is_none());
+        if pixel_layout {
+            Controller::scene(
+                &mut app,
+                Viewport {
+                    width: viewport.width + 1,
+                    generation: 2,
+                    ..viewport
+                },
+            );
+            assert!(app.bars.held().is_none());
+            assert!(app.graphical.as_ref().unwrap().pointer_capture.is_none());
+            Controller::scene(&mut app, viewport);
+            pointer(&mut app, "down", source_track.x, source_track.y);
+            assert_eq!(app.bars.held(), Some(Bar::Commander(0)));
+        }
         pointer(
             &mut app,
             "drag",
