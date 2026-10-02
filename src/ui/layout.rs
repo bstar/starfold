@@ -179,7 +179,10 @@ impl LayoutState {
     /// queue count.
     pub fn regions(&mut self, full: Rect, pad: (u16, u16), queued: u16) -> Option<&Regions> {
         let area = inset(full, pad);
-        if area.width < MIN_COLS || area.height < MIN_ROWS {
+        let extra = starkit::chrome::frame::extra_rows();
+        let min_rows = MIN_ROWS + 3 * extra;
+        let collapsed_rows = COLLAPSED_ROWS + extra;
+        if area.width < MIN_COLS || area.height < min_rows {
             self.last = None;
             return None;
         }
@@ -193,7 +196,7 @@ impl LayoutState {
         };
         let tab_rows = if self.tabs_visible {
             self.tab_rows
-                .clamp(1, area.height.saturating_sub(MIN_ROWS).saturating_add(1))
+                .clamp(1, area.height.saturating_sub(min_rows).saturating_add(1))
         } else {
             0
         };
@@ -210,12 +213,12 @@ impl LayoutState {
         // than that the body is. The `MIN_ROWS` check above guarantees this
         // does not underflow.
         let stack_min = if self.audio_active || self.editor_active {
-            8
+            8 + extra
         } else {
-            STACK_MIN_ROWS
+            STACK_MIN_ROWS + extra
         }
         .saturating_sub(tab_rows);
-        let room = body.height - stack_min - 2 * COLLAPSED_ROWS;
+        let room = body.height - stack_min - 2 * collapsed_rows;
 
         // OPERATIONS only grows while focused, and then it is served first:
         // focusing it is asking to see the queue, and a queue that could not
@@ -246,7 +249,7 @@ impl LayoutState {
         } else if self.focus == ModuleId::Preview {
             // Up to half the body while focused, not capped by
             // `preview_rows` -- the reader asked to look at it.
-            (body.height / 2).saturating_sub(COLLAPSED_ROWS)
+            (body.height / 2).saturating_sub(collapsed_rows)
         } else {
             self.preview_rows.min(room / 2)
         };
@@ -257,8 +260,8 @@ impl LayoutState {
 
         let height = |m: ModuleId| match m {
             ModuleId::Stack => stack_min + stack_extra,
-            ModuleId::Preview => COLLAPSED_ROWS + preview_extra,
-            ModuleId::Operations => COLLAPSED_ROWS + ops_extra,
+            ModuleId::Preview => collapsed_rows + preview_extra,
+            ModuleId::Operations => collapsed_rows + ops_extra,
         };
 
         let mut modules = [Rect::new(0, 0, 0, 0); 3];

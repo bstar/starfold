@@ -10,6 +10,7 @@ pub(super) struct State {
     pub effects: Vec<ServerMessage>,
     pub output_pending: bool,
     pub(super) cell_mode: bool,
+    padded_chrome: bool,
     image_source: Option<Arc<RgbaImage>>,
     image_sequence: u64,
     image_id: Option<String>,
@@ -287,6 +288,8 @@ impl Controller for App {
         Controller::input(self, Input::CancelPointer);
     }
     fn tick(&mut self) {
+        let _chrome =
+            starkit::chrome::frame::padding_scope(self.graphical.as_ref().unwrap().padded_chrome);
         App::tick(self);
         if let Some(op) = self.pending_elevated_delete.take() {
             // No controlling TTY exists on a headless SSH host. -S uses stdin
@@ -345,6 +348,13 @@ impl Controller for App {
         }
     }
     fn scene(&mut self, viewport: Viewport) -> Scene {
+        let state = self.graphical.as_mut().unwrap();
+        // Keep compact chrome at the established terminal floor.
+        state.padded_chrome = !state.cell_mode
+            && viewport.rows
+                >= (layout::MIN_ROWS + 6)
+                    .saturating_add(self.cfg.ui.padding_y.max(1).saturating_mul(2));
+        let _chrome = starkit::chrome::frame::padding_scope(state.padded_chrome);
         self.audio_cell_size = Some((
             (viewport.width / u32::from(viewport.columns)).clamp(1, 64) as u16,
             (viewport.height / u32::from(viewport.rows)).clamp(1, 128) as u16,
@@ -686,6 +696,8 @@ impl Controller for App {
         scene
     }
     fn input(&mut self, input: Input) {
+        let _chrome =
+            starkit::chrome::frame::padding_scope(self.graphical.as_ref().unwrap().padded_chrome);
         if self.graphical.as_ref().unwrap().authorization.is_some() {
             use std::io::Write;
             let mut cancel = false;
