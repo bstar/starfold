@@ -50,7 +50,9 @@ use super::panels::{ModuleId, COLUMN};
 
 /// Shared geometry for drawing and hit-testing Commander's two file panes.
 pub fn pane_rect(area: Rect, pane: usize) -> Rect {
-    let left = area.width / 2;
+    let gap = starkit::chrome::frame::extra_rows().min(area.width);
+    let width = area.width.saturating_sub(gap);
+    let left = width / 2;
     if pane == 0 {
         Rect {
             width: left,
@@ -58,8 +60,8 @@ pub fn pane_rect(area: Rect, pane: usize) -> Rect {
         }
     } else {
         Rect {
-            x: area.x + left,
-            width: area.width - left,
+            x: area.x + left + gap,
+            width: width - left,
             ..area
         }
     }
@@ -180,7 +182,9 @@ impl LayoutState {
     pub fn regions(&mut self, full: Rect, pad: (u16, u16), queued: u16) -> Option<&Regions> {
         let area = inset(full, pad);
         let extra = starkit::chrome::frame::extra_rows();
-        let min_rows = MIN_ROWS + 3 * extra;
+        let gap = extra / 2;
+        let gutters = gap * 2;
+        let min_rows = MIN_ROWS + 3 * extra + gutters;
         let collapsed_rows = COLLAPSED_ROWS + extra;
         if area.width < MIN_COLS || area.height < min_rows {
             self.last = None;
@@ -218,7 +222,7 @@ impl LayoutState {
             STACK_MIN_ROWS + extra
         }
         .saturating_sub(tab_rows);
-        let room = body.height - stack_min - 2 * collapsed_rows;
+        let room = body.height - gutters - stack_min - 2 * collapsed_rows;
 
         // OPERATIONS only grows while focused, and then it is served first:
         // focusing it is asking to see the queue, and a queue that could not
@@ -273,7 +277,7 @@ impl LayoutState {
                 height: h,
                 ..body
             };
-            y += h;
+            y += h + if m == ModuleId::Operations { 0 } else { gap };
         }
 
         self.last = Some(Regions {
@@ -360,6 +364,29 @@ mod tests {
 
     fn state() -> LayoutState {
         LayoutState::new(10, 6, 6)
+    }
+
+    #[test]
+    fn native_gutters_separate_panes_and_do_not_capture_clicks() {
+        let _chrome = starkit::chrome::frame::padding_scope(true);
+        let mut layout = state();
+        let regions = layout
+            .regions(Rect::new(0, 0, 100, MIN_ROWS + 8), (0, 0), 0)
+            .cloned()
+            .unwrap();
+        let stack = regions.rect_of(ModuleId::Stack);
+        let preview = regions.rect_of(ModuleId::Preview);
+        let operations = regions.rect_of(ModuleId::Operations);
+        assert_eq!(preview.y, stack.bottom() + 1);
+        assert_eq!(operations.y, preview.bottom() + 1);
+        assert_eq!(operations.bottom(), regions.status.y);
+        assert_eq!(regions.hit(stack.x, stack.bottom()), None);
+        let left = pane_rect(stack, 0);
+        let right = pane_rect(stack, 1);
+        assert_eq!(right.x, left.right() + 2);
+        assert_eq!(right.right(), stack.right());
+        assert!(!left.contains((left.right(), left.y).into()));
+        assert!(!right.contains((left.right(), left.y).into()));
     }
 
     fn min_height(m: ModuleId) -> u16 {

@@ -462,7 +462,7 @@ pub fn body(area: Rect) -> Rect {
 }
 
 fn pad_body(body: Rect) -> Rect {
-    if body.width < 3 {
+    if starkit::chrome::frame::extra_rows() > 0 || body.width < 3 {
         return body;
     }
     Rect {

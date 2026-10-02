@@ -352,7 +352,7 @@ impl Controller for App {
         // Keep compact chrome at the established terminal floor.
         state.padded_chrome = !state.cell_mode
             && viewport.rows
-                >= (layout::MIN_ROWS + 6)
+                >= (layout::MIN_ROWS + 8)
                     .saturating_add(self.cfg.ui.padding_y.max(1).saturating_mul(2));
         let _chrome = starkit::chrome::frame::padding_scope(state.padded_chrome);
         self.audio_cell_size = Some((
@@ -905,7 +905,7 @@ mod tests {
         app.tick();
         let viewport = Viewport {
             columns: 100,
-            rows: 30,
+            rows: 40,
             ..Viewport::default()
         };
         let scene = Controller::scene(&mut app, viewport);

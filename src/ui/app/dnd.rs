@@ -865,7 +865,7 @@ impl App {
         } else {
             (0, area)
         };
-        if y == rect.y {
+        if !rect.contains((x, y).into()) || y == rect.y {
             return None;
         }
         let state = self.core.state();

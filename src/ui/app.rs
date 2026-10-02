@@ -2517,6 +2517,9 @@ impl App {
             let area = regions.rect_of(ModuleId::Stack);
             let pane = usize::from(m.column >= area.x + area.width / 2);
             let rect = pane_rect(area, pane);
+            if !rect.contains((m.column, m.row).into()) {
+                return;
+            }
             match kind {
                 MouseEventKind::Down(button) => {
                     self.focus_pane(pane);
