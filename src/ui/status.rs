@@ -427,7 +427,7 @@ pub fn native_surface(
     if matches!(kind, MiddleKind::Hints) {
         let mut left = x;
         for (key, desc) in v.hints {
-            let kw = (key.chars().count() as u16 * cw + 8).max(ch);
+            let kw = ((width_of(key) + 1) * cw + 8).max(ch);
             let dw = desc.chars().count() as u16 * cw;
             if left + kw + dw + 12 > x + w {
                 break;
@@ -440,6 +440,10 @@ pub fn native_surface(
                 m.font,
                 true,
             );
+            if let Some(starkit::native_surface::Primitive::Text { mono, .. }) = s.nodes.last_mut()
+            {
+                *mono = true;
+            }
             s.text(
                 R::new(left + kw + 4, 1, dw, h - 1),
                 *desc,

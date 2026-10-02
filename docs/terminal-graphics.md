@@ -104,6 +104,11 @@ continuous storage meters, and the padded status bar. Tabs keep their close
 buttons and grow with the label within a bounded width. Operations collapses to
 an idle/history strip and expands for active work, failures, or explicit focus.
 These surfaces are negotiated using the `native_surfaces` frontend capability.
+The additive `pixel_layout` capability supplies shared KIT pixel gaps and panel
+insets, independent of terminal cell proportions. Rendering and mouse projection
+use the same placements, including modal layers and captured scrollbars. Fonts
+retain terminal-derived sizes; text bitmaps are not resized. Older clients keep
+their original cell geometry.
 
 STAR/AMP's native player lives in STAR/AMP (`src/embed/native.rs`). The optional
 `native_surface_v1` embed extension returns KIT primitives and owns transport,
@@ -115,3 +120,16 @@ hidden native players stop publishing frames while audio continues.
 The graphical Nix package includes a matching helper. For a manual build, put the
 matching STAR/AMP experimental build on the graphical launcher's private PATH.
 This does not require replacing the normal `staramp` command.
+
+Capture the native layout with an isolated fixture (Kitty 0.49 or newer):
+
+```sh
+python3 scripts/test-native-layout.py \
+  --binary target/release/starfold --staramp /path/to/staramp \
+  --kitty /path/to/kitty --kitten /path/to/kitten --output /tmp/fold-layout
+```
+
+Use `--theme catppuccin-latte` for the light-theme fixture and `--x11` under
+Linux Xvfb. The script captures Fold, Commander/tabs, a popup, the embedded
+player, pause and enlarged text. Its silent WAV checks presentation, not audible
+playback. It does not modify the user's application configuration or files.

@@ -369,20 +369,22 @@ a separate gate from headless CI.
 ## Native surface experiment
 
 Pixel chrome uses structured panel regions and KIT surfaces; it must not infer
-panels by scanning border characters. The cell controller remains the geometry
-source for terminal input until the transport offers actual pixel pointers.
+panels by scanning border characters. The cell controller supplies logical hit coordinates; KIT pixel placements
+map terminal cell-centre input onto those coordinates.
 STAR/AMP owns `native_surface_v1`; this repository only negotiates, validates,
 places and forwards input. The graphical Nix package pins its matching helper
 on a private runtime PATH, leaving the ordinary STAR/AMP command independent.
 
-### Completion audit: native pixel layout still open
+### Native pixel layout and verification
 
-The native chrome migration is not complete: `ui/layout.rs::pane_rect` still
-uses two terminal columns as the Commander gap, and `LayoutState::regions`
-uses a terminal row between modules. At 10×20 px cells those are both 20 px,
-while KIT's `native_surface::Metrics` requests a 9 px gap for that font size.
-Replace this remaining cell-derived spacing with a shared pixel layout and
-matching input mapping before declaring the cohesive native layout plan done.
-Rerun the full native screen/hit fixtures after that migration. Physical macOS
-Kitty interaction remains separately unverified; green headless CI is not that
-proof.
+`graphical::pixel_placements` uses KIT column/split helpers and Metrics for
+actual pane gaps, margins and header/border insets. `ui/layout.rs` still supplies
+logical controller rectangles for compatibility; its cell gaps are not painted
+by a `pixel_layout` frontend. KIT uses the same placement row edges for raster
+painting and pointer projection. Scrollbar captures stay in their source region,
+while file drags resolve the current receiving region. Unoccluded base buffers
+are captured before modal painting, and popup spans are separate layers.
+
+Keep ordinary cell clients and older graphical clients on their negotiated
+geometry. Terminal pointer precision remains cells. Physical macOS Kitty
+interaction remains separately unverified; green headless CI is not that proof.

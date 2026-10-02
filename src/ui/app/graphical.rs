@@ -12,6 +12,12 @@ pub(super) struct State {
     pub(super) cell_mode: bool,
     pub(super) surface_mode: bool,
     padded_chrome: bool,
+    pub(super) pixel_layout: bool,
+    pub(super) base_buffer: Option<Buffer>,
+    pub(super) base_scrollbars: Vec<Component>,
+    placements: Vec<starkit::terminal_graphics::placement::Placement>,
+    viewport: Option<Viewport>,
+    pointer_capture: Option<starkit::terminal_graphics::placement::Placement>,
     image_source: Option<Arc<RgbaImage>>,
     image_sequence: u64,
     image_id: Option<String>,
@@ -52,6 +58,132 @@ fn color(c: starkit::ratatui::style::Color, fallback: &str) -> String {
         _ => fallback.into(),
     }
 }
+/// Pixel presentation keeps controller cells as logical coordinates only. The
+/// renderer and pointer adapter share these placements, including modal layers.
+fn pixel_placements(
+    regions: &Regions,
+    commander: bool,
+    v: Viewport,
+    modals: &[Rect],
+    overlay: &[Span],
+) -> Vec<starkit::terminal_graphics::placement::Placement> {
+    use starkit::native_surface::{Metrics, PixelRect as R};
+    use starkit::terminal_graphics::placement::{self, Placement};
+    let cw = (v.width / u32::from(v.columns)).max(1) as u16;
+    let ch = (v.height / u32::from(v.rows)).max(1) as u16;
+    let metrics = Metrics::from_cell(cw, ch);
+    let margin = metrics.gap;
+    let top = if regions.tabs.is_some() {
+        metrics.small
+    } else {
+        margin
+    };
+    let area = R::new(
+        margin,
+        top,
+        (v.width as u16).saturating_sub(2 * margin),
+        (v.height as u16).saturating_sub(top + margin),
+    );
+    let mut sources = Vec::new();
+    if let Some(tabs) = regions.tabs {
+        sources.push(tabs);
+    }
+    let flexible = sources.len();
+    sources.extend(
+        [ModuleId::Stack, ModuleId::Preview, ModuleId::Operations].map(|id| regions.rect_of(id)),
+    );
+    sources.push(regions.status);
+    let heights: Vec<_> = sources
+        .iter()
+        .map(|r| {
+            if r.height == 2 {
+                metrics.control
+            } else {
+                r.height.saturating_mul(ch)
+            }
+        })
+        .collect();
+    let targets = placement::column(area, metrics.gap, &heights, flexible);
+    let mut result = Vec::new();
+    for (i, (source, target)) in sources.into_iter().zip(targets).enumerate() {
+        if source.width == 0 || source.height == 0 || target.width == 0 || target.height == 0 {
+            continue;
+        }
+        if i == flexible && commander {
+            for (pane, target) in placement::split(target, metrics.gap)
+                .into_iter()
+                .enumerate()
+            {
+                result.push(Placement::new(pane_rect(source, pane).into(), target));
+            }
+        } else {
+            result.push(Placement::new(source.into(), target));
+        }
+    }
+    for p in &mut result {
+        if p.source.height >= 6
+            && Some(p.source) != regions.tabs.map(Into::into)
+            && p.source != regions.status.into()
+        {
+            p.padding = Some(placement::PanelPadding {
+                inset: metrics.inset,
+                gap: metrics.gap,
+            });
+        }
+    }
+    for source in modals {
+        if source.width == 0 || source.height == 0 {
+            continue;
+        }
+        let parent = result
+            .iter()
+            .rev()
+            .find(|p| p.source.contains(source.x, source.y));
+        let (x, y) = parent
+            .map(|p| {
+                (
+                    p.target.x
+                        + (u32::from(source.x - p.source.x) * u32::from(p.target.width)
+                            / u32::from(p.source.width)) as u16,
+                    p.target.y + p.row_edge(source.y - p.source.y).round() as u16,
+                )
+            })
+            .unwrap_or((source.x.saturating_mul(cw), source.y.saturating_mul(ch)));
+        let width = source.width.saturating_mul(cw).min(v.width as u16);
+        let height = source.height.saturating_mul(ch).min(v.height as u16);
+        result.push(Placement {
+            source: (*source).into(),
+            target: R::new(
+                x.min(v.width as u16 - width),
+                y.min(v.height as u16 - height),
+                width,
+                height,
+            ),
+            padding: None,
+            overlay: Some(
+                overlay
+                    .iter()
+                    .filter(|s| s.y >= source.y && s.y < source.bottom())
+                    .cloned()
+                    .collect(),
+            ),
+        });
+    }
+    result
+}
+
+pub(super) fn scrollbar(track: Rect, thumb: starkit::chrome::scrollbar::Thumb) -> Component {
+    Component::Scrollbar {
+        rect: track.into(),
+        thumb: starkit::terminal_graphics::Rect {
+            x: track.x,
+            y: track.y.saturating_add(thumb.start),
+            width: track.width,
+            height: thumb.len,
+        },
+    }
+}
+
 fn key_code(code: &str) -> Option<KeyCode> {
     if let Some(text) = code.strip_prefix("char:") {
         let mut chars = text.chars();
@@ -240,7 +372,7 @@ fn native_header(
         rect.x + 1,
         rect.y + 1,
         rect.width.saturating_sub(2),
-        2.min(rect.height.saturating_sub(2)),
+        1.min(rect.height.saturating_sub(2)),
     );
     let mut surface = Surface::new(
         area.width * cw,
@@ -320,6 +452,7 @@ impl Controller for App {
         self.dnd.enabled = false;
         self.graphical.as_mut().unwrap().cell_mode = false;
         self.graphical.as_mut().unwrap().surface_mode = false;
+        self.graphical.as_mut().unwrap().pixel_layout = false;
         self.graphics.set_mode(Mode::Off);
     }
     fn capabilities(
@@ -330,6 +463,7 @@ impl Controller for App {
             == starkit::terminal_graphics::capabilities::ImageTransport::None;
         self.graphical.as_mut().unwrap().cell_mode = cells;
         self.graphical.as_mut().unwrap().surface_mode = capabilities.native_surfaces;
+        self.graphical.as_mut().unwrap().pixel_layout = capabilities.pixel_layout;
         self.graphics
             .set_mode(if cells { Mode::Blocks } else { Mode::Off });
     }
@@ -418,9 +552,14 @@ impl Controller for App {
         ));
         let area = Rect::new(0, 0, viewport.columns, viewport.rows);
         let mut buffer = Buffer::empty(area);
+        self.graphical.as_mut().unwrap().base_buffer = None;
+        self.graphical.as_mut().unwrap().base_scrollbars.clear();
         self.draw(area, &mut buffer);
         self.graphical.as_mut().unwrap().rendered_version = self.seen_version;
-        let mut scene = Scene::from_buffer(&buffer, viewport, 0);
+        let base_buffer = self.graphical.as_mut().unwrap().base_buffer.take();
+        let background = base_buffer.as_ref().unwrap_or(&buffer);
+        let base_scrollbars = std::mem::take(&mut self.graphical.as_mut().unwrap().base_scrollbars);
+        let mut scene = Scene::from_buffer(background, viewport, 0);
         scene.accent = hex(self.theme.accent);
         scene.border = hex(self.theme.border);
         let Some(regions) = self.layout.last.clone() else {
@@ -621,8 +760,8 @@ impl Controller for App {
                         .take(usize::from(list.height))
                     {
                         let y = list.y + (index - view.scroll) as u16;
-                        let cell = &buffer[(list.x, y)];
-                        let name_cell = &buffer[(
+                        let cell = &background[(list.x, y)];
+                        let name_cell = &background[(
                             list.x.saturating_add(3).min(list.right().saturating_sub(1)),
                             y,
                         )];
@@ -692,17 +831,21 @@ impl Controller for App {
         }
         // Draw pixel scrollbars from the exact geometry used for pointer grabs.
         // Add before modal chrome so menus can cover the underlying track.
-        for (track, thumb) in self.bars.visible() {
-            scene.components.push(Component::Scrollbar {
-                rect: track.into(),
-                thumb: starkit::terminal_graphics::Rect {
-                    x: track.x,
-                    y: track.y.saturating_add(thumb.start),
-                    width: track.width,
-                    height: thumb.len,
-                },
-            });
-        }
+        let current_scrollbars: Vec<_> = self
+            .bars
+            .visible()
+            .map(|(track, thumb)| scrollbar(track, thumb))
+            .collect();
+        let overlay_scrollbars: Vec<_> = if base_buffer.is_some() {
+            scene.components.extend(base_scrollbars.iter().cloned());
+            current_scrollbars
+                .into_iter()
+                .filter(|bar| !base_scrollbars.contains(bar))
+                .collect()
+        } else {
+            scene.components.extend(current_scrollbars);
+            Vec::new()
+        };
         for component in &scene.components {
             match component {
                 Component::ListRow { rect, label, .. } => {
@@ -799,6 +942,7 @@ impl Controller for App {
                 });
             }
         }
+        scene.components.extend(overlay_scrollbars);
         if let Some(auth) = self.graphical.as_ref().unwrap().authorization.as_ref() {
             let width = viewport.columns.saturating_sub(4).min(64);
             let x = viewport.columns.saturating_sub(width) / 2;
@@ -860,6 +1004,38 @@ impl Controller for App {
                     bold: line == 0,
                 });
             }
+        }
+        let state = self.graphical.as_mut().unwrap();
+        state.placements.clear();
+        state.viewport = Some(viewport);
+        if native && state.padded_chrome && state.pixel_layout && state.authorization.is_none() {
+            let overlay_spans = if modal {
+                Scene::from_buffer(&buffer, viewport, 0).spans
+            } else {
+                Vec::new()
+            };
+            scene.placements = pixel_placements(
+                &regions,
+                self.commander,
+                viewport,
+                &modal_rects,
+                &overlay_spans,
+            );
+            for p in &scene.placements {
+                (
+                    p.source.x,
+                    p.source.y,
+                    p.source.width,
+                    p.source.height,
+                    p.target.x,
+                    p.target.y,
+                    p.target.width,
+                    p.target.height,
+                )
+                    .hash(&mut targets);
+            }
+            scene.interaction = targets.finish();
+            state.placements = scene.placements.clone();
         }
         scene
     }
@@ -953,7 +1129,42 @@ impl Controller for App {
                 x,
                 y,
                 modifiers,
-            } => self.graphical_pointer(&action, button, x, y, modifiers),
+            } => {
+                let state = self.graphical.as_ref().unwrap();
+                if state.placements.is_empty() {
+                    self.graphical_pointer(&action, button, x, y, modifiers);
+                } else if let Some(v) = state.viewport {
+                    let captured =
+                        self.bars.held().is_some() && matches!(action.as_str(), "drag" | "up");
+                    let placement = if captured {
+                        state.pointer_capture.as_ref()
+                    } else {
+                        state
+                            .placements
+                            .iter()
+                            .rev()
+                            .find(|p| p.pointer(v, x, y, false).is_some())
+                    }
+                    .cloned();
+                    if let Some(p) = placement {
+                        if let Some((sx, sy)) = p.pointer(v, x, y, captured) {
+                            if action == "down" {
+                                self.graphical.as_mut().unwrap().pointer_capture = Some(p);
+                            }
+                            self.graphical_pointer(&action, button, sx, sy, modifiers);
+                        }
+                    } else if action == "up" {
+                        Controller::input(self, Input::CancelPointer);
+                    } else if action == "drag" {
+                        self.dnd.hover = None;
+                        self.dnd.hover_coords = None;
+                        self.repaint = true;
+                    }
+                    if action == "up" {
+                        self.graphical.as_mut().unwrap().pointer_capture = None;
+                    }
+                }
+            }
             Input::Paste { text } => {
                 if self.editor.is_some() {
                     self.editor_paste(&text);
@@ -966,6 +1177,7 @@ impl Controller for App {
             }
             Input::Osc72 { text } => self.dnd_message(&text),
             Input::CancelPointer => {
+                self.graphical.as_mut().unwrap().pointer_capture = None;
                 self.graphical.as_mut().unwrap().drag = None;
                 self.dnd.drag_active = false;
                 self.dnd.offer = None;
@@ -1008,6 +1220,124 @@ impl Controller for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn physical_cell(app: &App, x: u16, y: u16) -> (u16, u16) {
+        let state = app.graphical.as_ref().unwrap();
+        if state.placements.is_empty() {
+            return (x, y);
+        }
+        let v = state.viewport.unwrap();
+        let p = state
+            .placements
+            .iter()
+            .rev()
+            .find(|p| p.source.contains(x, y))
+            .unwrap();
+        for cy in 0..v.rows {
+            for cx in 0..v.columns {
+                if p.pointer(v, cx, cy, false) == Some((x, y)) {
+                    return (cx, cy);
+                }
+            }
+        }
+        panic!("logical cell {x},{y} is unreachable through cell-pointer input: {p:?}");
+    }
+
+    #[test]
+    fn pixel_layout_rows_tabs_and_popup_remain_reachable_after_zoom() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let directory = fake.home().join("listing");
+        std::fs::create_dir(&directory).unwrap();
+        for i in 0..100 {
+            std::fs::write(directory.join(format!("file-{i:03}")), b"test").unwrap();
+        }
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().pixel_layout = true;
+        app.core.send(Command::RestoreCommander {
+            dirs: [directory.clone(), directory],
+            active: 0,
+            enabled: true,
+        });
+        fake.pump();
+        app.tick();
+        for (columns, rows, cw, ch) in [(100, 40, 8, 16), (120, 48, 10, 20), (90, 35, 16, 32)] {
+            let v = Viewport {
+                columns,
+                rows,
+                width: u32::from(columns) * cw + 3,
+                height: u32::from(rows) * ch + 1,
+                generation: 1,
+            };
+            let scene = Controller::scene(&mut app, v);
+            assert!(!scene.placements.is_empty());
+            for p in &scene.placements {
+                p.validate(v).unwrap();
+            }
+            for c in &scene.components {
+                if let Component::ListRow { rect, .. } = c {
+                    physical_cell(&app, rect.x + 4, rect.y);
+                }
+            }
+            let row = scene
+                .components
+                .iter()
+                .find_map(|c| match c {
+                    Component::ListRow { rect, .. } => Some(*rect),
+                    _ => None,
+                })
+                .unwrap();
+            let (x, y) = physical_cell(&app, row.x + 4, row.y);
+            Controller::input(
+                &mut app,
+                Input::Pointer {
+                    action: "down".into(),
+                    button: 1,
+                    x,
+                    y,
+                    modifiers: 0,
+                },
+            );
+            let popup = Controller::scene(&mut app, v);
+            assert!(popup.placements.iter().any(|p| p.overlay.is_some()));
+            for row in scene.components.iter().filter(|c| {
+                matches!(
+                    c,
+                    Component::ListRow {
+                        selected: false,
+                        ..
+                    } | Component::Scrollbar { .. }
+                )
+            }) {
+                assert!(
+                    popup.components.contains(row),
+                    "Popup changed a background row or scrollbar: {row:?}"
+                );
+            }
+            let overlay = popup
+                .placements
+                .iter()
+                .find(|p| p.overlay.is_some())
+                .unwrap();
+            for y in overlay.source.y + 1..overlay.source.y + overlay.source.height - 1 {
+                physical_cell(&app, overlay.source.x + 3, y);
+            }
+            Controller::input(
+                &mut app,
+                Input::Key {
+                    code: "escape".into(),
+                    modifiers: 0,
+                },
+            );
+        }
+    }
+
     #[test]
     fn native_chrome_surfaces_fit_at_resize_and_keep_operations_compact() {
         let cfg = Config::default();
@@ -1020,6 +1350,7 @@ mod tests {
             Graphics::disabled(),
         );
         app.enable_graphical();
+        app.graphical.as_mut().unwrap().pixel_layout = true;
         for (columns, rows, width, height) in [
             (80, 36, 640, 576),
             (160, 54, 1600, 1080),
@@ -1071,6 +1402,34 @@ mod tests {
                 }
             }
             app.layout.focus_set(ModuleId::Stack);
+            app.view.ops_active = true;
+            app.view.ops = vec![panels::operations::OpRow {
+                title: "DELETE fixture".into(),
+                status: "Permission denied".into(),
+                bar: None,
+                tone: panels::operations::Tone::Failed,
+            }];
+            for _ in 0..2 {
+                let failed = Controller::scene(&mut app, viewport);
+                assert!(
+                    app.layout
+                        .last
+                        .as_ref()
+                        .unwrap()
+                        .rect_of(ModuleId::Operations)
+                        .height
+                        > 2
+                );
+                for placement in &failed.placements {
+                    placement.validate(viewport).unwrap();
+                }
+                assert!(failed
+                    .spans
+                    .iter()
+                    .any(|span| span.text.contains("Permission denied")));
+            }
+            app.view.ops_active = false;
+            app.view.ops.clear();
         }
     }
 
@@ -1108,6 +1467,10 @@ mod tests {
 
     #[test]
     fn graphical_drag_preserves_marks_scroll_ownership_and_copy_identity() {
+        graphical_drag_fixture(false);
+        graphical_drag_fixture(true);
+    }
+    fn graphical_drag_fixture(pixel_layout: bool) {
         let cfg = Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
         let source = fake.home().join("source");
@@ -1130,6 +1493,7 @@ mod tests {
             Graphics::disabled(),
         );
         app.enable_graphical();
+        app.graphical.as_mut().unwrap().pixel_layout = pixel_layout;
         app.core.send(Command::RestoreCommander {
             dirs: [source.clone(), destination.clone()],
             active: 0,
@@ -1152,6 +1516,7 @@ mod tests {
             })
             .unwrap();
         let pointer = |app: &mut App, action: &str, x, y| {
+            let (x, y) = physical_cell(app, x, y);
             Controller::input(
                 app,
                 Input::Pointer {

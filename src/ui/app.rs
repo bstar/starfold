@@ -3205,6 +3205,19 @@ impl App {
             }
         }
 
+        #[cfg(feature = "terminal-graphics")]
+        if let Some(graphical) = &mut self.graphical {
+            if graphical.pixel_layout
+                && (self.overlays.is_open() || self.places.is_some() || self.tab_picker.is_some())
+            {
+                graphical.base_buffer = Some(buf.clone());
+                graphical.base_scrollbars = bars
+                    .visible()
+                    .map(|(track, thumb)| graphical::scrollbar(track, thumb))
+                    .collect();
+            }
+        }
+
         // Overlays are modal: while one is open, only its own bar (the
         // conflict prompt's list) may be pressed, not whatever the stack,
         // preview and operations just drew behind it. A second

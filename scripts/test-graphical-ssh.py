@@ -148,7 +148,7 @@ LogLevel ERROR
             f'STARFOLD_DIR={root}/app',str(binary),'--graphical-relay','proof','--directory',str(files)])
         hello={'type':'hello','version':1,'client':'ssh-proof',
             'capabilities':{'image_transport':'kitty','pixel_geometry':'measured',
-                'pointer_precision':'cells','keyboard':True,'paste':True,'presentation_ack':True,'native_surfaces':True},
+                'pointer_precision':'cells','keyboard':True,'paste':True,'presentation_ack':True,'native_surfaces':True,'pixel_layout':True},
             'viewport':
             {'columns':100,'rows':40,'width':1200,'height':800,'generation':1}}
         start=time.monotonic()
@@ -157,6 +157,7 @@ LogLevel ERROR
         remote_pid=int(greeting['epoch'].split('-')[0])
         scene=endpoint.next(lambda m:m['type']=='scene' and any(
             c.get('label','').startswith('one') for c in m['scene']['components']))
+        assert scene['scene'].get('placements'), 'Pixel layout was not negotiated over SSH'
         print(f'Headless SSH first listing: {(time.monotonic()-start)*1000:.1f} ms; scene {len(json.dumps(scene))} bytes',flush=True)
         timings=[]
         for number,code in enumerate(['down','char: ','down','char: ','char:y','home','enter','char:p'],1):
