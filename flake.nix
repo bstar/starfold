@@ -103,15 +103,25 @@
         # One version, read rather than repeated. scripts/check-version.sh
         # asserts the copies that cannot be derived (Cargo.lock).
         cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+        alsaPluginDir = if pkgs.stdenv.hostPlatform.isLinux then pkgs.runCommand "star-media-alsa-plugins" {} ''
+          mkdir -p $out
+          ln -s ${pkgs.pipewire}/lib/alsa-lib/*.so $out/
+          ln -s ${pkgs.alsa-plugins}/lib/alsa-lib/*.so $out/
+        '' else "";
+
 
         # RAR uses bundled UnRAR C++ compiled by unrar_sys. BZip2's
         # libbz2-rs-sys is pure Rust despite its name. No system archive
-        # libraries or bindgen are needed. Large image previews optionally
+        # libraries are needed. Native video previews add FFmpeg and
+        # CPAL/ALSA; FFmpeg bindings use clang. Large image previews optionally
         # use vipsthumbnail when present on PATH.
         mkStarfold = { pkgsFor ? pkgs, graphical ? false }:
           pkgsFor.rustPlatform.buildRustPackage {
             # unrar_sys compiles the bundled RARLAB C++ engine.
-            nativeBuildInputs = [ pkgsFor.stdenv.cc ];
+            nativeBuildInputs = [ pkgsFor.stdenv.cc pkgsFor.pkg-config pkgsFor.clang ];
+            buildInputs = [ pkgsFor.ffmpeg ] ++ pkgsFor.lib.optional pkgsFor.stdenv.hostPlatform.isLinux pkgsFor.alsa-lib;
+            LIBCLANG_PATH = "${pkgsFor.llvmPackages.libclang.lib}/lib";
+            BINDGEN_EXTRA_CLANG_ARGS = "-I${pkgsFor.ffmpeg.dev}/include";
             pname = "starfold";
             version = cargoToml.package.version;
             src = ./.;
@@ -139,6 +149,10 @@
 
             # freedesktop assets, which mean nothing on macOS.
             postInstall = ''
+              install -Dm644 NOTICE $out/share/doc/starfold/NOTICE
+              for media_license in LICENSES/ffmpeg-*.txt; do
+                install -Dm644 "$media_license" "$out/share/licenses/starfold/$(basename "$media_license")"
+              done
               install -Dm644 LICENSES/UnRAR.txt $out/share/licenses/starfold/UnRAR.txt
               install -Dm644 LICENSES/OFL-Liberation.txt $out/share/licenses/starfold/OFL-Liberation.txt
             '' + pkgsFor.lib.optionalString pkgsFor.stdenv.hostPlatform.isLinux ''
@@ -169,7 +183,8 @@
           nativeBuildInputs = [ pkgs.makeWrapper ];
           postBuild = ''
             wrapProgram $out/bin/starfold \
-              --prefix PATH : ${staramp-native.packages.${system}.default}/bin
+              --prefix PATH : ${staramp-native.packages.${system}.default}/bin \
+              --set ALSA_PLUGIN_DIR "${alsaPluginDir}"
           '';
         };
         packages.graphical = pkgs.symlinkJoin {
@@ -208,8 +223,15 @@
         };
 
         devShells.default = pkgs.mkShell {
+          ALSA_PLUGIN_DIR = alsaPluginDir;
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+          BINDGEN_EXTRA_CLANG_ARGS = "-I${pkgs.ffmpeg.dev}/include";
+          buildInputs = [ pkgs.ffmpeg ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.alsa-lib;
           packages = (with pkgs; [
             stdenv.cc
+            pkg-config
+            clang
+            ffmpeg
             rustc
             cargo
             rustfmt

@@ -6,8 +6,8 @@ pkgdesc='A stack-based terminal file manager in the STAR family'
 arch=('x86_64')
 url='https://github.com/bstar/starfold'
 license=('MIT' 'LicenseRef-UnRAR')
-depends=('glibc' 'gcc-libs')
-makedepends=('rust>=1.90' 'git')
+depends=('glibc' 'gcc-libs' 'ffmpeg' 'alsa-lib')
+makedepends=('rust>=1.90' 'git' 'clang' 'pkgconf')
 optdepends=('xdg-utils: open files with desktop applications'
             'libvips: thumbnail very large images')
 options=('!lto' '!debug')
@@ -46,6 +46,10 @@ package() {
     install -Dm644 packaging/starfold.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/starfold.svg"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/starfold/LICENSE"
     install -Dm644 LICENSES/UnRAR.txt "$pkgdir/usr/share/licenses/starfold/UnRAR.txt"
+    install -Dm644 NOTICE "$pkgdir/usr/share/doc/starfold/NOTICE"
+    for media_license in LICENSES/ffmpeg-*.txt; do
+        install -Dm644 "$media_license" "$pkgdir/usr/share/licenses/starfold/$(basename "$media_license")"
+    done
     install -Dm644 LICENSES/OFL-Liberation.txt "$pkgdir/usr/share/licenses/starfold/OFL-Liberation.txt"
     install -Dm644 README.md "$pkgdir/usr/share/doc/starfold/README.md"
 }

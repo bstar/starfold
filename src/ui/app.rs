@@ -326,6 +326,7 @@ pub struct App {
     suppressed_trash_warnings: HashSet<trash_warning::DriveKey>,
     unmount_started: Option<(PathBuf, Instant)>,
     animation_started: Instant,
+    preview_animation: Option<(Arc<starkit::animation::Animation>, Instant, usize)>,
     /// Every scrollbar the column drew last frame, and the one a press is
     /// holding -- see `starkit::chrome::scrollbar::Scrollbars`'s own doc for
     /// the contract [`App::scroll_bar_to`] keeps with it.
@@ -887,6 +888,7 @@ impl App {
             suppressed_trash_warnings: HashSet::new(),
             unmount_started: None,
             animation_started: Instant::now(),
+            preview_animation: None,
             bars: Bars::new(),
             suppress_dnd_offer_until_press: false,
             dnd_edge: None,
@@ -1030,6 +1032,45 @@ impl App {
         Ok(())
     }
 
+    fn native_animation_playback(&self) -> bool {
+        #[cfg(feature = "terminal-graphics")]
+        {
+            self.graphical
+                .as_ref()
+                .is_some_and(|state| !state.cell_mode && state.animated_images)
+        }
+        #[cfg(not(feature = "terminal-graphics"))]
+        {
+            false
+        }
+    }
+
+    fn advance_preview_animation(&mut self) {
+        if self.native_animation_playback() || !self.layout.preview_open {
+            return;
+        }
+        let Some((sequence, started, index)) = &mut self.preview_animation else {
+            return;
+        };
+        let next = sequence.index(started.elapsed());
+        if next == *index {
+            return;
+        }
+        *index = next;
+        let Ok(data) = sequence.frame(next) else {
+            return;
+        };
+        let (width, height) = data.dimensions();
+        self.view.preview = Some(Arc::new(Preview::Image {
+            data,
+            width,
+            height,
+            format: "gif",
+        }));
+        self.forget_picture();
+        self.repaint = true;
+    }
+
     /// Everything a frame does before it draws.
     pub fn tick(&mut self) {
         let now = Instant::now();
@@ -1098,6 +1139,7 @@ impl App {
             }
         }
         self.refresh();
+        self.advance_preview_animation();
         self.offer_trash_fallback();
         self.offer_elevated_delete();
 
@@ -1466,6 +1508,35 @@ impl App {
                 (Some(display_name(path)), Some(Arc::clone(p)))
             }
             _ => (None, None),
+        };
+
+        let preview = if let Some(Preview::Animation(sequence)) = preview.as_deref() {
+            if self
+                .preview_animation
+                .as_ref()
+                .is_none_or(|(old, _, _)| !Arc::ptr_eq(old, sequence))
+            {
+                self.preview_animation = Some((Arc::clone(sequence), Instant::now(), 0));
+            }
+            let (_, started, _) = self.preview_animation.as_ref().unwrap();
+            let index = if self.native_animation_playback() {
+                0
+            } else {
+                sequence.index(started.elapsed())
+            };
+            let data = sequence
+                .frame(index)
+                .expect("internally encoded animation frame");
+            let (width, height) = data.dimensions();
+            Some(Arc::new(Preview::Image {
+                data,
+                width,
+                height,
+                format: "gif",
+            }))
+        } else {
+            self.preview_animation = None;
+            preview
         };
 
         // The picture on screen is about to be a different picture, or none.
@@ -2709,7 +2780,20 @@ impl App {
                     self.overlays.open_help();
                     self.repaint = true;
                 }
-                status::Hit::Progress => self.layout.focus_set(ModuleId::Operations),
+                status::Hit::Progress => {
+                    #[allow(unused_mut)]
+                    let mut module = ModuleId::Operations;
+                    #[cfg(feature = "terminal-graphics")]
+                    if self.view.running_bar.is_none()
+                        && self
+                            .graphical
+                            .as_ref()
+                            .is_some_and(|g| g.video_status.is_some())
+                    {
+                        module = ModuleId::Preview;
+                    }
+                    self.layout.focus_set(module);
+                }
                 status::Hit::Location => {}
             }
             return;
@@ -2863,11 +2947,25 @@ impl App {
                 panels::Word::Close,
             ];
         }
+        #[cfg(feature = "terminal-graphics")]
+        if module == ModuleId::Preview {
+            if let Some(words) = self.video_words() {
+                return words;
+            }
+        }
         panels::words(module)
     }
 
     fn word_click(&mut self, word: panels::Word) {
         match word {
+            panels::Word::VideoPlay(_)
+            | panels::Word::VideoMute(_)
+            | panels::Word::VideoVolumeDown
+            | panels::Word::VideoVolumeUp
+            | panels::Word::VideoExpand(_) => {
+                #[cfg(feature = "terminal-graphics")]
+                self.video_action(word);
+            }
             panels::Word::View => self.act(Action::ToggleView),
             panels::Word::Places => self.act(Action::Places),
             panels::Word::Bookmark => self.act(Action::Bookmark),
@@ -3045,7 +3143,20 @@ impl App {
             theme: &self.theme,
             note: self.note.as_ref(),
             now,
-            progress: self.view.running_bar.as_deref(),
+            progress: {
+                #[cfg(feature = "terminal-graphics")]
+                {
+                    self.view.running_bar.as_deref().or_else(|| {
+                        self.graphical
+                            .as_ref()
+                            .and_then(|g| g.video_status.as_deref())
+                    })
+                }
+                #[cfg(not(feature = "terminal-graphics"))]
+                {
+                    self.view.running_bar.as_deref()
+                }
+            },
             hints,
             marked: &self.view.marked,
             location: &self.view.location,
@@ -3311,6 +3422,8 @@ impl App {
             // needs `&mut self`, and the picture is behind an `Arc` for
             // exactly this.
             let data = match self.view.preview.as_deref() {
+                #[cfg(feature = "media")]
+                Some(Preview::Video { poster, .. }) => Some(Arc::clone(&poster.pixels)),
                 Some(Preview::Image { data, .. }) => Some(Arc::clone(data)),
                 _ => None,
             };
@@ -3532,6 +3645,8 @@ fn home_relative(dir: &std::path::Path, home: &std::path::Path) -> String {
 /// at the moment of the comparison.
 fn picture_address(preview: Option<&Preview>) -> Option<ImageId> {
     match preview {
+        #[cfg(feature = "media")]
+        Some(Preview::Video { poster, .. }) => Some(ImageId::of_arc(&poster.pixels)),
         Some(Preview::Image { data, .. }) => Some(ImageId::of_arc(data)),
         _ => None,
     }
@@ -3907,6 +4022,94 @@ mod tests {
         let cfg_path = dir.path().join("config.toml");
         let app = App::new(core, cfg, cfg_path, None, Graphics::disabled());
         (app, fk, dir)
+    }
+
+    #[cfg(feature = "terminal-graphics")]
+    #[test]
+    fn gif_playback_falls_back_for_older_graphical_frontends() {
+        let (mut app, _, _dir) = app();
+        app.enable_graphical();
+        assert!(!app.native_animation_playback());
+        app.graphical.as_mut().unwrap().animated_images = true;
+        assert!(app.native_animation_playback());
+        app.graphical.as_mut().unwrap().cell_mode = true;
+        assert!(!app.native_animation_playback());
+    }
+
+    #[test]
+    fn gif_preview_tick_advances_cell_image_and_keeps_scaling() {
+        let (mut app, _, _dir) = app();
+        let delay = Duration::from_millis(100);
+        let sequence = Arc::new(starkit::anim::FrameSequence {
+            frames: vec![
+                starkit::anim::Frame {
+                    img: Arc::new(RgbaImage::from_pixel(
+                        2,
+                        2,
+                        starkit::image::Rgba([255, 0, 0, 255]),
+                    )),
+                    delay,
+                },
+                starkit::anim::Frame {
+                    img: Arc::new(RgbaImage::from_pixel(
+                        2,
+                        2,
+                        starkit::image::Rgba([0, 255, 0, 255]),
+                    )),
+                    delay,
+                },
+            ],
+            total: delay * 2,
+            id: 0,
+            plays: 0,
+            truncated: false,
+        });
+        let frames = sequence
+            .frames
+            .iter()
+            .map(|f| {
+                Ok(starkit::image::Frame::from_parts(
+                    (*f.img).clone(),
+                    0,
+                    0,
+                    starkit::image::Delay::from_numer_denom_ms(f.delay.as_millis() as u32, 1),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let sequence = Arc::new(
+            starkit::animation::Animation::collect(
+                starkit::image::Frames::new(Box::new(frames.into_iter())),
+                0,
+                64_000_000,
+                || false,
+            )
+            .unwrap(),
+        );
+        app.layout.preview_open = true;
+        app.cfg.preview.image_scale = crate::config::Scale::Pixels;
+        app.preview_animation = Some((
+            Arc::clone(&sequence),
+            Instant::now() - Duration::from_millis(110),
+            0,
+        ));
+        app.advance_preview_animation();
+        let Some(Preview::Image { data, format, .. }) = app.view.preview.as_deref() else {
+            panic!("image frame missing")
+        };
+        assert!(Arc::ptr_eq(data, &sequence.frame(1).unwrap()));
+        assert_eq!(*format, "gif");
+        assert!(matches!(
+            app.cfg.preview.image_scale,
+            crate::config::Scale::Pixels
+        ));
+        app.layout.preview_open = false;
+        app.preview_animation.as_mut().unwrap().1 = Instant::now();
+        app.advance_preview_animation();
+        assert_eq!(
+            app.preview_animation.as_ref().unwrap().2,
+            1,
+            "hidden preview does not animate"
+        );
     }
 
     #[test]
@@ -5237,6 +5440,77 @@ mod tests {
         );
         app.dnd_cancel_choice();
         assert_eq!(rx.try_recv().unwrap().meta, "t=r:o=0:i=1");
+    }
+
+    #[test]
+    fn internal_move_survives_copy_only_desktop_export_restriction() {
+        for internal in [false, true] {
+            let (mut app, fake, _dir) = app();
+            fake.pump();
+            app.tick();
+            let source_dir = tempfile::tempdir().unwrap();
+            let source = source_dir.path().join("file");
+            std::fs::write(&source, b"bytes").unwrap();
+            app.dnd.choice = Some(wire_dnd::Choice {
+                dest: fake.home().to_path_buf(),
+                own_sources: Some(vec![source.clone()]),
+                internal,
+                allowed: 1,
+                mime_index: Some(1),
+                remote: false,
+                terminal_drop_open: false,
+            });
+            app.dnd_choose(OpKind::Move);
+            if internal {
+                fake.pump();
+                app.tick();
+                assert!(!source.exists());
+                assert_eq!(std::fs::read(fake.home().join("file")).unwrap(), b"bytes");
+            } else {
+                assert!(source.exists());
+                assert!(app.core.state().queue.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn remote_cleanup_failure_persists_in_operation_history() {
+        let (mut app, fake, _dir) = app();
+        fake.pump();
+        app.tick();
+        app.core.send(Command::BeginImport {
+            sources: vec![PathBuf::from("/local/source")],
+            dest: fake.home().to_path_buf(),
+        });
+        let op = app.core.state().queue.iter().last().unwrap().id;
+        app.core.send(Command::FinishImport { op, success: true });
+        app.dnd.source_cleanup.push(op);
+        app.dnd_message(&format!(
+            "t=L:C={}:o=0:i=1;EIO:Permission denied",
+            op.0 + 100
+        ));
+        assert_eq!(
+            app.core
+                .state()
+                .queue
+                .iter()
+                .find(|entry| entry.id == op)
+                .unwrap()
+                .status,
+            OpStatus::Done
+        );
+        app.dnd_message(&format!("t=L:C={}:o=0:i=1;EIO:Permission denied", op.0));
+        app.note = None;
+        let state = app.core.state();
+        let entry = state.queue.iter().find(|entry| entry.id == op).unwrap();
+        assert_eq!(entry.status, OpStatus::Failed);
+        assert!(entry
+            .failure
+            .as_ref()
+            .unwrap()
+            .contains("Permission denied"));
+        assert_eq!(entry.failed[0].0, PathBuf::from("/local/source"));
+        assert!(app.dnd.source_cleanup.is_empty());
     }
 
     #[test]

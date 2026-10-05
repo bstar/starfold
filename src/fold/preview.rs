@@ -40,6 +40,12 @@ pub enum Preview {
         /// "showing 5 of many" without counting newlines itself.
         lines: usize,
     },
+    Animation(Arc<starkit::animation::Animation>),
+    #[cfg(feature = "media")]
+    Video {
+        path: PathBuf,
+        poster: starkit::media::Poster,
+    },
     Image {
         data: Arc<starkit::image::RgbaImage>,
         width: u32,
@@ -150,12 +156,22 @@ fn build_file(path: &Path, full_len: u64, cfg: &PreviewConfig, cancel: &AtomicBo
         return Preview::Empty;
     }
 
+    #[cfg(feature = "media")]
+    if super::file_type::classify(path, &head) == super::file_type::FileType::Video {
+        return match starkit::media::poster(path, Arc::new(AtomicBool::new(false))) {
+            Ok(poster) => Preview::Video {
+                path: path.to_owned(),
+                poster,
+            },
+            Err(e) => Preview::Error(format!("Video preview: {e:#}")),
+        };
+    }
     if let Some(result) = providers::build(path, &head, 1, cfg) {
         return Preview::Document(result);
     }
 
     if looks_like_image(path, &head) {
-        return build_image(path, full_len, cfg);
+        return build_image(path, full_len, cfg, cancel);
     }
 
     if is_binary(&head) {

@@ -11,16 +11,16 @@ keywords = ["file-manager", "tui", "files", "terminal"]
 categories = ["command-line-utilities", "filesystem"]
 
 [features]
-default = []
-terminal-graphics = ["starkit/terminal-graphics"]
+default = ["media"]
+media = ["starkit/media"]
+terminal-graphics = ["media", "starkit/terminal-graphics"]
 
 [dependencies]
 # The shared terminal foundation: paths, logging, atomic and private file
 # writes, theming, terminal setup with a panic hook, text entry, wrapping, the
 # key table and its help view, and the image pipeline, all of it already proven
-# in STAR/AMP and STAR/CORD. Only what a file manager needs: `gif` is what a
-# chat client animates, `wsz` is a Winamp skin format, `net` is an HTTP agent,
-# and `default-features = false` keeps all three out.
+# in STAR/AMP and STAR/CORD. Raster and animated GIF previews are enabled;
+# Winamp skin import and the HTTP client remain optional for their consumers.
 #
 # It is also the one copy of `ratatui`, `crossterm`, `ratatui-image` and
 # `image` in the tree. Everything under `src/ui/` reaches them through
@@ -35,9 +35,10 @@ terminal-graphics = ["starkit/terminal-graphics"]
 # The `version` is not redundant with the tag: cargo-deny counts a dependency
 # with no version requirement as a wildcard and `wildcards = "deny"` refuses
 # it, whether or not the source is a git URL pinned to a tag.
-starkit = { git = "https://github.com/bstar/starkit", rev = "b9749d45f298894d760a37458a266440c8fa711f", version = "0.3", default-features = false, features = [
+starkit = { git = "https://github.com/bstar/starkit", rev = "aeab5204c3aa7c18a1dc8638b74f9a6d8a97e531", version = "0.3", default-features = false, features = [
     "image",
     "bmp",
+    "gif",
 ] }
 
 # CLI

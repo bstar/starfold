@@ -1,14 +1,8 @@
 #!/usr/bin/env bash
 # Build prerequisites inside a Debian or Ubuntu container.
 #
-# The list is short, and that is the point rather than an oversight. There is no
-# ffmpeg, no ALSA and no libdbus in this tree: trash is the freedesktop
-# specification in pure Rust, and nothing runs bindgen. What is left is a C
-# toolchain, because rustc still links with `cc`, and the things `git` and
-# `rustup` need to fetch anything at all.
-#
-# If that changes -- a dependency picking up a `-sys` crate is the likely way --
-# the library goes here, in flake.nix, and in the CI apt line, in one commit.
+# Native video previews use FFmpeg, ALSA and bindgen.
+# Keep this list aligned with flake.nix and CI.
 #
 # Rust comes from rustup rather than apt: the MSRV is newer than anything
 # bookworm or bullseye package, and the whole point of building in an old
@@ -28,10 +22,14 @@ fi
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
   ca-certificates curl file git xz-utils \
-  build-essential
+  build-essential pkg-config clang libclang-dev libasound2-dev \
+  libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev \
+  libswscale-dev libswresample-dev
 
 if ! command -v cargo >/dev/null; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path
 fi
 . "$HOME/.cargo/env"
+
+export LIBCLANG_PATH=$(dirname "$(find /usr/lib -name 'libclang.so*' -o -name 'libclang-*.so*' | head -1)")

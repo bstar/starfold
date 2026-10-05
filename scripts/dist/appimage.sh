@@ -1,22 +1,8 @@
 #!/usr/bin/env bash
 # The AppImage. Build in Debian Bullseye to retain the supported glibc floor.
 #
-# What it carries is, today, nothing: this binary links the C runtime and
-# libgcc and that is the whole of its NEEDED list, so the library walk below
-# finds nothing worth bundling and the AppDir's usr/lib comes out empty. The
-# walk is here anyway, because the first dependency that picks up a `-sys`
-# crate should travel with the file rather than be discovered by somebody on
-# another distribution.
-#
-# It is still the right artifact to ship. One file, executable, with its icon
-# and its desktop entry inside it, built against a glibc old enough for
-# everything still supported -- which is what makes "download it and run it"
-# true without a package for each distribution.
-#
-# Assembled by hand rather than with linuxdeploy, because linuxdeploy ships as
-# an AppImage and an AppImage cannot be executed inside a container without
-# FUSE. Doing it directly is a dozen lines, needs nothing that has to run, and
-# leaves the exclude list somewhere it can be read.
+# Native preview builds carry shared FFmpeg/ALSA dependencies. The walk below
+# bundles non-runtime libraries and keeps the supported Bullseye glibc floor.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -51,9 +37,12 @@ install -Dm644 packaging/starfold.png         "$appdir/starfold.png"
 install -Dm644 packaging/starfold.desktop     "$appdir/usr/share/applications/starfold.desktop"
 install -Dm644 packaging/starfold.png         "$appdir/usr/share/icons/hicolor/256x256/apps/starfold.png"
 install -Dm644 packaging/starfold.svg         "$appdir/usr/share/icons/hicolor/scalable/apps/starfold.svg"
-install -Dm644 README.md LICENSE -t           "$appdir/usr/share/doc/starfold/"
+install -Dm644 README.md LICENSE NOTICE -t           "$appdir/usr/share/doc/starfold/"
 install -Dm644 LICENSES/UnRAR.txt "$appdir/usr/share/doc/starfold/LICENSES/UnRAR.txt"
 install -Dm644 LICENSES/OFL-Liberation.txt "$appdir/usr/share/doc/starfold/LICENSES/OFL-Liberation.txt"
+for media_license in LICENSES/ffmpeg-*.txt; do
+  install -Dm644 "$media_license" "$appdir/usr/share/doc/starfold/LICENSES/$(basename "$media_license")"
+done
 cp "$appdir/starfold.png" "$appdir/.DirIcon"
 mkdir -p "$appdir/usr/lib"
 
@@ -63,9 +52,7 @@ mkdir -p "$appdir/usr/lib"
 #   libgcc_s,        the host's is never older than bullseye's, and a bundled
 #   libstdc++        old one is a real hazard on a newer host.
 #
-# Nothing else is on this list. There is no libasound here to argue about and
-# no libav sonames to chase; the reason this file exists is the glibc floor,
-# not a bundled decoder.
+# Codec and audio libraries are bundled; the system runtime stays outside.
 keep_out='^(ld-linux|libc\.so|libm\.so|libdl\.so|libpthread\.so|librt\.so|libresolv\.so|libutil\.so|libnsl\.so|libgcc_s\.so|libstdc\+\+\.so)'
 
 # Walk NEEDED transitively. ldd on the binary already reports the whole graph,

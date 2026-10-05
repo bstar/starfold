@@ -63,6 +63,21 @@ then operation progress (including rate and ETA), then contextual hints when idl
 Marked totals, location, and graphics status remain on the right. Hints use
 compact inline text rather than graphical keycap buttons.
 
+## Animated image previews
+
+Animated GIFs play automatically in Preview, retaining transparency, frame
+intervals and loop counts. Image zoom and the pixel/smooth sampling toggle work
+on every frame. The native frontend receives a lossless APNG asset once and
+plays it locally; animation frames are not repeatedly transferred over SSH.
+The ordinary cell view advances composited frames through its image backend.
+Older graphical frontends receive individual frames until they support negotiated
+local animation playback.
+
+Decoding runs off the UI thread, with cancellation, a deadline, a 64 MB lossless compressed frame
+budget and a 4,096-frame cap. Extremely large animations fall back to a still
+preview; sequences exceeding the frame budget play a bounded portion and log
+that truncation. Native transport thumbnails never enlarge small pixel art.
+
 ## SSH
 
 ```sh
@@ -77,6 +92,47 @@ persistent application controller and filesystem workers. Both are native Rust.
 SSH authentication finishes before terminal raw mode. A renderer/frontend failure
 leaves remote operations and persistent session state available for reattachment.
 The remote executable must include the `terminal-graphics` feature.
+
+### Build the macOS frontend
+
+Check out `experiment/terminal-graphics` and build the native frontend on the
+Mac running Kitty:
+
+```sh
+git switch experiment/terminal-graphics
+git pull --ff-only
+nix develop -c cargo build --locked --release --features terminal-graphics
+target/release/starfold graphical --ssh HOST --remote-executable /path/to/remote/starfold
+```
+
+The remote executable must be the feature-enabled binary, rather than a wrapper
+that always launches the ordinary CLI. Video audio plays through the Mac's
+output device and starts muted; click **Unmute**. Launching a renderer on the
+SSH host without the local Kitty integration sends audio to that host instead.
+
+### Launch after an ordinary SSH login
+
+With the experimental STAR/KIT Kitty integration installed on the **client
+machine**, use the normal workflow:
+
+```sh
+ssh HOST
+starfold-graphical
+```
+
+The remote launcher detects the integration and starts the local native Rust
+frontend inside the same Kitty window. It reuses the existing SSH TTY: no second
+connection, additional login, host alias guessing or `--ssh` flag. Rendering,
+font resolution and desktop drag handling stay local; the remote session owns
+files, operations, navigation and previews. Copy/Move menus can release the
+desktop pointer immediately, with Move cleanup deferred until remote delivery.
+
+Install the Kitty watcher and fixed local frontend once per client machine as
+described in [STAR/KIT's integration instructions](https://github.com/bstar/starkit/tree/experiment/terminal-graphics/integrations/kitty).
+Open a new Kitty window after installation. The remote STAR/FOLD build must
+also be current and feature-enabled. Without the integration, an ordinary SSH
+launch retains the original remote frontend and its desktop drop limitation.
+General Kitty remote control does not need to be enabled.
 
 ## Feature alignment
 
@@ -140,10 +196,37 @@ and needs a private `2400x1080x24` Xvfb screen. It checks delivered bytes and th
 successful Move removes the source only after delivering its bytes. On Linux,
 ordinary local URI drops end the desktop gesture before waiting for the action
 menu; FOLD then owns both copying and source removal. This avoids Hyprland's
-pointer grab making the menu unclickable. SSH handles, Kitty's temporary drag
-files, and macOS promises retain their terminal offer until consumption is done.
-Mouse choices for these retained offers on Hyprland remain unverified; the local
-URI fix must not be described as resolving that separate case.
+pointer grab making the menu unclickable. Kitty's temporary drag files and macOS
+promises retain their terminal offer until consumption is done.
+For graphical SSH on Linux, launch the client locally with
+`starfold-graphical --ssh HOST`. STAR/KIT captures local URI capabilities and
+releases the desktop drag without waiting for disk IO, then streams file data over SSH when
+Copy/Move is chosen. Move removes local sources only after successful remote
+publication; changed sources and cleanup errors remain in OPERATIONS. Both ends
+need a current feature-enabled build. Ordinary SSH shells use this same local
+frontend when the STAR/KIT Kitty integration above is installed. Without it,
+they retain the Kitty transfer path and its Hyprland mouse limitation.
+
+`scripts/test-graphical-ssh-drag.py` tests real Nautilus drops through a private
+loopback SSH connection on Hyprland. It requires Kitty, Nautilus, OpenSSH, grim,
+Hyprland's Lua dispatch API and writable `/dev/uinput`. It explicitly injects
+mouse input on the desktop and uses temporary files, keys, configs and sessions.
+The fixed fixture needs a `1897x1040` desktop area at the given origin. Run:
+
+```sh
+python3 scripts/test-graphical-ssh-drag.py --inject-host-mouse --origin 2574,1106 \
+  --binary target/release/starfold --kitty /usr/bin/kitty --kitten /usr/bin/kitten \
+  --output /tmp/fold-ssh-drag-proof --tree
+```
+
+It verifies mouse Copy/Move actions, transferred bytes, symlink preservation and
+source removal after Move. Omit `--tree` for the regular-file case. This is a
+loopback integration gate, not a WAN measurement.
+Add `--plain-ssh --watcher /path/to/starkit/integrations/kitty/star_kit.py` to
+exercise an ordinary `ssh -tt` login followed by the remote graphical launch,
+including terminal negotiation, local frontend startup and the existing TTY
+message relay. The installed `~/.local/bin/star-kit-terminal` must invoke the
+tested build's `--graphical-terminal-client` entrypoint.
 Popup layers align to the cell grid so cell-precision mouse events cannot select
 the adjacent action when panel padding puts a popup between rows.
 
@@ -212,3 +295,43 @@ Graphical tabs use numbered sessions: a small one-based position, a soft filled
 active rectangle, bold active name and muted inactive names. Numbers follow the
 current session order, not the visible scroll offset. Close buttons and rail
 controls retain separate click targets; tabs have no bottom underline.
+
+
+## Native video Preview
+
+Select a video to get a bounded poster frame and metadata. Playback starts only
+when you click **Play** in the Preview header. It starts muted. Header controls
+provide Play/Pause, Mute/Unmute, volume, Expand/Restore and Close. Click the full
+width timeline to seek. Focusing Preview keeps its height unchanged; only Expand
+or dragging the divider changes it.
+
+With Preview focused: **Space** plays/pauses, **Left/Right** seek five seconds,
+**M** toggles mute, **+/-** adjusts volume, **F** expands/restores, and **Esc**
+restores an expanded Preview. Position, buffering, mute and quality appear in
+the status footer. Audio-device failures allow silent video and show a notice
+inside Preview. Ordinary cell mode shows the poster and metadata only.
+
+STAR/KIT owns the native FFmpeg decoder, H.264/AAC encoder, bounded scheduling,
+local CPAL audio, timeline surface and media transport. STAR/FOLD selects files
+and supplies controls. This does not invoke a browser, Electron, MPV, or a new
+window. STAR/AMP remains a separate player owned by its own repository.
+
+For SSH, the host creates a small MPEG-TS/H.264/AAC preview while the Kitty
+frontend decodes and plays audio locally. It uses the existing scene connection;
+there is no whole-file download, extra login or open media port. Start at 480p /
+24 fps / up to 1.5 Mb/s, reduce to 360p / 15 fps / 750 kb/s after repeated stalls,
+and try 720p / 30 fps / 3 Mb/s after 20 seconds of smooth playback with measured
+transport headroom. AAC is 96 kb/s.
+Encoding never upscales and is bounded by the visible Preview. Quality changes
+and seeks start a fresh generation at the current position; stale chunks cannot
+enter the new decoder. Media uses 32 KiB chunks and a 256 KiB credit window;
+control and scene messages have priority. Decoded video queues hold three frames
+and audio rings hold half a second of samples. Closing, changing files, quitting
+or disconnecting cancels playback and streaming.
+
+Both the host and local Kitty frontend need builds with `terminal-graphics`.
+Native build dependencies: FFmpeg with libx264, libavfilter, libswscale and
+libswresample, clang/libclang and pkg-config; Linux additionally needs ALSA.
+Nix supplies these and matching PipeWire/PulseAudio plugins. macOS archives
+require Homebrew FFmpeg. Hardware decoding, subtitles and alternate audio tracks
+are deferred. Physical macOS audio/Kitty interaction still needs testing.

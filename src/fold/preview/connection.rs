@@ -204,6 +204,13 @@ impl Connection {
             .and_then(|mut f| f.read(&mut head))
             .unwrap_or(0);
         head.truncate(n);
+        #[cfg(feature = "media")]
+        if crate::fold::file_type::classify(path, &head) == crate::fold::file_type::FileType::Video
+        {
+            self.parser = None;
+            let preview = super::build(path, cfg, &std::sync::atomic::AtomicBool::new(false));
+            return (!stale()).then_some(preview);
+        }
         if !providers::supported(path, &head) {
             self.parser = None;
             return Some(super::build(

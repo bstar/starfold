@@ -397,6 +397,34 @@ pub fn render(
             render_plain(body, buf, preview, style);
             None
         }
+        #[cfg(feature = "media")]
+        Preview::Video { poster, .. } => render_image(
+            frame::body(area, &word_list),
+            buf,
+            v,
+            &poster.pixels,
+            poster.width,
+            poster.height,
+            &format!(
+                "video · {:.1}s · {}",
+                poster.duration,
+                if poster.audio { "audio" } else { "silent" }
+            ),
+        ),
+        Preview::Animation(sequence) => {
+            let data = sequence
+                .frame(0)
+                .expect("internally encoded animation frame");
+            render_image(
+                frame::body(area, &word_list),
+                buf,
+                v,
+                &data,
+                data.width(),
+                data.height(),
+                "gif",
+            )
+        }
         Preview::Image {
             data,
             width,
@@ -448,7 +476,15 @@ pub fn lines(preview: &Preview, width: u16) -> Vec<String> {
             vec![fit(&s, width)]
         }
         Preview::Error(e) => vec![fit(e, width)],
-        Preview::Empty | Preview::Image { .. } => Vec::new(),
+        #[cfg(feature = "media")]
+        Preview::Video { poster, .. } => vec![format!(
+            "{} × {} · {:.1}s · {}",
+            poster.width,
+            poster.height,
+            poster.duration,
+            if poster.audio { "audio" } else { "silent" }
+        )],
+        Preview::Empty | Preview::Image { .. } | Preview::Animation(_) => Vec::new(),
     }
 }
 
@@ -787,6 +823,12 @@ fn folded_summary(v: &View<'_>) -> Option<String> {
             ext_of(name).unwrap_or("-"),
             crate::fold::format::size(*bytes)
         ),
+        #[cfg(feature = "media")]
+        Preview::Video { poster, .. } => format!(
+            "{name} · video · {} × {} · {:.1}s",
+            poster.width, poster.height, poster.duration
+        ),
+        Preview::Animation(sequence) => format!("{name} · gif · {} frames", sequence.len()),
         Preview::Image {
             width,
             height,

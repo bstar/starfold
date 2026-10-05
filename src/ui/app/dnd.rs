@@ -241,7 +241,43 @@ impl App {
                     self.core.send(Command::Cancel(id));
                 }
             }
-            Some("E") | Some("R") => self.dnd_error(),
+            Some("L") => {
+                let op = m
+                    .get("C")
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(crate::fold::ops::OpId);
+                if let Some(op) = op.filter(|id| self.dnd.source_cleanup.contains(id)) {
+                    self.dnd.source_cleanup.retain(|id| *id != op);
+                    if m.number("o") != Some(1) {
+                        self.core.send(Command::ReportDropFailure {
+                            op,
+                            reason: format!(
+                                "Copied to destination; local source cleanup failed: {}",
+                                m.payload
+                            ),
+                        });
+                    }
+                }
+            }
+            Some("R") => {
+                let op = self
+                    .dnd
+                    .import_op
+                    .or_else(|| self.dnd.active.as_ref().map(|a| a.op));
+                let reason = if m.payload.is_empty() {
+                    "invalid drop data"
+                } else {
+                    m.payload
+                };
+                self.dnd_error_with(reason);
+                if let Some(op) = op {
+                    self.core.send(Command::ReportDropFailure {
+                        op,
+                        reason: reason.to_owned(),
+                    });
+                }
+            }
+            Some("E") => self.dnd_error(),
             _ => {}
         }
     }
@@ -398,9 +434,11 @@ impl App {
             }
         }
         self.dnd.result_kind = None;
+        self.dnd.source_bridge = false;
         self.dnd.prepared_paths = None;
         self.dnd.choice = Some(Choice {
             dest,
+            internal: own_sources.is_some(),
             own_sources,
             allowed,
             mime_index,
@@ -437,8 +475,9 @@ impl App {
             return;
         };
         tracing::debug!(?kind, "Drop choice selected");
-        if (kind == OpKind::Move && choice.allowed & 2 == 0)
-            || (kind == OpKind::Copy && choice.allowed & 1 == 0)
+        if !choice.internal
+            && ((kind == OpKind::Move && choice.allowed & 2 == 0)
+                || (kind == OpKind::Copy && choice.allowed & 1 == 0))
         {
             self.dnd_cancel_choice();
             return;
@@ -500,6 +539,7 @@ impl App {
         if !self.dnd.receiving_uri {
             return;
         }
+        self.dnd.source_bridge |= m.number("B") == Some(1);
         if m.number("X") == Some(1) {
             if let Some(choice) = &mut self.dnd.choice {
                 choice.remote = true;
@@ -825,7 +865,16 @@ impl App {
                 Instant::now(),
             ));
         }
-        let _ = wire::send(&format!("t=r:o={operation}:i=1"), None);
+        let cleanup = if self.dnd.source_bridge {
+            let op = active.op;
+            if operation == 2 {
+                self.dnd.source_cleanup.push(op);
+            }
+            format!(":C={}", op.0)
+        } else {
+            String::new()
+        };
+        let _ = wire::send(&format!("t=r:o={operation}:i=1{cleanup}"), None);
         self.dnd.active = None;
         self.dnd.staged = None;
         self.dnd.result_kind = None;

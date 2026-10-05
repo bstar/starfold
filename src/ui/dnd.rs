@@ -228,6 +228,8 @@ pub struct Offer {
 pub struct Choice {
     pub dest: PathBuf,
     pub own_sources: Option<Vec<PathBuf>>,
+    /// App-owned moves remain valid when desktop exports are copy-only.
+    pub internal: bool,
     pub allowed: i32,
     pub mime_index: Option<i32>,
     pub remote: bool,
@@ -258,6 +260,8 @@ pub struct State {
     pub pending_paths: Option<Vec<PathBuf>>,
     pub prepared_paths: Option<Vec<PathBuf>>,
     pub result_kind: Option<OpKind>,
+    pub source_bridge: bool,
+    pub source_cleanup: Vec<OpId>,
     pub remote: Option<Remote>,
     pub staged: Option<tempfile::TempDir>,
     pub import_op: Option<OpId>,

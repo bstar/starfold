@@ -10,6 +10,7 @@ pub(super) struct State {
     pub effects: Vec<ServerMessage>,
     pub output_pending: bool,
     pub(super) cell_mode: bool,
+    pub(super) animated_images: bool,
     pub(super) surface_mode: bool,
     padded_chrome: bool,
     pub(super) pixel_layout: bool,
@@ -18,6 +19,14 @@ pub(super) struct State {
     placements: Vec<starkit::terminal_graphics::placement::Placement>,
     viewport: Option<Viewport>,
     pointer_capture: Option<starkit::terminal_graphics::placement::Placement>,
+    video_capable: bool,
+    local_media: bool,
+    video: Option<starkit::terminal_graphics::media::Host>,
+    video_sequence: u64,
+    video_path: Option<PathBuf>,
+    video_expanded: Option<Option<u16>>,
+    pub(super) video_status: Option<String>,
+    video_timeline: Option<Rect>,
     image_source: Option<Arc<RgbaImage>>,
     image_sequence: u64,
     pub(super) image_zoom: Option<u16>,
@@ -327,6 +336,12 @@ impl App {
     }
 
     fn graphical_pointer(&mut self, action: &str, button: u8, x: u16, y: u16, modifiers: u8) {
+        if action == "down" && self.video_words().is_some() {
+            tracing::debug!(x, y, button, preview = ?self.layout.last.as_ref().map(|r| r.rect_of(ModuleId::Preview)), words = ?self.layout.last.as_ref().map(|r| starkit::chrome::header::slots(r.rect_of(ModuleId::Preview), &self.panel_words(ModuleId::Preview))), "Video preview pointer");
+        }
+        if self.video_pointer(action, button, x, y) {
+            return;
+        }
         if action == "down"
             && button == 0
             && modifiers == 0
@@ -461,6 +476,7 @@ impl App {
                             self.dnd.choice = Some(wire_dnd::Choice {
                                 dest,
                                 own_sources: Some(drag.sources),
+                                internal: true,
                                 allowed: 3,
                                 mime_index: None,
                                 remote: false,
@@ -574,6 +590,7 @@ impl App {
             return;
         }
         let source = match self.view.preview.as_deref() {
+            Some(Preview::Video { poster, .. }) => Some(Arc::clone(&poster.pixels)),
             Some(Preview::Image { data, .. }) => Some(Arc::clone(data)),
             _ => None,
         };
@@ -593,22 +610,47 @@ impl App {
             _ => true,
         };
         if changed {
-            state.image = None;
+            // Older frontends receive individual frames. Keep the last ready
+            // frame visible while its replacement is encoded on the worker.
+            if state.animated_images || self.preview_animation.is_none() {
+                state.image = None;
+            }
             state.image_id = None;
             state.image_source = source.clone();
             if let Some(source) = source {
                 state.image_sequence += 1;
                 let id = format!("preview-{}", state.image_sequence);
                 state.image_id = Some(id.clone());
-                state
-                    .thumbnail
-                    .get_or_insert_with(Default::default)
-                    .request(id, source);
+                let worker = state.thumbnail.get_or_insert_with(Default::default);
+                if let Some((animation, _, _)) = &self.preview_animation {
+                    if state.animated_images {
+                        worker.request_animation(id, Arc::clone(animation));
+                    } else {
+                        worker.request(id, source);
+                    }
+                } else {
+                    worker.request(id, source);
+                }
             }
         }
 
+        if let Some(video) = &state.video {
+            let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
+            rect.height = rect.height.saturating_sub(2);
+            scene.components.push(Component::Image {
+                rect: rect.into(),
+                id: format!("video-{}-{}", video.session, video.generation),
+                png: None,
+                zoom: 100,
+                scale: starkit::terminal_graphics::protocol::ImageScale::Smooth,
+            });
+            return;
+        }
         if let Some((id, png)) = &state.image {
-            let rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
+            let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
+            if matches!(self.view.preview.as_deref(), Some(Preview::Video { .. })) {
+                rect.height = rect.height.saturating_sub(2);
+            }
             scene.components.push(Component::Image {
                 rect: rect.into(),
                 id: id.clone(),
@@ -846,10 +888,14 @@ impl Controller for App {
         {
             return Duration::ZERO;
         }
-        let busy = self.view.loading
+        let busy = (self.layout.preview_open
+            && self.preview_animation.is_some()
+            && !self.native_animation_playback())
+            || self.view.loading
             || self.overlays.is_open()
             || self.places.is_some()
             || self.tab_picker.is_some()
+            || self.graphical.as_ref().unwrap().video.is_some()
             || self.audio_path.is_some()
             || self.editor.is_some()
             || self.dnd.drag_active
@@ -875,7 +921,10 @@ impl Controller for App {
     }
     fn attached(&mut self) {
         self.dnd.enabled = false;
+        self.stop_video();
+        self.graphical.as_mut().unwrap().video_capable = false;
         self.graphical.as_mut().unwrap().cell_mode = false;
+        self.graphical.as_mut().unwrap().animated_images = false;
         self.graphical.as_mut().unwrap().surface_mode = false;
         self.graphical.as_mut().unwrap().pixel_layout = false;
         self.graphics.set_mode(Mode::Off);
@@ -884,15 +933,23 @@ impl Controller for App {
         &mut self,
         capabilities: starkit::terminal_graphics::capabilities::Capabilities,
     ) {
+        self.graphical.as_mut().unwrap().video_capable = capabilities.video;
+        self.graphical.as_mut().unwrap().local_media = capabilities.local_media;
         let cells = capabilities.image_transport
             == starkit::terminal_graphics::capabilities::ImageTransport::None;
         self.graphical.as_mut().unwrap().cell_mode = cells;
+        let state = self.graphical.as_mut().unwrap();
+        if state.animated_images != capabilities.animated_images {
+            state.image_source = None;
+        }
+        state.animated_images = capabilities.animated_images;
         self.graphical.as_mut().unwrap().surface_mode = capabilities.native_surfaces;
         self.graphical.as_mut().unwrap().pixel_layout = capabilities.pixel_layout;
         self.graphics
             .set_mode(if cells { Mode::Blocks } else { Mode::Off });
     }
     fn detached(&mut self) {
+        self.stop_video();
         self.graphical.as_mut().unwrap().authorization = None;
         if let Some(op) = self.dnd.import_op {
             self.core.send(Command::Cancel(op));
@@ -906,6 +963,7 @@ impl Controller for App {
         let _chrome =
             starkit::chrome::frame::padding_scope(self.graphical.as_ref().unwrap().padded_chrome);
         App::tick(self);
+        self.tick_video();
         if let Some(op) = self.pending_elevated_delete.take() {
             // No controlling TTY exists on a headless SSH host. -S uses stdin
             // while retaining sudo's parent-process timestamp scope, shared by
@@ -1650,6 +1708,7 @@ impl Controller for App {
             }
             scene.pointer_regions = clickable.into_iter().map(Into::into).collect();
         }
+        self.video_scene(&mut scene, &regions);
         let state = self.graphical.as_mut().unwrap();
         state.placements.clear();
         state.resize_handle = None;
@@ -1700,6 +1759,18 @@ impl Controller for App {
                     state.resize_handle = Some(handle);
                     scene.resize_handles.push(handle);
                 }
+            }
+        }
+        if let Some(video) = state.video.as_mut() {
+            if let Some(p) = state
+                .placements
+                .iter()
+                .find(|p| p.source == regions.rect_of(ModuleId::Preview).into())
+            {
+                video.set_bounds(
+                    u32::from(p.target.width.saturating_sub(24)),
+                    u32::from(p.target.height.saturating_sub(80)),
+                );
             }
         }
         // Wheel events target panes, not the file currently painted at that row.
@@ -1805,6 +1876,9 @@ impl Controller for App {
         }
         match input {
             Input::Key { code, modifiers } => {
+                if self.video_key(&code, modifiers) {
+                    return;
+                }
                 // Navigation or opening a modal ends the captured file gesture.
                 if self.graphical.as_ref().unwrap().drag.is_some()
                     || self.graphical.as_ref().unwrap().preview_resize.is_some()
@@ -1957,9 +2031,26 @@ impl Controller for App {
             _ => {}
         }
     }
+    fn media(&mut self, message: starkit::terminal_graphics::media::ToHost) {
+        if let Some(video) = &mut self.graphical.as_mut().unwrap().video {
+            video.receive(message);
+        }
+    }
+    fn media_chunks(&mut self) -> Vec<ServerMessage> {
+        self.graphical
+            .as_mut()
+            .unwrap()
+            .video
+            .as_mut()
+            .map(|v| v.chunks())
+            .unwrap_or_default()
+    }
     fn effects(&mut self) -> Vec<ServerMessage> {
         let state = self.graphical.as_mut().unwrap();
         let mut effects = std::mem::take(&mut state.effects);
+        if let Some(video) = &mut state.video {
+            effects.extend(video.effects());
+        }
         if let Some(rx) = &state.wire {
             effects.extend(rx.try_iter().take(32).map(|out| ServerMessage::Osc72 {
                 id: 0,
@@ -1973,6 +2064,7 @@ impl Controller for App {
         self.quit
     }
     fn shutdown(&mut self) {
+        self.stop_video();
         self.save_workspace(true);
         self.editor = None;
         self.stop_audio();
@@ -1981,9 +2073,477 @@ impl Controller for App {
     }
 }
 
+impl App {
+    pub(super) fn video_words(&self) -> Option<Vec<panels::Word>> {
+        let state = self.graphical.as_ref()?;
+        if !state.video_capable
+            || state.cell_mode
+            || !matches!(self.view.preview.as_deref(), Some(Preview::Video { .. }))
+        {
+            return None;
+        }
+        let paused = state.video.as_ref().is_none_or(|v| v.paused || v.finished);
+        let muted = state.video.as_ref().is_none_or(|v| v.volume == 0);
+        Some(vec![
+            panels::Word::VideoPlay(paused),
+            panels::Word::VideoMute(muted),
+            panels::Word::VideoVolumeDown,
+            panels::Word::VideoVolumeUp,
+            panels::Word::VideoExpand(state.video_expanded.is_some()),
+            panels::Word::Close,
+        ])
+    }
+    fn stop_video(&mut self) {
+        let Some(state) = self.graphical.as_mut() else {
+            return;
+        };
+        if let Some(video) = state.video.take() {
+            state.effects.push(video.close());
+        }
+        state.video_path = None;
+        state.video_status = None;
+        state.video_timeline = None;
+        if let Some(rows) = state.video_expanded.take() {
+            self.layout.native_preview_rows = rows;
+        }
+    }
+    fn tick_video(&mut self) {
+        let path = match self.view.preview.as_deref() {
+            Some(Preview::Video { path, .. }) => Some(path),
+            _ => None,
+        };
+        let stop = self
+            .graphical
+            .as_ref()
+            .unwrap()
+            .video_path
+            .as_ref()
+            .is_some_and(|p| Some(p) != path)
+            || !self.layout.preview_open
+            || self.editor.is_some()
+            || self.audio_here();
+        if stop {
+            self.stop_video();
+            return;
+        }
+        let state = self.graphical.as_mut().unwrap();
+        if let Some(v) = &state.video {
+            let seconds = v.position as u64;
+            state.video_status = Some(v.warning.clone().unwrap_or_else(|| {
+                format!(
+                    "Video · {}:{:02} · {} · {} · {}",
+                    seconds / 60,
+                    seconds % 60,
+                    if v.finished {
+                        "finished"
+                    } else if v.paused {
+                        "paused"
+                    } else if v.buffering {
+                        "buffering"
+                    } else {
+                        "playing"
+                    },
+                    if v.volume == 0 { "muted" } else { "audio" },
+                    if v.local_playback() {
+                        "local"
+                    } else {
+                        match v.quality {
+                            starkit::media::Quality::Low => "360p",
+                            starkit::media::Quality::Balanced => "480p",
+                            starkit::media::Quality::High => "720p",
+                        }
+                    }
+                )
+            }));
+        }
+    }
+    pub(super) fn video_action(&mut self, word: panels::Word) {
+        if self.video_words().is_none() {
+            return;
+        }
+        tracing::debug!(?word, "Video preview action");
+        self.layout.focus_set(ModuleId::Preview);
+        match word {
+            panels::Word::VideoPlay(_) => {
+                if self.graphical.as_ref().unwrap().video.is_none() {
+                    let Some(Preview::Video { path, .. }) = self.view.preview.as_deref() else {
+                        return;
+                    };
+                    let path = path.clone();
+                    // The poster is already loaded. Audio cleanup normally
+                    // invalidates it; reloading introduces a Loading state
+                    // that would cancel this newly started video.
+                    if self.audio_path.is_some() {
+                        let preview_for = self.last_preview_for.clone();
+                        self.stop_audio();
+                        self.last_preview_for = preview_for;
+                    }
+                    let state = self.graphical.as_mut().unwrap();
+                    state.video_sequence += 1;
+                    state.video = Some(starkit::terminal_graphics::media::Host::new(
+                        path.clone(),
+                        format!("video-{}-1", state.video_sequence),
+                        state.video_sequence,
+                        state.local_media,
+                    ));
+                    if let Some(placement) = state.placements.iter().find(|p| {
+                        self.layout
+                            .last
+                            .as_ref()
+                            .is_some_and(|r| p.source == r.rect_of(ModuleId::Preview).into())
+                    }) {
+                        if let Some(video) = state.video.as_mut() {
+                            video.set_bounds(
+                                u32::from(placement.target.width.saturating_sub(24)),
+                                u32::from(placement.target.height.saturating_sub(80)),
+                            );
+                        }
+                    }
+                    state.video_path = Some(path);
+                } else {
+                    let v = self.graphical.as_mut().unwrap().video.as_mut().unwrap();
+                    if v.finished {
+                        v.restart(0.0);
+                        v.set_control(false, v.volume);
+                    } else {
+                        v.set_control(!v.paused, v.volume);
+                    }
+                }
+            }
+            panels::Word::VideoMute(_)
+            | panels::Word::VideoVolumeDown
+            | panels::Word::VideoVolumeUp => {
+                if let Some(v) = self.graphical.as_mut().unwrap().video.as_mut() {
+                    let volume = match word {
+                        panels::Word::VideoMute(_) => {
+                            if v.volume == 0 {
+                                70
+                            } else {
+                                0
+                            }
+                        }
+                        panels::Word::VideoVolumeDown => v.volume.saturating_sub(10),
+                        _ => v.volume.saturating_add(10).min(100),
+                    };
+                    v.set_control(v.paused, volume);
+                }
+            }
+            panels::Word::VideoExpand(_) => {
+                let state = self.graphical.as_mut().unwrap();
+                if let Some(rows) = state.video_expanded.take() {
+                    self.layout.native_preview_rows = rows;
+                } else {
+                    state.video_expanded = Some(self.layout.native_preview_rows);
+                    self.layout.native_preview_rows = Some(u16::MAX);
+                }
+            }
+            _ => {}
+        }
+        self.repaint = true;
+    }
+    fn video_key(&mut self, code: &str, modifiers: u8) -> bool {
+        if modifiers & !starkit::crossterm::event::KeyModifiers::SHIFT.bits() != 0
+            || self.layout.focus() != ModuleId::Preview
+            || self.overlays.is_open()
+            || self.video_words().is_none()
+        {
+            return false;
+        }
+        let code = code.strip_prefix("char:").unwrap_or(code);
+        match code {
+            " " | "space" => self.video_action(panels::Word::VideoPlay(true)),
+            "m" | "M" => self.video_action(panels::Word::VideoMute(true)),
+            "+" | "=" => self.video_action(panels::Word::VideoVolumeUp),
+            "-" => self.video_action(panels::Word::VideoVolumeDown),
+            "f" | "F" => self.video_action(panels::Word::VideoExpand(false)),
+            "escape" if self.graphical.as_ref().unwrap().video_expanded.is_some() => {
+                self.video_action(panels::Word::VideoExpand(true))
+            }
+            "left" | "right" => {
+                let duration = match self.view.preview.as_deref() {
+                    Some(Preview::Video { poster, .. }) => poster.duration,
+                    _ => 0.0,
+                };
+                if let Some(v) = self.graphical.as_mut().unwrap().video.as_mut() {
+                    v.restart(
+                        (v.position + if code == "left" { -5.0 } else { 5.0 })
+                            .clamp(0.0, duration.max(0.0)),
+                    );
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+    fn video_pointer(&mut self, action: &str, button: u8, x: u16, y: u16) -> bool {
+        if button != 0
+            || action != "down"
+            || self.overlays.is_open()
+            || self.video_words().is_none()
+        {
+            return false;
+        }
+        let Some(track) = self.graphical.as_ref().unwrap().video_timeline else {
+            return false;
+        };
+        if !track.contains((x, y).into()) {
+            return false;
+        }
+        self.layout.focus_set(ModuleId::Preview);
+        let duration = match self.view.preview.as_deref() {
+            Some(Preview::Video { poster, .. }) => poster.duration,
+            _ => 0.0,
+        };
+        if let Some(v) = self.graphical.as_mut().unwrap().video.as_mut() {
+            v.restart(f64::from(x - track.x) / f64::from(track.width.max(1)) * duration);
+        }
+        true
+    }
+    fn video_scene(&mut self, scene: &mut Scene, regions: &Regions) {
+        if self.video_words().is_none() {
+            return;
+        }
+        let Some(Preview::Video { poster, .. }) = self.view.preview.as_deref() else {
+            return;
+        };
+        let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
+        if rect.height < 3 {
+            return;
+        }
+        rect.y += rect.height - 1;
+        rect.height = 1;
+        let state = self.graphical.as_mut().unwrap();
+        state.video_timeline = Some(rect);
+        let position = state.video.as_ref().map_or(0.0, |v| v.position);
+        let cw = (scene.viewport.width / u32::from(scene.viewport.columns.max(1))) as u16;
+        let ch = (scene.viewport.height / u32::from(scene.viewport.rows.max(1))) as u16;
+        let surface = starkit::media::timeline(
+            rect.width.saturating_mul(cw).max(1),
+            ch.max(1),
+            position,
+            poster.duration,
+            hex(self.theme.panel_bg),
+            hex(self.theme.dim),
+            hex(self.theme.accent),
+        );
+        scene.components.push(Component::Surface {
+            rect: rect.into(),
+            surface,
+        });
+        if let Some(video) = state.video.as_ref() {
+            let text = video.warning.clone().unwrap_or_else(|| {
+                format!(
+                    "{:02}:{:02} / {:02}:{:02} · {}% volume · {}",
+                    video.position as u64 / 60,
+                    video.position as u64 % 60,
+                    poster.duration as u64 / 60,
+                    poster.duration as u64 % 60,
+                    video.volume,
+                    if video.local_playback() {
+                        "local"
+                    } else {
+                        match video.quality {
+                            starkit::media::Quality::Low => "360p",
+                            starkit::media::Quality::Balanced => "480p",
+                            starkit::media::Quality::High => "720p",
+                        }
+                    }
+                )
+            });
+            let info = Rect::new(rect.x, rect.y.saturating_sub(1), rect.width, 1);
+            let mut surface = starkit::native_surface::Surface::new(
+                info.width.saturating_mul(cw).max(1),
+                ch.max(1),
+                hex(self.theme.panel_bg),
+            );
+            surface.text(
+                starkit::native_surface::PixelRect::new(0, 0, surface.width, surface.height),
+                &text,
+                &hex(self.theme.dim),
+                starkit::native_surface::Metrics::from_cell(cw, ch).font,
+                false,
+            );
+            scene.components.push(Component::Surface {
+                rect: info.into(),
+                surface,
+            });
+        }
+        scene.pointer_regions.push(rect.into());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn video_preview_mouse_keys_seek_and_expand_preserve_height() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        let state = app.graphical.as_mut().unwrap();
+        state.video_capable = true;
+        state.local_media = true;
+        state.surface_mode = true;
+        state.pixel_layout = true;
+        app.layout.preview_open = true;
+        app.view.preview = Some(Arc::new(Preview::Video {
+            path: fake.home().join("movie.mp4"),
+            poster: starkit::media::Poster {
+                pixels: Arc::new(RgbaImage::new(32, 24)),
+                duration: 60.0,
+                width: 32,
+                height: 24,
+                audio: true,
+            },
+        }));
+        let viewport = Viewport {
+            columns: 100,
+            rows: 40,
+            width: 1200,
+            height: 800,
+            ..Viewport::default()
+        };
+        let first = Controller::scene(&mut app, viewport);
+        assert!(
+            app.graphical.as_ref().unwrap().video.is_none(),
+            "Selecting a video must not start playback"
+        );
+        let regions = app.layout.last.clone().unwrap();
+        let height = regions.rect_of(ModuleId::Preview).height;
+        let play = starkit::chrome::header::slots(
+            regions.rect_of(ModuleId::Preview),
+            &app.panel_words(ModuleId::Preview),
+        )
+        .into_iter()
+        .find(|(w, _)| matches!(w, panels::Word::VideoPlay(true)))
+        .unwrap()
+        .1;
+        app.last_preview_for = Some(fake.home().join("movie.mp4"));
+        let placement = first
+            .placements
+            .iter()
+            .find(|p| p.source == regions.rect_of(ModuleId::Preview).into())
+            .unwrap();
+        let px = u32::from(placement.target.x)
+            + u32::from(play.x - placement.source.x + play.width / 2)
+                * u32::from(placement.target.width)
+                / u32::from(placement.source.width);
+        let row = play.y - placement.source.y;
+        let py = u32::from(placement.target.y)
+            + ((placement.row_edge(row) + placement.row_edge(row + 1)) / 2.0) as u32;
+        Controller::input(
+            &mut app,
+            Input::Pointer {
+                action: "down".into(),
+                button: 0,
+                x: 0,
+                y: 0,
+                pixel: Some([px, py]),
+                modifiers: 0,
+            },
+        );
+        let v = app.graphical.as_ref().unwrap().video.as_ref().unwrap();
+        assert_eq!(
+            app.last_preview_for,
+            Some(fake.home().join("movie.mp4")),
+            "Starting video must not invalidate the loaded preview"
+        );
+        assert_eq!(v.volume, 0);
+        assert!(!v.paused);
+        assert!(app.video_key("char: ", 0));
+        assert!(
+            app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .paused
+        );
+        assert!(app.video_key("char:m", 0));
+        assert_eq!(
+            app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .volume,
+            70
+        );
+        let previous = app
+            .graphical
+            .as_ref()
+            .unwrap()
+            .video
+            .as_ref()
+            .unwrap()
+            .generation;
+        assert!(app.video_key("right", 0));
+        assert_eq!(
+            app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .position,
+            5.0
+        );
+        assert!(
+            app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .generation
+                > previous
+        );
+        Controller::scene(&mut app, viewport);
+        assert_eq!(
+            app.layout
+                .last
+                .as_ref()
+                .unwrap()
+                .rect_of(ModuleId::Preview)
+                .height,
+            height
+        );
+        assert!(app.video_key("char:f", 0));
+        Controller::scene(&mut app, viewport);
+        assert!(
+            app.layout
+                .last
+                .as_ref()
+                .unwrap()
+                .rect_of(ModuleId::Preview)
+                .height
+                > height
+        );
+        assert!(app.video_key("escape", 0));
+        Controller::scene(&mut app, viewport);
+        assert_eq!(
+            app.layout
+                .last
+                .as_ref()
+                .unwrap()
+                .rect_of(ModuleId::Preview)
+                .height,
+            height
+        );
+        assert!(!first.pointer_regions.is_empty());
+        app.layout.preview_open = false;
+        app.tick_video();
+        assert!(app.graphical.as_ref().unwrap().video.is_none());
+    }
     #[test]
     fn native_breadcrumbs_have_spaced_separators_and_real_ancestor_targets() {
         let home = std::path::Path::new("/home/test");

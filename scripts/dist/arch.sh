@@ -16,7 +16,7 @@ trap 'rm -rf "$work"' EXIT
 # fixtures. Never reuse a host-built binary or expose its target directory.
 tar --transform "s,^,starfold-$ver/," -czf "$work/starfold-$ver.tar.gz" \
     Cargo.toml Cargo.lock flake.nix flake.lock src tests testdata vendor \
-    packaging scripts docs .github README.md LICENSE LICENSES
+    packaging scripts docs .github README.md LICENSE NOTICE LICENSES
 sum=$(sha256sum "$work/starfold-$ver.tar.gz" | cut -d' ' -f1)
 sed -e "s/@VERSION@/$ver/g" -e "s/@SHA256@/$sum/g" \
     packaging/arch/PKGBUILD.in > "$work/PKGBUILD"

@@ -21,7 +21,35 @@ pub(super) fn looks_like_image(path: &Path, head: &[u8]) -> bool {
     ImageFormat::from_path(path).is_ok() || starkit::image::guess_format(head).is_ok()
 }
 
-pub(super) fn build_image(path: &Path, full_len: u64, cfg: &PreviewConfig) -> Preview {
+pub(super) fn build_image(
+    path: &Path,
+    full_len: u64,
+    cfg: &PreviewConfig,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Preview {
+    if ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+        .ok()
+        .and_then(|r| r.format())
+        == Some(ImageFormat::Gif)
+        && full_len <= MAX_IN_PROCESS_FILE_BYTES
+    {
+        let decoded = decode_animation(path, cfg, cancel);
+        if let Err(error) = &decoded {
+            tracing::warn!(path = %path.display(), %error, "GIF animation unavailable; using still preview");
+        }
+        if let Ok(sequence) = decoded {
+            if sequence.truncated {
+                tracing::warn!(path = %path.display(), frames = sequence.len(), "GIF preview truncated at memory/frame limit");
+            }
+            if sequence.len() > 1 {
+                return Preview::Animation(Arc::new(sequence));
+            }
+        }
+    }
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Preview::Empty;
+    }
     match decode_preview(path, full_len, cfg) {
         Ok((rgba, format)) => {
             let (width, height) = rgba.dimensions();
@@ -34,6 +62,28 @@ pub(super) fn build_image(path: &Path, full_len: u64, cfg: &PreviewConfig) -> Pr
         }
         Err(e) => Preview::Error(format!("could not preview the image: {e}")),
     }
+}
+
+fn decode_animation(
+    path: &Path,
+    cfg: &PreviewConfig,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<starkit::animation::Animation, String> {
+    // Bound both encoded input and accumulated composited frames.
+    let deadline = Instant::now() + Duration::from_millis(cfg.timeout_ms.max(15_000));
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .map_err(|e| e.to_string())?
+        .take(MAX_IN_PROCESS_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_IN_PROCESS_FILE_BYTES {
+        return Err("GIF input exceeds limit".into());
+    }
+    starkit::animation::Animation::gif(&bytes, 64_000_000, || {
+        cancel.load(std::sync::atomic::Ordering::Relaxed) || Instant::now() >= deadline
+    })
+    .map_err(|e| e.to_string())
 }
 
 fn decode_preview(
@@ -161,6 +211,74 @@ fn format_name(fmt: ImageFormat) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_gif(path: &Path, frames: usize) {
+        let mut encoder =
+            starkit::image::codecs::gif::GifEncoder::new(fs::File::create(path).unwrap());
+        encoder
+            .set_repeat(starkit::image::codecs::gif::Repeat::Infinite)
+            .unwrap();
+        for index in 0..frames {
+            encoder
+                .encode_frame(starkit::image::Frame::from_parts(
+                    RgbaImage::from_pixel(
+                        4,
+                        4,
+                        starkit::image::Rgba([index as u8 * 200, 30, 40, 255]),
+                    ),
+                    0,
+                    0,
+                    starkit::image::Delay::from_numer_denom_ms(100, 1),
+                ))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn gif_preview_animates_by_signature_and_static_gifs_stay_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("animation.png");
+        write_gif(&path, 2);
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let result = build_image(
+            &path,
+            fs::metadata(&path).unwrap().len(),
+            &PreviewConfig::default(),
+            &cancel,
+        );
+        let Preview::Animation(sequence) = result else {
+            panic!("{result:?}")
+        };
+        assert_eq!(sequence.len(), 2);
+        assert_ne!(sequence.frame(0).unwrap(), sequence.frame(1).unwrap());
+        write_gif(&path, 1);
+        assert!(matches!(
+            build_image(
+                &path,
+                fs::metadata(&path).unwrap().len(),
+                &PreviewConfig::default(),
+                &cancel
+            ),
+            Preview::Image { format: "gif", .. }
+        ));
+    }
+
+    #[test]
+    fn damaged_gif_returns_an_error_and_cancelled_preview_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.gif");
+        fs::write(&path, b"GIF89a").unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        assert!(matches!(
+            build_image(&path, 6, &PreviewConfig::default(), &cancel),
+            Preview::Error(_)
+        ));
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(matches!(
+            build_image(&path, 6, &PreviewConfig::default(), &cancel),
+            Preview::Empty
+        ));
+    }
 
     #[test]
     fn libvips_thumbnail_stays_within_the_preview_limit_when_available() {

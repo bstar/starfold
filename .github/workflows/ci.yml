@@ -23,16 +23,26 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # No build dependencies. There are no system libraries: trash is the
-      # freedesktop specification in pure Rust and nothing runs bindgen, so
-      # there is nothing to apt-get. Adding a `-sys` crate means adding a step
-      # here.
+      # Native video previews link FFmpeg and CPAL.
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
+      - name: Native media dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg
+      - name: Native media dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg pkg-config llvm
+      - name: Locate libclang (macOS)
+        if: runner.os == 'macOS'
+        run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # First, and cheap: Cargo.toml and Cargo.lock must agree.
       - run: ./scripts/check-version.sh
@@ -55,12 +65,18 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      # Still nothing to install. `trash` selects its NSFileManager backend
-      # here and builds against the SDK stdenv already provides, so there is
-      # no Homebrew line and no LIBCLANG_PATH to set.
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy
+      - name: Native media dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg
+      - name: Native media dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg pkg-config llvm
+      - name: Locate libclang (macOS)
+        if: runner.os == 'macOS'
+        run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # unrar_sys builds bundled C++; Ubuntu build-essential and the macOS
       # Xcode toolchain already provide the required compiler/runtime.
@@ -87,6 +103,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: "1.90"
+      - name: Native media dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg
+      - name: Native media dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg pkg-config llvm
+      - name: Locate libclang (macOS)
+        if: runner.os == 'macOS'
+        run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo check --all-targets --all-features
 
@@ -95,6 +120,15 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - name: Native media dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg
+      - name: Native media dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg pkg-config llvm
+      - name: Locate libclang (macOS)
+        if: runner.os == 'macOS'
+        run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: sudo apt-get update && sudo apt-get install -y openssh-server
       - run: cargo build --features terminal-graphics

@@ -699,6 +699,29 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             effects.events.insert(0, Event::Queue(op));
             effects
         }
+        Command::ReportDropFailure { op, reason } => {
+            if let Some(entry) = state
+                .queue
+                .get_mut(op)
+                .filter(|entry| entry.import_sources.is_some())
+            {
+                entry.failure = Some(reason.clone());
+                if let Some(source) = entry
+                    .import_sources
+                    .as_ref()
+                    .and_then(|paths| paths.first())
+                {
+                    entry.failed.push((source.clone(), reason));
+                }
+                if !matches!(entry.status, OpStatus::Running | OpStatus::Planning) {
+                    entry.status = OpStatus::Failed;
+                }
+            }
+            Effects {
+                jobs: vec![],
+                events: vec![Event::Queue(op)],
+            }
+        }
         Command::PreviewPage {
             path,
             generation,

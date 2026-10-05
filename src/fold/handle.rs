@@ -171,6 +171,11 @@ pub enum Command {
         op: OpId,
         success: bool,
     },
+    /// Preserve transport/source-cleanup errors in the operation history.
+    ReportDropFailure {
+        op: OpId,
+        reason: String,
+    },
     PreviewPage {
         path: PathBuf,
         generation: u64,

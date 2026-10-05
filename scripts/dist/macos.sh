@@ -6,6 +6,8 @@ cd "$(dirname "$0")/../.."
 ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 out=${DIST_DIR:-dist}
 mkdir -p "$out"
+brew list ffmpeg pkg-config llvm >/dev/null 2>&1 || brew install ffmpeg pkg-config llvm
+export LIBCLANG_PATH="$(brew --prefix llvm)/lib"
 cargo build --release --locked --target aarch64-apple-darwin
 bin="${CARGO_TARGET_DIR:-target}/aarch64-apple-darwin/release/starfold"
 "$bin" --version
@@ -17,5 +19,6 @@ install -m755 "$bin" "$stage/starfold"
 cp README.md LICENSE "$stage/"
 [ ! -f NOTICE ] || cp NOTICE "$stage/"
 [ ! -d LICENSES ] || cp -R LICENSES "$stage/"
+printf '%s\n' 'Requires Homebrew FFmpeg: brew install ffmpeg' > "$stage/INSTALL.txt"
 tar -C "$work" -czf "$out/starfold-$ver-aarch64-apple-darwin.tar.gz" "starfold-$ver"
 echo "wrote $out/starfold-$ver-aarch64-apple-darwin.tar.gz"

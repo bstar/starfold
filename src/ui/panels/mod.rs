@@ -108,6 +108,11 @@ pub enum Word {
     ZoomOut,
     ZoomReset(u16),
     ZoomIn,
+    VideoPlay(bool),
+    VideoMute(bool),
+    VideoVolumeDown,
+    VideoVolumeUp,
+    VideoExpand(bool),
 }
 
 impl Word {
@@ -115,6 +120,11 @@ impl Word {
     /// `Back` stays an arrow: `h` remains the Stack navigation key.
     pub fn mnemonic(self) -> Option<(char, u16)> {
         match self {
+            Word::VideoPlay(_)
+            | Word::VideoMute(_)
+            | Word::VideoVolumeDown
+            | Word::VideoVolumeUp
+            | Word::VideoExpand(_) => None,
             Word::Back
             | Word::PictureScale(_)
             | Word::ZoomOut
@@ -138,6 +148,11 @@ impl Word {
 impl header::Word for Word {
     fn word(self) -> Cow<'static, str> {
         match self {
+            Word::VideoPlay(paused) => if paused { "Play" } else { "Pause" }.into(),
+            Word::VideoMute(muted) => if muted { "Unmute" } else { "Mute" }.into(),
+            Word::VideoVolumeDown => "−".into(),
+            Word::VideoVolumeUp => "+".into(),
+            Word::VideoExpand(expanded) => if expanded { "Restore" } else { "Expand" }.into(),
             Word::View => "view".into(),
             Word::Places => "places".into(),
             Word::Bookmark => "Bookmark".into(),

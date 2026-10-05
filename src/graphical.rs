@@ -36,6 +36,8 @@ struct Options {
 #[derive(Parser)]
 struct Relay {
     #[arg(long)]
+    graphical_terminal_client: Option<PathBuf>,
+    #[arg(long)]
     graphical_relay: Option<String>,
     #[arg(long)]
     graphical_server: Option<String>,
@@ -45,6 +47,20 @@ struct Relay {
     attach_only: bool,
     #[arg(long)]
     graphical_sessions: bool,
+}
+
+fn terminal_event(
+    event: &starkit::crossterm::event::Event,
+) -> Option<starkit::terminal_graphics::Input> {
+    match event {
+        starkit::crossterm::event::Event::FocusLost => {
+            Some(starkit::terminal_graphics::Input::CancelPointer)
+        }
+        starkit::crossterm::event::Event::Osc72(text) => {
+            Some(starkit::terminal_graphics::Input::Osc72 { text: text.clone() })
+        }
+        _ => None,
+    }
 }
 
 pub fn handles_args() -> bool {
@@ -138,6 +154,15 @@ pub fn main() -> Result<()> {
             }
             return Ok(());
         }
+        // A registered Kitty frontend can stay local while the user launches
+        // normally inside an existing SSH shell. Reuse that SSH TTY; no second
+        // authentication, inferred hostname, or new connection is needed.
+        if options.ssh.is_none() {
+            if let Some(terminal) = starkit::terminal_graphics::terminal_bridge::probe()? {
+                let socket = ensure(&options.session, options.directory, options.attach)?;
+                return terminal.relay(&socket);
+            }
+        }
         crate::PATHS.init_private_dirs();
         let _log = starkit::logging::init(&crate::PATHS, true)?;
         return client::run_with_events(
@@ -153,20 +178,15 @@ pub fn main() -> Result<()> {
                 directory: options.directory.map(|p| p.to_string_lossy().into_owned()),
                 attach_only: options.attach,
             },
-            |event| match event {
-                // A release may happen in another window. Never retain a
-                // captured drag/scrollbar when the terminal loses focus.
-                starkit::crossterm::event::Event::FocusLost => {
-                    Some(starkit::terminal_graphics::Input::CancelPointer)
-                }
-                starkit::crossterm::event::Event::Osc72(text) => {
-                    Some(starkit::terminal_graphics::Input::Osc72 { text: text.clone() })
-                }
-                _ => None,
-            },
+            terminal_event,
         );
     }
     let options = Relay::parse();
+    if let Some(socket) = options.graphical_terminal_client {
+        crate::PATHS.init_private_dirs();
+        let _log = starkit::logging::init(&crate::PATHS, true)?;
+        return client::run_terminal_socket_with_events(&socket, terminal_event);
+    }
     if options.graphical_sessions {
         for name in session::list(&root()?)? {
             println!("{name}");

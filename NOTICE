@@ -1,0 +1,17 @@
+STAR/FOLD native media previews
+
+STAR/KIT dynamically links FFmpeg (https://ffmpeg.org), including
+libavcodec, libavformat, libavutil, libavfilter, libswscale and libswresample.
+The media player is native Rust; FFmpeg supplies codecs and conversion.
+
+Most FFmpeg code is licensed under LGPL 2.1 or later; the license text is in
+LICENSES/ffmpeg-LGPL-2.1.txt. FFmpeg builds enabling GPL components, including
+libx264 used for the SSH H.264 preview, are governed by the corresponding GPL
+terms. Dynamically linked binary distributions inherit the linked build's
+applicable terms. Application sources remain available in this repository.
+
+Nix and Arch use their distribution's FFmpeg. AppImages bundle Debian's shared
+libraries in usr/lib, replaceable with compatible libraries without rebuilding
+STAR/FOLD. macOS archives require Homebrew FFmpeg. Sources for these libraries
+are available from https://ffmpeg.org/download.html and the supplying
+package distribution. See FFmpeg's LICENSE.md for component-specific terms.

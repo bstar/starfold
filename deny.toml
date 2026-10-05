@@ -79,3 +79,16 @@ allow = ["bzip2-1.0.6"]
 [[licenses.exceptions]]
 name = "ppmd-rust"
 allow = ["MIT-0"]
+
+# Native FFmpeg Rust bindings (same decoder foundation as STAR/AMP).
+[[licenses.exceptions]]
+name = "ffmpeg-next"
+allow = ["WTFPL"]
+[[licenses.exceptions]]
+name = "ffmpeg-sys-next"
+allow = ["WTFPL"]
+
+# libclang loader used by the native FFmpeg binding generator.
+[[licenses.exceptions]]
+name = "libloading"
+allow = ["ISC"]
