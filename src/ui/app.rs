@@ -376,6 +376,20 @@ impl App {
         let Some(entry) = state.cursor_entry() else {
             return;
         };
+        #[cfg(feature = "terminal-graphics")]
+        if self
+            .graphical
+            .as_ref()
+            .is_some_and(|state| state.can_play_video())
+            && (entry.kind == EntryKind::File || entry.link_kind == Some(EntryKind::File))
+            && crate::fold::file_type::classify(&entry.path, &[])
+                == crate::fold::file_type::FileType::Video
+        {
+            let path = entry.path.clone();
+            drop(state);
+            self.activate_video_entry(path);
+            return;
+        }
         if !self.cfg.preview.audio_player.embeds(&self.cfg.open.command)
             || !(entry.kind == EntryKind::File || entry.link_kind == Some(EntryKind::File))
             || self.audio.supports(&entry.path) == Some(false)
@@ -643,7 +657,7 @@ impl App {
         }
         let (action, value) = match key.code {
             #[cfg(feature = "terminal-graphics")]
-            KeyCode::Char('a') if self.audio_output_word().is_some() => {
+            KeyCode::Char('a' | 'A') if self.audio_output_word().is_some() => {
                 self.toggle_audio_output();
                 return true;
             }

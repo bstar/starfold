@@ -107,7 +107,7 @@ target/release/starfold graphical --ssh HOST --remote-executable /path/to/remote
 
 The remote executable must be the feature-enabled binary, rather than a wrapper
 that always launches the ordinary CLI. Video audio plays through the Mac's
-output device and starts muted; click **Unmute**. Launching a renderer on the
+output device and starts at 80%; click the audio percentage or press **M** to mute. Launching a renderer on the
 SSH host without the local Kitty integration sends audio to that host instead.
 
 ### Launch after an ordinary SSH login
@@ -299,16 +299,29 @@ controls retain separate click targets; tabs have no bottom underline.
 
 ## Native video Preview
 
-Select a video to get a bounded poster frame and metadata. Playback starts only
-when you click **Play** in the Preview header. It starts muted. Header controls
-provide Play/Pause, Mute/Unmute, volume, Expand/Restore and Close. Click the full
-width timeline to seek. Focusing Preview keeps its height unchanged; only Expand
+Select a video to get a bounded poster frame and metadata. Press **Enter** on
+the file or click **Play** in the Preview header to start playback. Audio starts at 80%. Header controls
+show the volume percentage and provide Play/Pause, mute, volume, Expand/Restore
+and Close. Muting restores the previous volume when toggled again. Click the full
+width timeline to seek. Dragging pauses playback and previews the target time;
+release seeks once and restores the previous play/pause state. The graphical transport row reuses STAR/AMP's native
+play, pause, stop, backward/forward buttons and volume slider. Backward/forward
+seek five seconds; Stop returns to the poster. The matching AMP helper supplies
+the artwork, layout and hit testing without opening another audio player.
+Focusing Preview keeps its height unchanged; only Expand
 or dragging the divider changes it.
 
-With Preview focused: **Space** plays/pauses, **Left/Right** seek five seconds,
-**M** toggles mute, **+/-** adjusts volume, **F** expands/restores, and **Esc**
+Enter on a video file starts its video Preview directly, including MKV files,
+without sending it to the music player. Conversion starts from the first decoded
+frame, so an incomplete stream header cannot abort FFmpeg during startup or seek.
+
+With Preview focused: **P** or **Space** plays/pauses, **Left/Right** seek five seconds,
+**M** or **A** toggles mute, **+/-** adjusts volume, **E** (or **F**) expands/restores, and **Esc**
 restores an expanded Preview. Position, buffering, mute and quality appear in
-the status footer. Audio-device failures allow silent video and show a notice
+the status footer. Streamed playback is labeled **SSH stream** in the playback
+details and status footer. The unplayed timeline track is slightly lighter than
+the panel in dark themes.
+Audio-device failures allow silent video and show a notice
 inside Preview. Ordinary cell mode shows the poster and metadata only.
 
 STAR/KIT owns the native FFmpeg decoder, H.264/AAC encoder, bounded scheduling,

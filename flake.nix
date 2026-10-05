@@ -5,7 +5,7 @@
     nixpkgs.url = "nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     staramp-native = {
-      url = "github:bstar/staramp/0d8a401341e3df7debab6c4136111c0f34ee0f70";
+      url = "github:bstar/staramp/31efde7480f2bb6959afb47d5c66458cad1252fc";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-utils.follows = "flake-utils";
     };

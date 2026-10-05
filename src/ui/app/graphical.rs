@@ -26,10 +26,16 @@ pub(super) struct State {
     pub(super) audio_epoch: Option<u64>,
     video: Option<starkit::terminal_graphics::media::Host>,
     video_sequence: u64,
+    video_unmuted_volume: Option<u8>,
+    video_scrub: Option<VideoScrub>,
     video_path: Option<PathBuf>,
+    video_pending: Option<PathBuf>,
     video_expanded: Option<Option<u16>>,
     pub(super) video_status: Option<String>,
     video_timeline: Option<Rect>,
+    video_controls: Option<crate::video_transport::Client>,
+    video_control_rect: Option<Rect>,
+    video_control_request: Option<crate::video_transport::Request>,
     image_source: Option<Arc<RgbaImage>>,
     image_sequence: u64,
     pub(super) image_zoom: Option<u16>,
@@ -45,6 +51,9 @@ pub(super) struct State {
     pub(super) wire: Option<crossbeam_channel::Receiver<wire_dnd::Outgoing>>,
 }
 impl State {
+    pub(super) fn can_play_video(&self) -> bool {
+        self.video_capable && !self.cell_mode
+    }
     pub(super) fn drag_sources(&self) -> Option<(usize, Vec<PathBuf>)> {
         self.drag.as_ref().map(|d| (d.stack, d.sources.clone()))
     }
@@ -82,6 +91,12 @@ impl Drop for Authorization {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+struct VideoScrub {
+    track: Rect,
+    position: f64,
+    paused: bool,
 }
 
 fn hex(rgb: starkit::theme::color::Rgb) -> String {
@@ -639,7 +654,9 @@ impl App {
 
         if let Some(video) = &state.video {
             let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
-            rect.height = rect.height.saturating_sub(2);
+            rect.height = rect
+                .height
+                .saturating_sub(if rect.height >= 6 { 4 } else { 2 });
             scene.components.push(Component::Image {
                 rect: rect.into(),
                 id: format!("video-{}-{}", video.session, video.generation),
@@ -652,7 +669,9 @@ impl App {
         if let Some((id, png)) = &state.image {
             let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
             if matches!(self.view.preview.as_deref(), Some(Preview::Video { .. })) {
-                rect.height = rect.height.saturating_sub(2);
+                rect.height = rect
+                    .height
+                    .saturating_sub(if rect.height >= 6 { 4 } else { 2 });
             }
             scene.components.push(Component::Image {
                 rect: rect.into(),
@@ -1895,6 +1914,12 @@ impl Controller for App {
         }
         match input {
             Input::Key { code, modifiers } => {
+                if self.graphical.as_ref().unwrap().video_scrub.is_some() {
+                    self.cancel_video_scrub();
+                    if code == "escape" {
+                        return;
+                    }
+                }
                 if self.video_key(&code, modifiers) {
                     return;
                 }
@@ -1950,8 +1975,8 @@ impl Controller for App {
                             None => p.pointer(v, x, y, captured),
                         }
                     };
-                    let captured =
-                        self.bars.held().is_some() && matches!(action.as_str(), "drag" | "up");
+                    let captured = (self.bars.held().is_some() || state.video_scrub.is_some())
+                        && matches!(action.as_str(), "drag" | "up");
                     let placement = if captured {
                         state.pointer_capture.as_ref()
                     } else {
@@ -2022,6 +2047,7 @@ impl Controller for App {
                 }
             }
             Input::CancelPointer => {
+                self.cancel_video_scrub();
                 self.graphical.as_mut().unwrap().preview_resize = None;
                 self.graphical.as_mut().unwrap().pointer_capture = None;
                 if self
@@ -2198,10 +2224,10 @@ impl App {
             return None;
         }
         let paused = state.video.as_ref().is_none_or(|v| v.paused || v.finished);
-        let muted = state.video.as_ref().is_none_or(|v| v.volume == 0);
+        let volume = state.video.as_ref().map_or(80, |v| v.volume);
         Some(vec![
             panels::Word::VideoPlay(paused),
-            panels::Word::VideoMute(muted),
+            panels::Word::VideoMute(volume),
             panels::Word::VideoVolumeDown,
             panels::Word::VideoVolumeUp,
             panels::Word::VideoExpand(state.video_expanded.is_some()),
@@ -2215,14 +2241,58 @@ impl App {
         if let Some(video) = state.video.take() {
             state.effects.push(video.close());
         }
+        state.video_scrub = None;
         state.video_path = None;
         state.video_status = None;
         state.video_timeline = None;
+        state.video_controls = None;
+        state.video_control_rect = None;
+        state.video_control_request = None;
         if let Some(rows) = state.video_expanded.take() {
             self.layout.native_preview_rows = rows;
         }
     }
+    pub(super) fn activate_video_entry(&mut self, path: PathBuf) {
+        if self.audio_path.is_some() {
+            self.stop_audio();
+        }
+        self.layout.preview_open = true;
+        self.layout.focus_set(ModuleId::Preview);
+        if !matches!(self.view.preview.as_deref(), Some(Preview::Video { path: ready, .. }) if ready == &path)
+        {
+            self.last_preview_for = None;
+        }
+        self.graphical.as_mut().unwrap().video_pending = Some(path);
+        self.repaint = true;
+    }
     fn tick_video(&mut self) {
+        let mut actions = Vec::new();
+        if let Some(controls) = self
+            .graphical
+            .as_ref()
+            .and_then(|g| g.video_controls.as_ref())
+        {
+            let (changed, error) = controls.poll();
+            self.repaint |= changed;
+            if let Some(error) = error {
+                self.note = Some((error, NoteLevel::Warning, Instant::now()));
+            }
+            while let Some(action) = controls.action() {
+                actions.push(action);
+            }
+        }
+        for (action, value) in actions {
+            self.video_transport_action(&action, value);
+        }
+        if let Some(pending) = self.graphical.as_ref().unwrap().video_pending.clone() {
+            if !self.layout.preview_open || self.view.cursor_path.as_ref() != Some(&pending) {
+                self.graphical.as_mut().unwrap().video_pending = None;
+            } else if matches!(self.view.preview.as_deref(), Some(Preview::Video { path, .. }) if path == &pending)
+            {
+                self.graphical.as_mut().unwrap().video_pending = None;
+                self.video_action(panels::Word::VideoPlay(true));
+            }
+        }
         let path = match self.view.preview.as_deref() {
             Some(Preview::Video { path, .. }) => Some(path),
             _ => None,
@@ -2263,9 +2333,9 @@ impl App {
                         "local"
                     } else {
                         match v.quality {
-                            starkit::media::Quality::Low => "360p",
-                            starkit::media::Quality::Balanced => "480p",
-                            starkit::media::Quality::High => "720p",
+                            starkit::media::Quality::Low => "SSH stream · 360p",
+                            starkit::media::Quality::Balanced => "SSH stream · 480p",
+                            starkit::media::Quality::High => "SSH stream · 720p",
                         }
                     }
                 )
@@ -2301,6 +2371,7 @@ impl App {
                         state.video_sequence,
                         state.local_media,
                     ));
+                    state.video.as_mut().unwrap().set_control(false, 80);
                     if let Some(placement) = state.placements.iter().find(|p| {
                         self.layout
                             .last
@@ -2328,12 +2399,14 @@ impl App {
             panels::Word::VideoMute(_)
             | panels::Word::VideoVolumeDown
             | panels::Word::VideoVolumeUp => {
-                if let Some(v) = self.graphical.as_mut().unwrap().video.as_mut() {
+                let state = self.graphical.as_mut().unwrap();
+                if let Some(v) = state.video.as_mut() {
                     let volume = match word {
                         panels::Word::VideoMute(_) => {
                             if v.volume == 0 {
-                                70
+                                state.video_unmuted_volume.unwrap_or(80)
                             } else {
+                                state.video_unmuted_volume = Some(v.volume);
                                 0
                             }
                         }
@@ -2366,11 +2439,11 @@ impl App {
         }
         let code = code.strip_prefix("char:").unwrap_or(code);
         match code {
-            " " | "space" => self.video_action(panels::Word::VideoPlay(true)),
-            "m" | "M" => self.video_action(panels::Word::VideoMute(true)),
+            "p" | "P" | " " | "space" => self.video_action(panels::Word::VideoPlay(true)),
+            "a" | "A" | "m" | "M" => self.video_action(panels::Word::VideoMute(0)),
             "+" | "=" => self.video_action(panels::Word::VideoVolumeUp),
             "-" => self.video_action(panels::Word::VideoVolumeDown),
-            "f" | "F" => self.video_action(panels::Word::VideoExpand(false)),
+            "e" | "E" | "f" | "F" => self.video_action(panels::Word::VideoExpand(false)),
             "escape" if self.graphical.as_ref().unwrap().video_expanded.is_some() => {
                 self.video_action(panels::Word::VideoExpand(true))
             }
@@ -2390,13 +2463,109 @@ impl App {
         }
         true
     }
+    fn video_transport_action(&mut self, action: &str, value: Option<f32>) {
+        match action {
+            "play" => {
+                let video = self.graphical.as_ref().unwrap().video.as_ref();
+                if video.is_none_or(|v| v.paused || v.finished) {
+                    self.video_action(panels::Word::VideoPlay(true));
+                }
+            }
+            "pause" => {
+                if self
+                    .graphical
+                    .as_ref()
+                    .unwrap()
+                    .video
+                    .as_ref()
+                    .is_some_and(|v| !v.paused && !v.finished)
+                {
+                    self.video_action(panels::Word::VideoPlay(false));
+                }
+            }
+            "stop" => self.stop_video(),
+            "previous" | "next" => {
+                let duration = match self.view.preview.as_deref() {
+                    Some(Preview::Video { poster, .. }) => poster.duration,
+                    _ => 0.0,
+                };
+                if let Some(video) = self.graphical.as_mut().unwrap().video.as_mut() {
+                    video.restart(
+                        (video.position + if action == "previous" { -5.0 } else { 5.0 })
+                            .clamp(0.0, duration.max(0.0)),
+                    );
+                }
+            }
+            "volume" => {
+                if let Some(value) = value.filter(|v| v.is_finite()) {
+                    if let Some(video) = self.graphical.as_mut().unwrap().video.as_mut() {
+                        video.set_control(
+                            video.paused,
+                            (value.clamp(0.0, 1.0) * 100.0).round() as u8,
+                        );
+                    }
+                }
+            }
+            _ => return,
+        }
+        self.repaint = true;
+    }
+    fn cancel_video_scrub(&mut self) {
+        let state = self.graphical.as_mut().unwrap();
+        if let Some(scrub) = state.video_scrub.take() {
+            if let Some(video) = state.video.as_mut() {
+                video.set_control(scrub.paused, video.volume);
+            }
+            state.pointer_capture = None;
+            self.repaint = true;
+        }
+    }
     fn video_pointer(&mut self, action: &str, button: u8, x: u16, y: u16) -> bool {
-        if button != 0
-            || action != "down"
-            || self.overlays.is_open()
-            || self.video_words().is_none()
-        {
+        if button != 0 || self.overlays.is_open() || self.video_words().is_none() {
             return false;
+        }
+        let duration = match self.view.preview.as_deref() {
+            Some(Preview::Video { poster, .. }) => poster.duration,
+            _ => 0.0,
+        };
+        let state = self.graphical.as_mut().unwrap();
+        if matches!(action, "drag" | "up") {
+            let Some(scrub) = state.video_scrub.as_mut() else {
+                return false;
+            };
+            scrub.position = f64::from(
+                x.clamp(scrub.track.x, scrub.track.right().saturating_sub(1)) - scrub.track.x,
+            ) / f64::from(scrub.track.width.max(1))
+                * duration;
+            if action == "up" {
+                let scrub = state.video_scrub.take().unwrap();
+                if let Some(video) = state.video.as_mut() {
+                    video.restart(scrub.position);
+                    video.set_control(scrub.paused, video.volume);
+                }
+                state.pointer_capture = None;
+            }
+            self.repaint = true;
+            return true;
+        }
+        if action != "down" {
+            return false;
+        }
+        let state = self.graphical.as_ref().unwrap();
+        if let (Some(rect), Some(request), Some(controls)) = (
+            state.video_control_rect,
+            state.video_control_request.as_ref(),
+            state.video_controls.as_ref(),
+        ) {
+            if rect.contains((x, y).into()) {
+                let px = (u32::from(x - rect.x) * 2 + 1) * u32::from(request.width)
+                    / (u32::from(rect.width) * 2);
+                let py = (u32::from(y - rect.y) * 2 + 1) * u32::from(request.height)
+                    / (u32::from(rect.height) * 2);
+                controls.pointer(request.clone(), px as u16, py as u16);
+                self.layout.focus_set(ModuleId::Preview);
+                return true;
+            }
         }
         let Some(track) = self.graphical.as_ref().unwrap().video_timeline else {
             return false;
@@ -2409,8 +2578,15 @@ impl App {
             Some(Preview::Video { poster, .. }) => poster.duration,
             _ => 0.0,
         };
-        if let Some(v) = self.graphical.as_mut().unwrap().video.as_mut() {
-            v.restart(f64::from(x - track.x) / f64::from(track.width.max(1)) * duration);
+        let state = self.graphical.as_mut().unwrap();
+        if let Some(video) = state.video.as_mut() {
+            state.video_scrub = Some(VideoScrub {
+                track,
+                position: f64::from(x - track.x) / f64::from(track.width.max(1)) * duration,
+                paused: video.paused,
+            });
+            video.set_control(true, video.volume);
+            self.repaint = true;
         }
         true
     }
@@ -2425,11 +2601,16 @@ impl App {
         if rect.height < 3 {
             return;
         }
-        rect.y += rect.height - 1;
+        let controls_rect =
+            (rect.height >= 6).then(|| Rect::new(rect.x, rect.bottom() - 2, rect.width, 2));
+        rect.y += rect.height - if controls_rect.is_some() { 3 } else { 1 };
         rect.height = 1;
         let state = self.graphical.as_mut().unwrap();
         state.video_timeline = Some(rect);
-        let position = state.video.as_ref().map_or(0.0, |v| v.position);
+        let position = state.video_scrub.as_ref().map_or_else(
+            || state.video.as_ref().map_or(0.0, |v| v.position),
+            |scrub| scrub.position,
+        );
         let cw = (scene.viewport.width / u32::from(scene.viewport.columns.max(1))) as u16;
         let ch = (scene.viewport.height / u32::from(scene.viewport.rows.max(1))) as u16;
         let surface = starkit::media::timeline(
@@ -2438,7 +2619,16 @@ impl App {
             position,
             poster.duration,
             hex(self.theme.panel_bg),
-            hex(self.theme.dim),
+            if self.theme.variant == starkit::theme::Variant::Dark {
+                let bg = self.theme.panel_bg;
+                hex(starkit::theme::color::Rgb::new(
+                    bg.r.saturating_add(16),
+                    bg.g.saturating_add(16),
+                    bg.b.saturating_add(16),
+                ))
+            } else {
+                hex(self.theme.dim)
+            },
             hex(self.theme.accent),
         );
         scene.components.push(Component::Surface {
@@ -2449,8 +2639,8 @@ impl App {
             let text = video.warning.clone().unwrap_or_else(|| {
                 format!(
                     "{:02}:{:02} / {:02}:{:02} · {}% volume · {}",
-                    video.position as u64 / 60,
-                    video.position as u64 % 60,
+                    position as u64 / 60,
+                    position as u64 % 60,
                     poster.duration as u64 / 60,
                     poster.duration as u64 % 60,
                     video.volume,
@@ -2458,9 +2648,9 @@ impl App {
                         "local"
                     } else {
                         match video.quality {
-                            starkit::media::Quality::Low => "360p",
-                            starkit::media::Quality::Balanced => "480p",
-                            starkit::media::Quality::High => "720p",
+                            starkit::media::Quality::Low => "SSH stream · 360p",
+                            starkit::media::Quality::Balanced => "SSH stream · 480p",
+                            starkit::media::Quality::High => "SSH stream · 720p",
                         }
                     }
                 )
@@ -2482,6 +2672,51 @@ impl App {
                 rect: info.into(),
                 surface,
             });
+        }
+        if let Some(controls_rect) = controls_rect {
+            let rgb = |c: starkit::theme::color::Rgb| [c.r, c.g, c.b];
+            let request = crate::video_transport::Request {
+                width: controls_rect.width.saturating_mul(cw).clamp(1, 8192),
+                height: controls_rect.height.saturating_mul(ch).clamp(1, 128),
+                theme: crate::audio_embed::Palette {
+                    bg: rgb(self.theme.panel_bg),
+                    fg: rgb(self.theme.panel_fg),
+                    muted: rgb(self.theme.dim),
+                    accent: rgb(self.theme.accent),
+                    selected: rgb(self.theme.row_selected_bg),
+                    border: rgb(self.theme.border),
+                    error: rgb(self.theme.error),
+                },
+                playing: state
+                    .video
+                    .as_ref()
+                    .is_some_and(|v| !v.paused && !v.finished),
+                paused: state
+                    .video
+                    .as_ref()
+                    .is_some_and(|v| v.paused && !v.finished),
+                volume: f32::from(state.video.as_ref().map_or(80, |v| v.volume)) / 100.0,
+                pointer: None,
+            };
+            let controls = state
+                .video_controls
+                .get_or_insert_with(crate::video_transport::Client::new);
+            if let Some(surface) = controls.render(request.clone()) {
+                scene.components.push(Component::Surface {
+                    rect: controls_rect.into(),
+                    surface,
+                });
+                scene.pointer_regions.push(controls_rect.into());
+                state.video_control_rect = Some(controls_rect);
+                state.video_control_request = Some(request);
+            } else {
+                state.video_control_rect = None;
+                state.video_control_request = None;
+            }
+        } else {
+            state.video_controls = None;
+            state.video_control_rect = None;
+            state.video_control_request = None;
         }
         scene.pointer_regions.push(rect.into());
     }
@@ -2546,6 +2781,53 @@ mod tests {
         );
         app.graphical.as_mut().unwrap().cell_mode = true;
         assert!(app.audio_output_word().is_none());
+    }
+
+    #[test]
+    fn video_activation_waits_for_the_selected_poster_without_starting_amp() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().video_capable = true;
+        let path = fake.home().join("movie.mkv");
+        app.view.cursor_path = Some(path.clone());
+        app.activate_video_entry(path.clone());
+        app.tick_video();
+        assert!(app.audio_path.is_none());
+        assert!(app.graphical.as_ref().unwrap().video.is_none());
+        assert_eq!(
+            app.graphical.as_ref().unwrap().video_pending.as_ref(),
+            Some(&path)
+        );
+        app.view.preview = Some(Arc::new(Preview::Video {
+            path: path.clone(),
+            poster: starkit::media::Poster {
+                pixels: Arc::new(RgbaImage::new(32, 24)),
+                duration: 60.0,
+                width: 32,
+                height: 24,
+                audio: true,
+            },
+        }));
+        app.tick_video();
+        assert!(app.audio_path.is_none());
+        let state = app.graphical.as_ref().unwrap();
+        assert!(state.video_pending.is_none());
+        assert_eq!(state.video_path.as_ref(), Some(&path));
+        assert_eq!(state.video.as_ref().unwrap().volume, 80);
+        assert!(!state.video.as_ref().unwrap().paused);
+        app.stop_video();
+        app.activate_video_entry(path);
+        app.view.cursor_path = None;
+        app.tick_video();
+        assert!(app.graphical.as_ref().unwrap().video_pending.is_none());
     }
 
     #[test]
@@ -2628,9 +2910,9 @@ mod tests {
             Some(fake.home().join("movie.mp4")),
             "Starting video must not invalidate the loaded preview"
         );
-        assert_eq!(v.volume, 0);
+        assert_eq!(v.volume, 80);
         assert!(!v.paused);
-        assert!(app.video_key("char: ", 0));
+        assert!(app.video_key("char:p", 0));
         assert!(
             app.graphical
                 .as_ref()
@@ -2639,6 +2921,46 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .paused
+        );
+        assert!(app.video_key("char:-", 0));
+        assert!(app
+            .panel_words(ModuleId::Preview)
+            .contains(&panels::Word::VideoMute(70)));
+        assert!(app.video_key(
+            "char:A",
+            starkit::crossterm::event::KeyModifiers::SHIFT.bits()
+        ));
+        assert_eq!(
+            app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .volume,
+            0
+        );
+        assert!(app.video_key("char:m", 0));
+        assert_eq!(
+            app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .volume,
+            70
+        );
+        assert!(app.video_key("char:a", 0));
+        assert_eq!(
+            app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .volume,
+            0
         );
         assert!(app.video_key("char:m", 0));
         assert_eq!(
@@ -2690,7 +3012,7 @@ mod tests {
                 .height,
             height
         );
-        assert!(app.video_key("char:f", 0));
+        assert!(app.video_key("char:e", 0));
         Controller::scene(&mut app, viewport);
         assert!(
             app.layout
@@ -2713,6 +3035,64 @@ mod tests {
             height
         );
         assert!(!first.pointer_regions.is_empty());
+        let track = app.graphical.as_ref().unwrap().video_timeline.unwrap();
+        app.graphical
+            .as_mut()
+            .unwrap()
+            .video
+            .as_mut()
+            .unwrap()
+            .set_control(false, 80);
+        let generation = app
+            .graphical
+            .as_ref()
+            .unwrap()
+            .video
+            .as_ref()
+            .unwrap()
+            .generation;
+        assert!(app.video_pointer("down", 0, track.x, track.y));
+        for offset in 1..20 {
+            assert!(app.video_pointer("drag", 0, track.x + offset, track.y));
+        }
+        let video = app.graphical.as_ref().unwrap().video.as_ref().unwrap();
+        assert_eq!(
+            video.generation, generation,
+            "Dragging must not restart the encoder"
+        );
+        assert!(video.paused);
+        assert!(app.video_pointer("up", 0, track.x + track.width / 2, track.y));
+        let video = app.graphical.as_ref().unwrap().video.as_ref().unwrap();
+        assert_eq!(
+            video.generation,
+            generation + 1,
+            "Release must seek exactly once"
+        );
+        assert!(!video.paused);
+        assert!(video.position > 25.0 && video.position <= 30.0);
+        assert!(app.video_pointer("down", 0, track.x, track.y));
+        Controller::input(&mut app, Input::CancelPointer);
+        let video = app.graphical.as_ref().unwrap().video.as_ref().unwrap();
+        assert_eq!(video.generation, generation + 1, "Cancel must not seek");
+        assert!(!video.paused);
+        app.graphical
+            .as_mut()
+            .unwrap()
+            .video
+            .as_mut()
+            .unwrap()
+            .set_control(true, 80);
+        assert!(app.video_pointer("down", 0, track.x, track.y));
+        assert!(app.video_pointer("up", 0, track.x + 1, track.y));
+        assert!(
+            app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .paused
+        );
         app.layout.preview_open = false;
         app.tick_video();
         assert!(app.graphical.as_ref().unwrap().video.is_none());

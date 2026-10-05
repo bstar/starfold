@@ -99,7 +99,7 @@ if args.starfold:
         amp_root.mkdir()
         (amp_root / 'config.toml').write_text('volume = 0.0\n')
         env = dict(os.environ, STARFOLD_DIR=str(root / 'fold'), STARAMP_DIR=str(amp_root),
-                   PATH=str(Path(args.staramp).resolve().parent) + os.pathsep + os.environ['PATH'])
+                   PATH=str(Path(args.staramp).absolute().parent) + os.pathsep + os.environ['PATH'])
         process = subprocess.Popen([str(Path(args.starfold).resolve()), '--graphical-relay', 'audio-proof', '--directory', str(files)],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         messages = queue.Queue()

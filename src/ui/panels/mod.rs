@@ -110,7 +110,7 @@ pub enum Word {
     ZoomIn,
     AudioOutput(bool),
     VideoPlay(bool),
-    VideoMute(bool),
+    VideoMute(u8),
     VideoVolumeDown,
     VideoVolumeUp,
     VideoExpand(bool),
@@ -121,12 +121,11 @@ impl Word {
     /// `Back` stays an arrow: `h` remains the Stack navigation key.
     pub fn mnemonic(self) -> Option<(char, u16)> {
         match self {
-            Word::AudioOutput(_) => Some(('a', 0)),
-            Word::VideoPlay(_)
-            | Word::VideoMute(_)
-            | Word::VideoVolumeDown
-            | Word::VideoVolumeUp
-            | Word::VideoExpand(_) => None,
+            Word::AudioOutput(_) | Word::VideoMute(_) => Some(('a', 0)),
+            Word::VideoPlay(_) => Some(('P', 0)),
+            Word::VideoExpand(false) => Some(('E', 0)),
+            Word::VideoExpand(true) => Some(('e', 1)),
+            Word::VideoVolumeDown | Word::VideoVolumeUp => None,
             Word::Back
             | Word::PictureScale(_)
             | Word::ZoomOut
@@ -152,7 +151,8 @@ impl header::Word for Word {
         match self {
             Word::AudioOutput(local) => if local { "audio: local" } else { "audio: host" }.into(),
             Word::VideoPlay(paused) => if paused { "Play" } else { "Pause" }.into(),
-            Word::VideoMute(muted) => if muted { "Unmute" } else { "Mute" }.into(),
+            Word::VideoMute(0) => "audio: muted".into(),
+            Word::VideoMute(volume) => format!("audio: {volume}%").into(),
             Word::VideoVolumeDown => "−".into(),
             Word::VideoVolumeUp => "+".into(),
             Word::VideoExpand(expanded) => if expanded { "Restore" } else { "Expand" }.into(),

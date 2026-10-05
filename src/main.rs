@@ -9,6 +9,8 @@ mod graphical;
 mod paths;
 mod session;
 mod ui;
+#[cfg(feature = "terminal-graphics")]
+mod video_transport;
 
 use std::io::Write as _;
 use std::path::PathBuf;

@@ -374,6 +374,10 @@ map terminal cell-centre input onto those coordinates.
 STAR/AMP owns `native_surface_v1`; this repository only negotiates, validates,
 places and forwards input. The graphical Nix package pins its matching helper
 on a private runtime PATH, leaving the ordinary STAR/AMP command independent.
+Video Preview uses `staramp embed --stdio --transport` for AMP-owned button
+artwork, layout and pointer hit testing without opening an audio player.
+`video_transport` bounds requests and frames, validates surfaces and reaps the
+helper when Preview closes. FOLD maps returned actions to its video controls.
 
 ### Native pixel layout and verification
 

@@ -49,17 +49,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1791228169,
-        "narHash": "sha256-duNTq69IVMevGe6dIGLgHEnDasQVvyauarZg4ImGnH8=",
+        "lastModified": 1791235426,
+        "narHash": "sha256-NRKU3UwlyLCm1oFDpIvROVikE2FlsOdSSX8r7eqROvs=",
         "owner": "bstar",
         "repo": "staramp",
-        "rev": "0d8a401341e3df7debab6c4136111c0f34ee0f70",
+        "rev": "31efde7480f2bb6959afb47d5c66458cad1252fc",
         "type": "github"
       },
       "original": {
         "owner": "bstar",
         "repo": "staramp",
-        "rev": "0d8a401341e3df7debab6c4136111c0f34ee0f70",
+        "rev": "31efde7480f2bb6959afb47d5c66458cad1252fc",
         "type": "github"
       }
     },
