@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import time
 import wave
@@ -40,6 +41,13 @@ def main():
             audio.setsampwidth(2)
             audio.setframerate(44100)
             audio.writeframes(bytes(44100 * 4 * 60))
+        # A real 24-bit BMP fixture, independent of the image encoder under test.
+        width, height = 64, 48
+        pixels = b"".join(bytes((210, 160, 50) if (x // 8 + y // 8) % 2 else (70, 90, 230))
+                          for y in range(height) for x in range(width))
+        header = struct.pack("<2sIHHI", b"BM", 54 + len(pixels), 0, 0, 54)
+        dib = struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0, len(pixels), 0, 0, 0, 0)
+        (files / "000-native-preview.bmp").write_bytes(header + dib + pixels)
         for i in range(100):
             (files / f"{i+1:03}-long-file-name-for-native-commander-truncation.txt").write_text("fixture\n")
         address = f"unix:{root}/kitty.sock"
@@ -82,6 +90,10 @@ def main():
                 key("ctrl+t")
                 key("v")
                 shot("commander-tabs")
+                key("j")
+                time.sleep(.8)
+                shot("bmp-preview")
+                key("home")
                 key("c")
                 shot("menu")
                 key("escape")

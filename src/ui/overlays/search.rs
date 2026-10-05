@@ -53,8 +53,16 @@ impl Search {
     }
 }
 
+pub const FOOTER: &str = "tab names/contents · enter search · esc cancel";
+
 pub fn rect(area: Rect) -> Rect {
-    overlay::rect(area, (30, 64), 4, 3, Anchor::Centre)
+    overlay::rect(
+        area,
+        (30, 64),
+        4 + starkit::chrome::frame::extra_rows(),
+        3,
+        Anchor::Centre,
+    )
 }
 
 pub fn render(
@@ -78,7 +86,7 @@ pub fn render(
                 Mode::Contents => "search file contents below here",
             },
             detail: None,
-            footer: Some("tab names/contents · enter search · esc cancel"),
+            footer: Some(FOOTER),
         },
     );
     if inner.width == 0 || inner.height == 0 {

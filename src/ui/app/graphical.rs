@@ -20,25 +20,43 @@ pub(super) struct State {
     pointer_capture: Option<starkit::terminal_graphics::placement::Placement>,
     image_source: Option<Arc<RgbaImage>>,
     image_sequence: u64,
+    pub(super) image_zoom: Option<u16>,
     image_id: Option<String>,
     thumbnail: Option<starkit::terminal_graphics::assets::Thumbnailer>,
     image: Option<(String, String)>,
     audio_images: std::collections::HashMap<String, String>,
     rendered_version: u64,
     drag: Option<Drag>,
+    resize_handle: Option<starkit::native_surface::PixelRect>,
+    preview_resize: Option<PreviewResize>,
     authorization: Option<Authorization>,
     pub(super) wire: Option<crossbeam_channel::Receiver<wire_dnd::Outgoing>>,
 }
 impl State {
+    pub(super) fn drag_sources(&self) -> Option<(usize, Vec<PathBuf>)> {
+        self.drag.as_ref().map(|d| (d.stack, d.sources.clone()))
+    }
+    pub(super) fn drag_regions(&self) -> Option<&Regions> {
+        self.drag.as_ref().and_then(|drag| drag.regions.as_ref())
+    }
     pub(super) fn uses_pixel_layout(&self) -> bool {
         self.pixel_layout && self.padded_chrome && self.surface_mode && !self.cell_mode
     }
 }
+#[derive(Clone, Copy)]
+struct PreviewResize {
+    origin_y: i32,
+    rows: i32,
+    max_rows: i32,
+    row_pixels: i32,
+}
 struct Drag {
+    regions: Option<Regions>,
     origin: (u16, u16),
     stack: usize,
     sources: Vec<PathBuf>,
     started: bool,
+    desktop: bool,
 }
 struct Authorization {
     op: OpId,
@@ -77,18 +95,9 @@ fn pixel_placements(
     let cw = (v.width / u32::from(v.columns)).max(1) as u16;
     let ch = (v.height / u32::from(v.rows)).max(1) as u16;
     let metrics = Metrics::from_cell(cw, ch);
-    let margin = metrics.gap;
-    let top = if regions.tabs.is_some() {
-        metrics.small
-    } else {
-        margin
-    };
-    let area = R::new(
-        margin,
-        top,
-        (v.width as u16).saturating_sub(2 * margin),
-        (v.height as u16).saturating_sub(top + margin),
-    );
+    // Kitty owns the space outside the terminal grid. Use the full app
+    // background, keeping padding inside panels rather than around the frame.
+    let area = R::new(0, 0, v.width as u16, v.height as u16);
     let mut sources = Vec::new();
     if let Some(tabs) = regions.tabs {
         sources.push(tabs);
@@ -101,14 +110,25 @@ fn pixel_placements(
     let heights: Vec<_> = sources
         .iter()
         .map(|r| {
-            if r.height == 2 {
+            if Some(*r) == regions.tabs {
+                // Comfortable label/control height without an extra outer top margin.
+                ch.saturating_add(20).max(36)
+            } else if r.height == 2 {
                 metrics.control
             } else {
                 r.height.saturating_mul(ch)
             }
         })
         .collect();
-    let targets = placement::column(area, metrics.gap, &heights, flexible);
+    let mut targets = placement::column(area, metrics.gap, &heights, flexible);
+    if regions.tabs.is_some() && targets.len() > flexible {
+        // Keep the mockup’s breathing room between the filled tabs and pane.
+        let previous_bottom = targets[flexible - 1].y + targets[flexible - 1].height;
+        let pane = &mut targets[flexible];
+        let gap = pane.y.saturating_sub(previous_bottom).saturating_sub(6);
+        pane.y -= gap;
+        pane.height = pane.height.saturating_add(gap);
+    }
     let mut result = Vec::new();
     for (i, (source, target)) in sources.into_iter().zip(targets).enumerate() {
         if source.width == 0 || source.height == 0 || target.width == 0 || target.height == 0 {
@@ -159,8 +179,10 @@ fn pixel_placements(
         result.push(Placement {
             source: (*source).into(),
             target: R::new(
-                x.min(v.width as u16 - width),
-                y.min(v.height as u16 - height),
+                // Mouse reports identify terminal cells. A menu row straddling
+                // two cells can otherwise make its visible Copy action hit Move.
+                (x.min(v.width as u16 - width) / cw) * cw,
+                (y.min(v.height as u16 - height) / ch) * ch,
                 width,
                 height,
             ),
@@ -218,6 +240,15 @@ fn key_code(code: &str) -> Option<KeyCode> {
     })
 }
 impl App {
+    fn native_header_hotkeys(&self, module: ModuleId) -> bool {
+        self.filter.is_none()
+            && self.places.is_none()
+            && self.tab_picker.is_none()
+            && !self.overlays.is_open()
+            && !self.g_pending
+            && self.editor.is_none()
+            && (module == ModuleId::Stack || self.layout.focus() == module)
+    }
     pub(crate) fn enable_graphical(&mut self) {
         let (tx, rx) = crossbeam_channel::bounded(256);
         wire_dnd::graphical_output(tx);
@@ -227,7 +258,147 @@ impl App {
             ..State::default()
         });
     }
+    /// Capture divider gestures before row, scrollbar, or file-drop hit testing.
+    fn graphical_preview_resize(
+        &mut self,
+        action: &str,
+        button: u8,
+        pixel: Option<[u32; 2]>,
+        x: u16,
+        y: u16,
+    ) -> bool {
+        let state = self.graphical.as_ref().unwrap();
+        let Some(v) = state.viewport else {
+            return false;
+        };
+        let [px, py] = pixel.unwrap_or([
+            (u32::from(x) * 2 + 1) * v.width / (u32::from(v.columns).max(1) * 2),
+            (u32::from(y) * 2 + 1) * v.height / (u32::from(v.rows).max(1) * 2),
+        ]);
+        if let Some(capture) = state.preview_resize {
+            if matches!(action, "drag" | "up") {
+                let delta = (capture.origin_y - py as i32) / capture.row_pixels;
+                let rows = (capture.rows + delta).clamp(2, capture.max_rows.max(2)) as u16;
+                if self.layout.native_preview_rows != Some(rows) {
+                    self.layout.native_preview_rows = Some(rows);
+                    self.repaint = true;
+                }
+                if action == "up" {
+                    self.graphical.as_mut().unwrap().preview_resize = None;
+                }
+            }
+            return true;
+        }
+        if action != "down"
+            || button != 0
+            || state.drag.is_some()
+            || self.bars.held().is_some()
+            || self.overlays.is_open()
+            || self.places.is_some()
+            || self.tab_picker.is_some()
+        {
+            return false;
+        }
+        let hit = state.resize_handle.is_some_and(|r| {
+            px >= u32::from(r.x)
+                && px < u32::from(r.x) + u32::from(r.width)
+                && py >= u32::from(r.y)
+                && py < u32::from(r.y) + u32::from(r.height)
+        });
+        if !hit {
+            return false;
+        }
+        let Some(regions) = &self.layout.last else {
+            return false;
+        };
+        let rows = regions
+            .rect_of(ModuleId::Preview)
+            .height
+            .saturating_sub(layout::COLLAPSED_ROWS + starkit::chrome::frame::extra_rows());
+        let max_rows =
+            rows.saturating_add(regions.rect_of(ModuleId::Stack).height.saturating_sub(10));
+        self.graphical.as_mut().unwrap().preview_resize = Some(PreviewResize {
+            origin_y: py as i32,
+            rows: i32::from(rows),
+            max_rows: i32::from(max_rows),
+            row_pixels: (v.height / u32::from(v.rows).max(1)).max(1) as i32,
+        });
+        true
+    }
+
     fn graphical_pointer(&mut self, action: &str, button: u8, x: u16, y: u16, modifiers: u8) {
+        if action == "down"
+            && button == 0
+            && modifiers == 0
+            && !self.overlays.is_open()
+            && self.places.is_none()
+            && self.tab_picker.is_none()
+            && self
+                .graphical
+                .as_ref()
+                .is_some_and(|g| g.uses_pixel_layout())
+        {
+            if let Some(regions) = self.layout.last.as_ref() {
+                let pane = if self.commander {
+                    usize::from(
+                        x >= regions.rect_of(ModuleId::Stack).x
+                            + regions.rect_of(ModuleId::Stack).width / 2,
+                    )
+                } else {
+                    0
+                };
+                let rect = if self.commander {
+                    pane_rect(regions.rect_of(ModuleId::Stack), pane)
+                } else {
+                    regions.rect_of(ModuleId::Stack)
+                };
+                let view = if self.commander {
+                    self.pane_view(pane)
+                } else {
+                    self.stack_view()
+                };
+                let body = starkit::chrome::frame::body(rect, &panels::words(ModuleId::Stack));
+                let mut rule = panels::stack::split(body, view.crumbs.len(), view.fold_rows).rule;
+                rule.x += 2;
+                rule.width = rule
+                    .width
+                    .saturating_sub(2 + breadcrumb_detail_width(&view));
+                let path = if self.commander {
+                    &self.panes[pane].dir
+                } else {
+                    &self.view.active_dir
+                };
+                if let Some((_, _, target)) = breadcrumb_slots(rule, path, &self.view.home)
+                    .into_iter()
+                    .find(|(r, _, _)| r.contains((x, y).into()))
+                {
+                    let current = path == &target;
+                    if self.commander {
+                        self.focus_pane(pane);
+                    }
+                    if !current {
+                        self.core.send(Command::Push(target));
+                    }
+                    self.repaint = true;
+                    return;
+                }
+            }
+        }
+        if modifiers == starkit::crossterm::event::KeyModifiers::CONTROL.bits()
+            && matches!(action, "scroll_up" | "scroll_down")
+            && self
+                .layout
+                .last
+                .as_ref()
+                .is_some_and(|r| r.hit(x, y) == Some(ModuleId::Preview))
+            && matches!(self.view.preview.as_deref(), Some(Preview::Image { .. }))
+            && !self.overlays.is_open()
+            && self.places.is_none()
+            && self.tab_picker.is_none()
+        {
+            self.zoom_preview_image(if action == "scroll_up" { 1 } else { -1 });
+            return;
+        }
         let button = match button {
             1 => MouseButton::Right,
             2 => MouseButton::Middle,
@@ -244,18 +415,34 @@ impl App {
         {
             if let Some((stack, sources)) = self.dnd_sources(i32::from(x), i32::from(y)) {
                 self.graphical.as_mut().unwrap().drag = Some(Drag {
+                    regions: self.layout.last.clone(),
                     origin: (x, y),
                     stack,
                     sources,
                     started: false,
+                    desktop: false,
                 });
             }
         }
+        if self.dnd.drag_active && matches!(action, "scroll_up" | "scroll_down") {
+            self.dnd_scroll_destination(x, y, if action == "scroll_down" { 3 } else { -3 });
+            return;
+        }
+        // Once Kitty takes ownership, its OSC 72 release is authoritative.
+        // A parallel ordinary mouse release must not queue another copy.
+        if self
+            .graphical
+            .as_ref()
+            .unwrap()
+            .drag
+            .as_ref()
+            .is_some_and(|d| d.desktop)
+        {
+            return;
+        }
         if action == "drag" || action == "up" || action.starts_with("scroll") {
             if let Some(mut drag) = self.graphical.as_mut().unwrap().drag.take() {
-                if action == "drag"
-                    && (drag.origin.0.abs_diff(x) > 1 || drag.origin.1.abs_diff(y) > 0)
-                {
+                if matches!(action, "drag" | "up") && (drag.started || drag.origin != (x, y)) {
                     drag.started = true;
                     self.dnd.drag_active = true;
                     self.dnd.offer = Some(wire_dnd::Offer {
@@ -271,11 +458,16 @@ impl App {
                 if action == "up" {
                     if drag.started {
                         if let Some(dest) = self.dnd_target(i32::from(x), i32::from(y)) {
-                            self.core.send(Command::QueueDrop {
-                                kind: OpKind::Copy,
-                                sources: drag.sources,
+                            self.dnd.choice = Some(wire_dnd::Choice {
                                 dest,
+                                own_sources: Some(drag.sources),
+                                allowed: 3,
+                                mime_index: None,
+                                remote: false,
+                                terminal_drop_open: false,
                             });
+                            self.overlays.open_drop((x, y));
+                            self.repaint = true;
                         }
                         self.dnd.drag_active = false;
                         self.dnd.offer = None;
@@ -311,6 +503,68 @@ impl App {
             modifiers,
         });
     }
+    fn graphical_tree(
+        &mut self,
+        scene: &mut Scene,
+        regions: &Regions,
+        viewport: Viewport,
+        modal: bool,
+    ) {
+        if !self.graphical.as_ref().unwrap().uses_pixel_layout()
+            || !self.layout.preview_open
+            || self.editor.is_some()
+        {
+            return;
+        }
+        let Some(Preview::Dir(tree)) = self.view.preview.as_deref() else {
+            return;
+        };
+        let rows = panels::preview::dir_lines(tree);
+        let outer = regions.rect_of(ModuleId::Preview);
+        let content = panels::preview::content_rect(outer);
+        if content.width == 0 || content.height == 0 {
+            return;
+        }
+        let placements = pixel_placements(regions, self.commander, viewport, &[], &[]);
+        let Some(p) = placements.iter().find(|p| p.source == outer.into()) else {
+            return;
+        };
+        let height = (p.row_edge(content.bottom() - outer.y) - p.row_edge(content.y - outer.y))
+            .floor()
+            .max(1.) as u16;
+        let width = (f32::from(content.width) * f32::from(p.target.width)
+            / f32::from(p.source.width))
+        .floor()
+        .max(1.) as u16;
+        let cell = (
+            (viewport.width / u32::from(viewport.columns).max(1)).max(1) as u16,
+            (viewport.height / u32::from(viewport.rows).max(1)).max(1) as u16,
+        );
+        let (surface, scroll, visible) = native_tree_surface(
+            &rows,
+            self.preview_scroll,
+            (width, height),
+            cell,
+            &self.theme,
+        );
+        self.preview_scroll = scroll;
+        scene.components.push(Component::Surface {
+            rect: content.into(),
+            surface,
+        });
+        if !modal {
+            if let Some(track) = self.bars.track_of(Bar::Preview) {
+                self.bars.record_viewport(
+                    Bar::Preview,
+                    track,
+                    rows.len() as u32,
+                    scroll as u32,
+                    visible as u32,
+                );
+            }
+        }
+    }
+
     fn graphical_image(&mut self, scene: &mut Scene, regions: &Regions) {
         if self.graphical.as_ref().unwrap().cell_mode
             || self.editor.is_some()
@@ -359,18 +613,168 @@ impl App {
                 rect: rect.into(),
                 id: id.clone(),
                 png: Some(png.clone()),
+                zoom: state.image_zoom.unwrap_or(100),
+                scale: match self.cfg.preview.image_scale {
+                    crate::config::Scale::One => {
+                        starkit::terminal_graphics::protocol::ImageScale::One
+                    }
+                    crate::config::Scale::Pixels => {
+                        starkit::terminal_graphics::protocol::ImageScale::Pixels
+                    }
+                    crate::config::Scale::Smooth => {
+                        starkit::terminal_graphics::protocol::ImageScale::Smooth
+                    }
+                },
             });
         }
     }
 }
+fn native_tree_surface(
+    rows: &[String],
+    scroll: usize,
+    size: (u16, u16),
+    cell: (u16, u16),
+    theme: &Theme,
+) -> (starkit::native_surface::Surface, usize, usize) {
+    use starkit::native_surface::{Metrics, PixelRect as R, Primitive, Surface};
+    let (width, height) = size;
+    let font = Metrics::from_cell(cell.0, cell.1).font;
+    let row_height = ((f32::from(font) * 1.2).ceil() as u16 + 1).max(1);
+    let visible = usize::from(height / row_height).clamp(1, 128);
+    let scroll = scroll.min(rows.len().saturating_sub(visible));
+    let mut surface = Surface::new(width, height, hex(theme.panel_bg));
+    let branch_color = hex(theme.dim);
+    for (index, line) in rows.iter().skip(scroll).take(visible).enumerate() {
+        let y = index as u16 * row_height;
+        let h = row_height.min(height.saturating_sub(y));
+        if h == 0 {
+            break;
+        }
+        let mut x = 0u16;
+        let mut prefix = 0;
+        for c in line.chars() {
+            if !matches!(c, '│' | '├' | '└' | '─' | ' ') || x + cell.0 > width {
+                break;
+            }
+            let center = x + cell.0 / 2;
+            let middle = y + h / 2;
+            if matches!(c, '│' | '├' | '└') {
+                surface.fill(
+                    R::new(center, y, 1, if c == '└' { h / 2 + 1 } else { h }),
+                    &branch_color,
+                    0,
+                );
+            }
+            if matches!(c, '├' | '└' | '─') {
+                let start = if c == '─' { x } else { center };
+                surface.fill(
+                    R::new(start, middle, x + cell.0 - start, 1),
+                    &branch_color,
+                    0,
+                );
+            }
+            prefix += c.len_utf8();
+            x += cell.0;
+        }
+        if x < width {
+            surface.nodes.push(Primitive::Text {
+                rect: R::new(x, y, width - x, h),
+                text: line[prefix..].into(),
+                color: hex(theme.row_fg),
+                size: font,
+                bold: false,
+                mono: true,
+            });
+        }
+    }
+    (surface, scroll, visible)
+}
+
+fn breadcrumb_detail(view: &panels::stack::View<'_>) -> String {
+    format!(
+        "{}{}",
+        if view.truncated { " (truncated)" } else { "" },
+        view.filter.map(|f| format!("  /{f}")).unwrap_or_default()
+    )
+}
+fn breadcrumb_detail_width(view: &panels::stack::View<'_>) -> u16 {
+    starkit::wrap::width_of(&breadcrumb_detail(view))
+}
+
+/// Breadcrumb layout is shared by painting and pointer hit testing.
+fn breadcrumb_slots(
+    area: Rect,
+    path: &std::path::Path,
+    home: &std::path::Path,
+) -> Vec<(Rect, String, PathBuf)> {
+    let (mut target, first, rest) = if let Ok(rest) = path.strip_prefix(home) {
+        (home.to_path_buf(), "~".to_owned(), rest)
+    } else {
+        (
+            PathBuf::from("/"),
+            "/".to_owned(),
+            path.strip_prefix("/").unwrap_or(path),
+        )
+    };
+    let mut parts = vec![(first, target.clone())];
+    for part in rest.components() {
+        target.push(part.as_os_str());
+        parts.push((
+            part.as_os_str().to_string_lossy().into_owned(),
+            target.clone(),
+        ));
+    }
+    let width = |parts: &[(String, PathBuf)]| -> usize {
+        parts
+            .iter()
+            .map(|(label, _)| usize::from(starkit::wrap::width_of(label)))
+            .sum::<usize>()
+            + parts
+                .iter()
+                .take(parts.len().saturating_sub(1))
+                .map(|(label, _)| if label == "/" { 1 } else { 3 })
+                .sum::<usize>()
+    };
+    let mut collapsed = false;
+    while parts.len() > 1 && width(&parts) + usize::from(collapsed) * 4 > usize::from(area.width) {
+        parts.remove(0);
+        collapsed = true;
+    }
+    if collapsed && area.width > 4 {
+        let parent = parts[0]
+            .1
+            .parent()
+            .unwrap_or(std::path::Path::new("/"))
+            .to_path_buf();
+        parts.insert(0, ("…".into(), parent));
+    }
+    let mut x = area.x;
+    let mut slots = Vec::new();
+    for (label, path) in parts {
+        let width = starkit::wrap::width_of(&label).min(area.right().saturating_sub(x));
+        if width == 0 {
+            break;
+        }
+        let gap = if label == "/" { 1 } else { 3 };
+        slots.push((
+            Rect::new(x, area.y, width, 1),
+            panels::fit(&label, width),
+            path,
+        ));
+        x = x.saturating_add(width).saturating_add(gap);
+    }
+    slots
+}
+
 fn native_header(
     rect: Rect,
     title: &str,
     words: &[panels::Word],
     theme: &Theme,
-    cw: u16,
-    ch: u16,
+    cell: (u16, u16),
+    hotkeys: bool,
 ) -> Component {
+    let (cw, ch) = cell;
     use starkit::chrome::header::{self, Word as _};
     use starkit::native_surface::{Metrics, PixelRect as R, Surface};
     let area = Rect::new(
@@ -396,14 +800,30 @@ fn native_header(
         font,
         true,
     );
+    let shortcut = theme
+        .panel_bg
+        .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]);
     for (word, slot) in slots {
-        surface.text(
-            R::new((slot.x - area.x) * cw, 0, slot.width * cw, ch),
-            word.word().into_owned(),
-            &hex(theme.dim),
-            font,
-            false,
-        );
+        // Use the same character advances as header hit testing. This keeps
+        // inter-item spacing equal and mnemonic positions exact at every scale.
+        for (offset, character) in word
+            .word()
+            .chars()
+            .take(usize::from(slot.width))
+            .enumerate()
+        {
+            let highlighted = hotkeys && word.mnemonic() == Some((character, offset as u16));
+            surface
+                .nodes
+                .push(starkit::native_surface::Primitive::Text {
+                    rect: R::new((slot.x - area.x + offset as u16) * cw, 0, cw, ch),
+                    text: character.to_string(),
+                    color: hex(if highlighted { shortcut } else { theme.dim }),
+                    size: font,
+                    bold: highlighted,
+                    mono: true,
+                });
+        }
     }
     Component::Surface {
         rect: area.into(),
@@ -561,6 +981,9 @@ impl Controller for App {
             && viewport.rows
                 >= (layout::MIN_ROWS + 8)
                     .saturating_add(self.cfg.ui.padding_y.max(1).saturating_mul(2));
+        // Native rows have independent cursor/mark indicators, so their fill
+        // can stay subtle while labels retain readable text contrast.
+        self.theme.graphical_rows = !state.cell_mode;
         let _chrome = starkit::chrome::frame::padding_scope(state.padded_chrome);
         self.audio_cell_size = Some((
             (viewport.width / u32::from(viewport.columns)).clamp(1, 64) as u16,
@@ -594,6 +1017,10 @@ impl Controller for App {
             pane.dir.hash(&mut targets);
             pane.key.hash(&mut targets);
         }
+        let mut scroll_targets = targets.clone();
+        self.core.state().tabs.active().id.hash(&mut scroll_targets);
+        self.audio_path.hash(&mut scroll_targets);
+        self.audio_here().hash(&mut scroll_targets);
         let modal = self.overlays.is_open() || self.places.is_some() || self.tab_picker.is_some();
         let mut modal_rects = self.overlays.graphical_rects(area);
         if modal_rects.is_empty() {
@@ -617,7 +1044,37 @@ impl Controller for App {
                     use starkit::native_surface::{Metrics, PixelRect as R, Surface};
                     let mut surface =
                         Surface::new(rect.width * cw, rect.height * ch, hex(self.theme.panel_bg));
-                    let text = if self.view.ops.is_empty() {
+                    let text = if let Some(progress) = &self.view.running_bar {
+                        let title = self
+                            .view
+                            .ops
+                            .iter()
+                            .find(|row| row.tone == panels::operations::Tone::Running)
+                            .map(|row| row.title.as_str())
+                            .unwrap_or("select to inspect");
+                        format!("Operations · {progress} · {title}")
+                    } else if let Some(row) = self
+                        .view
+                        .ops
+                        .iter()
+                        .find(|row| row.tone == panels::operations::Tone::Running)
+                        .or_else(|| {
+                            self.view
+                                .ops
+                                .iter()
+                                .rev()
+                                .find(|row| row.tone == panels::operations::Tone::Failed)
+                        })
+                    {
+                        format!(
+                            "Operations · {} · {} · select to inspect",
+                            row.status, row.title
+                        )
+                    } else if self.dnd.receiving_uri {
+                        "Operations · receiving file list… · select to inspect".into()
+                    } else if let Some(name) = &self.view.unmounting {
+                        format!("Operations · unmounting {name} · select to inspect")
+                    } else if self.view.ops.is_empty() {
                         "Operations · idle".to_string()
                     } else {
                         format!(
@@ -662,11 +1119,16 @@ impl Controller for App {
                         let view = self.operations_view();
                         panels::operations::header_words(view.paused, view.active, view.focused)
                     } else {
-                        panels::words(module)
+                        self.panel_words(module)
                     };
-                    scene
-                        .components
-                        .push(native_header(rect, &title, &words, &self.theme, cw, ch));
+                    scene.components.push(native_header(
+                        rect,
+                        &title,
+                        &words,
+                        &self.theme,
+                        (cw, ch),
+                        self.native_header_hotkeys(module),
+                    ));
                 }
             }
             scene.components.push(Component::Surface {
@@ -709,23 +1171,101 @@ impl Controller for App {
                     active: view.focused,
                 });
                 if native && self.graphical.as_ref().unwrap().padded_chrome {
+                    // Proportional fonts give spaces a narrower advance than
+                    // letters; keep the separator visibly separated as in TUI.
+                    let brand = panels::HEADING.replace(" / ", "  /  ");
                     let title = if self.commander {
                         if pane == 0 {
-                            "STAR/FOLD · Left"
+                            format!("{brand} · Left")
                         } else {
-                            "Right"
+                            "Right".into()
                         }
                     } else {
-                        "STAR/FOLD"
+                        brand
                     };
                     scene.components.push(native_header(
                         rect,
-                        title,
-                        &panels::words(ModuleId::Stack),
+                        &title,
+                        &self.panel_words(ModuleId::Stack),
                         &self.theme,
-                        cw,
-                        ch,
+                        (cw, ch),
+                        self.native_header_hotkeys(ModuleId::Stack),
                     ));
+                    if self.graphical.as_ref().unwrap().uses_pixel_layout() {
+                        use starkit::native_surface::{Metrics, PixelRect as R, Surface};
+                        let rule =
+                            panels::stack::split(body, view.crumbs.len(), view.fold_rows).rule;
+                        let mut area = rule;
+                        area.x += 2;
+                        area.width = area
+                            .width
+                            .saturating_sub(2 + breadcrumb_detail_width(&view));
+                        let path = if self.commander {
+                            &self.panes[pane].dir
+                        } else {
+                            &self.view.active_dir
+                        };
+                        let slots = breadcrumb_slots(area, path, &self.view.home);
+                        let mut surface =
+                            Surface::new(rule.width * cw, ch, hex(self.theme.panel_bg));
+                        for (index, (r, label, target)) in slots.iter().enumerate() {
+                            let mut glyphs: Vec<(String, u16)> = Vec::new();
+                            for c in label.chars() {
+                                let text = c.to_string();
+                                let width = starkit::wrap::width_of(&text);
+                                if width == 0 {
+                                    if let Some((text, _)) = glyphs.last_mut() {
+                                        text.push(c);
+                                    }
+                                } else {
+                                    glyphs.push((text, width));
+                                }
+                            }
+                            let mut offset = 0;
+                            for (text, width) in glyphs {
+                                surface
+                                    .nodes
+                                    .push(starkit::native_surface::Primitive::Text {
+                                        rect: R::new(
+                                            (r.x - rule.x + offset) * cw,
+                                            0,
+                                            width * cw,
+                                            ch,
+                                        ),
+                                        text,
+                                        color: hex(self.theme.fold.crumb_active_fg),
+                                        size: Metrics::from_cell(cw, ch).font,
+                                        bold: target == path,
+                                        mono: true,
+                                    });
+                                offset += width;
+                            }
+                            if index + 1 < slots.len() {
+                                surface.text(
+                                    R::new((r.right() - rule.x) * cw, 0, 3 * cw, ch),
+                                    if label == "/" { " " } else { " / " },
+                                    &hex(self.theme.dim),
+                                    Metrics::from_cell(cw, ch).font,
+                                    false,
+                                );
+                            }
+                        }
+                        let detail = breadcrumb_detail(&view);
+                        let detail_width = starkit::wrap::width_of(&detail).min(rule.width);
+                        if detail_width > 0 {
+                            surface.text(
+                                R::new((rule.width - detail_width) * cw, 0, detail_width * cw, ch),
+                                detail,
+                                &hex(self.theme.dim),
+                                Metrics::from_cell(cw, ch).font,
+                                false,
+                            );
+                        }
+                        scene.components.push(Component::Surface {
+                            rect: rule.into(),
+                            surface,
+                        });
+                    }
                     if let Some((total, available)) = view.space.filter(|(total, _)| *total > 0) {
                         use starkit::native_surface::{Metrics, PixelRect as R, Surface};
                         let footer = Rect::new(
@@ -811,6 +1351,7 @@ impl Controller for App {
                             background,
                             selected: view.focused && index == view.cursor,
                             marked: row.mark == panels::stack::Mark::Marked,
+                            marking: row.mark != panels::stack::Mark::None,
                         });
                     }
                 }
@@ -828,15 +1369,19 @@ impl Controller for App {
                     scene.components.push(Component::Tab {
                         rect: (*rect).into(),
                         label: label.into(),
+                        number: None,
                         active: false,
                         close: None,
                     });
                 }
                 if let super::super::tabs::Hit::Tab(id) = hit {
-                    if let Some(item) = items.iter().find(|item| item.id == *id) {
+                    if let Some((index, item)) =
+                        items.iter().enumerate().find(|(_, item)| item.id == *id)
+                    {
                         scene.components.push(Component::Tab {
                             rect: (*rect).into(),
                             label: item.label.clone(),
+                            number: Some(index as u32 + 1),
                             active: *id == active,
                             close: self.tab_hits.iter().find_map(|(rect, hit)| match hit {
                                 super::super::tabs::Hit::Close(close_id) if close_id == id => {
@@ -849,6 +1394,7 @@ impl Controller for App {
                 }
             }
         }
+        self.graphical_tree(&mut scene, &regions, viewport, modal);
         // Draw pixel scrollbars from the exact geometry used for pointer grabs.
         // Add before modal chrome so menus can cover the underlying track.
         let current_scrollbars: Vec<_> = self
@@ -934,6 +1480,8 @@ impl Controller for App {
                             },
                             id: id.clone(),
                             png: Some(png.clone()),
+                            scale: Default::default(),
+                            zoom: 100,
                         });
                         retained.insert(id);
                     }
@@ -1025,8 +1573,86 @@ impl Controller for App {
                 });
             }
         }
+        if native && self.graphical.as_ref().unwrap().authorization.is_none() {
+            let mut clickable = Vec::new();
+            if modal {
+                clickable.extend(self.overlays.pointer_regions(area));
+                if let Some(places) = self.places.as_ref() {
+                    clickable.extend(places.pointer_regions(area));
+                }
+                if let Some(picker) = self.tab_picker.as_mut() {
+                    clickable.extend(picker.pointer_regions(area));
+                }
+            } else {
+                clickable.extend(self.tab_hits.iter().map(|(rect, _)| *rect));
+                let status = self.status_view(Instant::now());
+                for x in regions.status.x..regions.status.right() {
+                    if super::super::status::native_hit(
+                        regions.status,
+                        &status,
+                        x,
+                        regions.status.y,
+                    )
+                    .is_some()
+                    {
+                        clickable.push(Rect::new(x, regions.status.y, 1, 1));
+                    }
+                }
+                for module in [ModuleId::Stack, ModuleId::Preview, ModuleId::Operations] {
+                    let count = if module == ModuleId::Stack && self.commander {
+                        2
+                    } else {
+                        1
+                    };
+                    for pane in 0..count {
+                        let rect = if count == 2 {
+                            pane_rect(regions.rect_of(module), pane)
+                        } else {
+                            regions.rect_of(module)
+                        };
+                        let words = if module == ModuleId::Operations {
+                            let view = self.operations_view();
+                            panels::operations::header_words(view.paused, view.active, view.focused)
+                        } else {
+                            self.panel_words(module)
+                        };
+                        clickable.extend(
+                            starkit::chrome::header::slots(rect, &words)
+                                .into_iter()
+                                .map(|(_, rect)| rect),
+                        );
+                        if module == ModuleId::Stack {
+                            let view = if self.commander {
+                                self.pane_view(pane)
+                            } else {
+                                self.stack_view()
+                            };
+                            let body = starkit::chrome::frame::body(rect, &panels::words(module));
+                            let mut rule =
+                                panels::stack::split(body, view.crumbs.len(), view.fold_rows).rule;
+                            rule.x += 2;
+                            rule.width = rule
+                                .width
+                                .saturating_sub(2 + breadcrumb_detail_width(&view));
+                            let path = if self.commander {
+                                &self.panes[pane].dir
+                            } else {
+                                &self.view.active_dir
+                            };
+                            clickable.extend(
+                                breadcrumb_slots(rule, path, &self.view.home)
+                                    .into_iter()
+                                    .map(|(rect, _, _)| rect),
+                            );
+                        }
+                    }
+                }
+            }
+            scene.pointer_regions = clickable.into_iter().map(Into::into).collect();
+        }
         let state = self.graphical.as_mut().unwrap();
         state.placements.clear();
+        state.resize_handle = None;
         state.viewport = Some(viewport);
         if state.uses_pixel_layout() && state.authorization.is_none() {
             let overlay_spans = if modal {
@@ -1056,6 +1682,49 @@ impl Controller for App {
             }
             scene.interaction = targets.finish();
             state.placements = scene.placements.clone();
+            if !modal && self.layout.preview_open {
+                if let Some(p) = scene
+                    .placements
+                    .iter()
+                    .find(|p| p.source == regions.rect_of(ModuleId::Preview).into())
+                {
+                    // One terminal mouse row straddles the border and pane gap.
+                    // Keep the grab strip clear of header controls below it.
+                    let top = p.target.y.saturating_sub(8);
+                    let handle = starkit::native_surface::PixelRect::new(
+                        p.target.x,
+                        top,
+                        p.target.width,
+                        16,
+                    );
+                    state.resize_handle = Some(handle);
+                    scene.resize_handles.push(handle);
+                }
+            }
+        }
+        // Wheel events target panes, not the file currently painted at that row.
+        // Keep scrolling through in-flight frames, but invalidate on modal,
+        // directory, tab, pane geometry or embedded-controller changes.
+        if !modal && state.authorization.is_none() && self.editor.is_none() {
+            for component in &scene.components {
+                if let Component::Panel { rect, .. } | Component::Tab { rect, .. } = component {
+                    (rect.x, rect.y, rect.width, rect.height).hash(&mut scroll_targets);
+                }
+            }
+            for p in &scene.placements {
+                (
+                    p.source.x,
+                    p.source.y,
+                    p.source.width,
+                    p.source.height,
+                    p.target.x,
+                    p.target.y,
+                    p.target.width,
+                    p.target.height,
+                )
+                    .hash(&mut scroll_targets);
+            }
+            scene.scroll_interaction = Some(scroll_targets.finish());
         }
         scene
     }
@@ -1136,6 +1805,15 @@ impl Controller for App {
         }
         match input {
             Input::Key { code, modifiers } => {
+                // Navigation or opening a modal ends the captured file gesture.
+                if self.graphical.as_ref().unwrap().drag.is_some()
+                    || self.graphical.as_ref().unwrap().preview_resize.is_some()
+                {
+                    Controller::input(self, Input::CancelPointer);
+                    if code == "escape" {
+                        return;
+                    }
+                }
                 if let Some(code) = key_code(&code) {
                     self.key(KeyEvent::new(
                         code,
@@ -1148,12 +1826,37 @@ impl Controller for App {
                 button,
                 x,
                 y,
+                pixel,
                 modifiers,
             } => {
+                if self.overlays.is_open() && matches!(action.as_str(), "down" | "up") {
+                    tracing::debug!(%action, button, x, y, ?pixel, "Graphical modal pointer received");
+                }
+                if self.graphical_preview_resize(&action, button, pixel, x, y) {
+                    return;
+                }
+                if self.graphical.as_ref().unwrap().drag.is_some()
+                    && (self.overlays.is_open()
+                        || self.places.is_some()
+                        || self.tab_picker.is_some())
+                {
+                    Controller::input(self, Input::CancelPointer);
+                    return;
+                }
                 let state = self.graphical.as_ref().unwrap();
                 if state.placements.is_empty() {
                     self.graphical_pointer(&action, button, x, y, modifiers);
                 } else if let Some(v) = state.viewport {
+                    let project = |p: &starkit::terminal_graphics::placement::Placement,
+                                   captured| {
+                        match pixel {
+                            Some([px, py]) if px < v.width && py < v.height => {
+                                p.pointer_pixels(px, py, captured)
+                            }
+                            Some(_) => None,
+                            None => p.pointer(v, x, y, captured),
+                        }
+                    };
                     let captured =
                         self.bars.held().is_some() && matches!(action.as_str(), "drag" | "up");
                     let placement = if captured {
@@ -1163,11 +1866,14 @@ impl Controller for App {
                             .placements
                             .iter()
                             .rev()
-                            .find(|p| p.pointer(v, x, y, false).is_some())
+                            .find(|p| project(p, false).is_some())
                     }
                     .cloned();
                     if let Some(p) = placement {
-                        if let Some((sx, sy)) = p.pointer(v, x, y, captured) {
+                        if let Some((sx, sy)) = project(&p, captured) {
+                            if self.overlays.is_open() && action == "down" {
+                                tracing::debug!(sx, sy, source = ?p.source, target = ?p.target, "Graphical modal pointer projected");
+                            }
                             if action == "down" {
                                 self.graphical.as_mut().unwrap().pointer_capture = Some(p);
                             }
@@ -1195,14 +1901,52 @@ impl Controller for App {
                     self.core.send(Command::SetFilter(input.text().into()));
                 }
             }
-            Input::Osc72 { text } => self.dnd_message(&text),
+            Input::Osc72 { text } => {
+                let kind = wire_dnd::Message::parse(&text).and_then(|m| m.get("t"));
+                self.dnd_message(&text);
+                if kind == Some("o") && self.dnd.drag_active {
+                    let state = self.graphical.as_mut().unwrap();
+                    if state.drag.is_none() {
+                        if let Some(offer) = self.dnd.offer.as_ref() {
+                            state.drag = Some(Drag {
+                                regions: self.layout.last.clone(),
+                                origin: (0, 0),
+                                stack: offer.source_stack,
+                                sources: offer.sources.clone(),
+                                started: true,
+                                desktop: true,
+                            });
+                        }
+                    }
+                    if let Some(drag) = state.drag.as_mut() {
+                        drag.desktop = true;
+                        drag.started = true;
+                    }
+                }
+                if matches!(kind, Some("M" | "E" | "R")) {
+                    self.graphical.as_mut().unwrap().drag = None;
+                    self.graphical.as_mut().unwrap().pointer_capture = None;
+                }
+            }
             Input::CancelPointer => {
+                self.graphical.as_mut().unwrap().preview_resize = None;
                 self.graphical.as_mut().unwrap().pointer_capture = None;
-                self.graphical.as_mut().unwrap().drag = None;
-                self.dnd.drag_active = false;
-                self.dnd.offer = None;
-                self.dnd.hover = None;
-                self.dnd.hover_coords = None;
+                if self
+                    .graphical
+                    .as_ref()
+                    .unwrap()
+                    .drag
+                    .as_ref()
+                    .is_some_and(|drag| !drag.desktop)
+                {
+                    self.graphical.as_mut().unwrap().drag = None;
+                    self.dnd.drag_active = false;
+                    self.dnd.offer = None;
+                    self.dnd.hover = None;
+                    self.dnd.hover_coords = None;
+                }
+                // Desktop OSC 72 transfers have their own lifetime; switching
+                // windows must not erase their source offer or received data.
                 self.mouse(MouseEvent {
                     kind: MouseEventKind::Up(MouseButton::Left),
                     column: 0,
@@ -1240,6 +1984,96 @@ impl Controller for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_breadcrumbs_have_spaced_separators_and_real_ancestor_targets() {
+        let home = std::path::Path::new("/home/test");
+        let slots = breadcrumb_slots(
+            Rect::new(3, 5, 80, 1),
+            &home.join("Pictures/Pixel Art"),
+            home,
+        );
+        assert_eq!(
+            slots
+                .iter()
+                .map(|(_, name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["~", "Pictures", "Pixel Art"]
+        );
+        assert_eq!(slots[0].2, home);
+        assert_eq!(slots[1].2, home.join("Pictures"));
+        assert_eq!(slots[1].0.x - slots[0].0.right(), 3);
+        for width in 1..30 {
+            let slots = breadcrumb_slots(
+                Rect::new(3, 5, width, 1),
+                &home.join("Pictures/Pixel Art"),
+                home,
+            );
+            assert!(slots.iter().all(|(r, _, _)| r.right() <= 3 + width));
+            assert_eq!(slots.last().unwrap().2, home.join("Pictures/Pixel Art"));
+        }
+        let slots = breadcrumb_slots(
+            Rect::new(0, 0, 80, 1),
+            std::path::Path::new("/run/media"),
+            home,
+        );
+        assert_eq!(slots[0].2, std::path::Path::new("/"));
+        assert_eq!(slots[1].0.x, 2, "root slash is not duplicated");
+    }
+
+    #[test]
+    fn native_breadcrumb_click_navigates_only_its_pane() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let left = fake.home().join("Pictures/Pixel Art");
+        let right = fake.home().join("Documents");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().pixel_layout = true;
+        app.core.send(Command::RestoreCommander {
+            dirs: [left.clone(), right.clone()],
+            active: 1,
+            enabled: true,
+        });
+        fake.pump();
+        app.tick();
+        Controller::scene(
+            &mut app,
+            Viewport {
+                columns: 160,
+                rows: 40,
+                ..Viewport::default()
+            },
+        );
+        let rect = pane_rect(
+            app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack),
+            0,
+        );
+        let body = starkit::chrome::frame::body(rect, &panels::words(ModuleId::Stack));
+        let mut rule = panels::stack::split(body, 0, 0).rule;
+        rule.x += 2;
+        rule.width = rule.width.saturating_sub(2);
+        let slots = breadcrumb_slots(rule, &left, &app.view.home);
+        let target = slots
+            .iter()
+            .find(|(_, label, _)| label == "Pictures")
+            .unwrap()
+            .0;
+        app.graphical_pointer("down", 0, target.x, target.y, 0);
+        fake.pump();
+        app.tick();
+        assert_eq!(app.panes[0].dir, fake.home().join("Pictures"));
+        assert_eq!(app.panes[1].dir, right);
+        assert!(app.graphical.as_ref().unwrap().drag.is_none());
+    }
+
     fn physical_cell(app: &App, x: u16, y: u16) -> (u16, u16) {
         let state = app.graphical.as_ref().unwrap();
         if state.placements.is_empty() {
@@ -1260,6 +2094,95 @@ mod tests {
             }
         }
         panic!("logical cell {x},{y} is unreachable through cell-pointer input: {p:?}");
+    }
+
+    #[test]
+    fn scaled_destination_buttons_use_original_mouse_position() {
+        for scale in [115u32, 125, 150, 200] {
+            for kind in [OpKind::Copy, OpKind::Move] {
+                let cfg = Config::default();
+                let (core, fake) = crate::ui::fake::handle(cfg.core());
+                let source = fake.home().join("source.txt");
+                let dest = fake.home().join("dest");
+                std::fs::write(&source, b"mouse copy").unwrap();
+                std::fs::create_dir(&dest).unwrap();
+                let mut app = App::new(
+                    core,
+                    cfg,
+                    fake.home().join("config.toml"),
+                    None,
+                    Graphics::disabled(),
+                );
+                app.enable_graphical();
+                let state = app.graphical.as_mut().unwrap();
+                state.pixel_layout = true;
+                state.surface_mode = true;
+                let viewport = Viewport {
+                    columns: (251 * 100 / scale) as u16,
+                    rows: (80 * 100 / scale) as u16,
+                    width: 1757,
+                    height: 1280,
+                    generation: 1,
+                };
+                app.overlays
+                    .open_destination(crate::ui::overlays::context::Request {
+                        kind,
+                        sources: vec![source.clone()],
+                        destination: dest.clone(),
+                    });
+                let scene = Controller::scene(&mut app, viewport);
+                let placement = scene
+                    .placements
+                    .iter()
+                    .find(|p| p.overlay.is_some())
+                    .unwrap();
+                let span = placement
+                    .overlay
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .find(|span| span.text.contains("enter "))
+                    .unwrap();
+                let col = span.x + span.text.find("enter ").unwrap() as u16 + 3;
+                let row = span.y;
+                // A real terminal cell centre over the visible action, not a
+                // hand-picked logical coordinate known to satisfy hit testing.
+                let (cx, cy, px, py) = (0..80u16)
+                    .find_map(|cy| {
+                        (0..251u16).find_map(|cx| {
+                            let px = u32::from(cx) * 7 + 3;
+                            let py = u32::from(cy) * 16 + 8;
+                            (placement.pointer_pixels(px, py, false) == Some((col, row)))
+                                .then_some((cx, cy, px, py))
+                        })
+                    })
+                    .expect("visible action has a terminal mouse cell");
+                Controller::input(
+                    &mut app,
+                    Input::Pointer {
+                        action: "down".into(),
+                        button: 0,
+                        x: (u32::from(cx) * u32::from(viewport.columns) / 251) as u16,
+                        y: (u32::from(cy) * u32::from(viewport.rows) / 80) as u16,
+                        pixel: Some([px, py]),
+                        modifiers: 0,
+                    },
+                );
+                assert!(
+                    !app.overlays.is_open(),
+                    "scale {scale}: action did not execute"
+                );
+                fake.pump();
+                app.tick();
+                fake.pump();
+                app.tick();
+                assert_eq!(
+                    std::fs::read(dest.join("source.txt")).unwrap(),
+                    b"mouse copy"
+                );
+                assert_eq!(source.exists(), kind == OpKind::Copy);
+            }
+        }
     }
 
     #[test]
@@ -1326,7 +2249,12 @@ mod tests {
         });
         fake.pump();
         app.tick();
-        for (columns, rows, cw, ch) in [(100, 40, 8, 16), (120, 48, 10, 20), (90, 35, 16, 32)] {
+        for (columns, rows, cw, ch) in [
+            (100, 40, 8, 16),
+            (120, 48, 10, 20),
+            (90, 35, 16, 32),
+            (128, 62, 7, 16),
+        ] {
             let v = Viewport {
                 columns,
                 rows,
@@ -1356,6 +2284,7 @@ mod tests {
             Controller::input(
                 &mut app,
                 Input::Pointer {
+                    pixel: None,
                     action: "down".into(),
                     button: 1,
                     x,
@@ -1384,6 +2313,22 @@ mod tests {
                 .iter()
                 .find(|p| p.overlay.is_some())
                 .unwrap();
+            // Every pixel in an action row must resolve to that action even
+            // after Kitty quantizes it to the terminal cell centre. Checking
+            // only whether some cell can reach the action missed this bug.
+            assert_eq!(u32::from(overlay.target.y) % ch, 0);
+            for row in 1..overlay.source.height - 1 {
+                for offset in 0..ch {
+                    let py = u32::from(overlay.target.y) + u32::from(row) * ch + offset;
+                    let cell_center = (py / ch) * ch + ch / 2;
+                    let px = u32::from(overlay.target.x) + 3 * cw + cw / 2;
+                    assert_eq!(
+                        overlay.pointer_pixels(px, cell_center, false).unwrap().1,
+                        overlay.source.y + row,
+                        "visible popup action and cell mouse target disagree"
+                    );
+                }
+            }
             for y in overlay.source.y + 1..overlay.source.y + overlay.source.height - 1 {
                 physical_cell(&app, overlay.source.x + 3, y);
             }
@@ -1470,25 +2415,307 @@ mod tests {
             }];
             for _ in 0..2 {
                 let failed = Controller::scene(&mut app, viewport);
-                assert!(
+                assert_eq!(
                     app.layout
                         .last
                         .as_ref()
                         .unwrap()
                         .rect_of(ModuleId::Operations)
-                        .height
-                        > 2
+                        .height,
+                    2
                 );
                 for placement in &failed.placements {
                     placement.validate(viewport).unwrap();
                 }
-                assert!(failed
-                    .spans
-                    .iter()
-                    .any(|span| span.text.contains("Permission denied")));
+                assert!(failed.components.iter().any(|component| matches!(component,
+                    Component::Surface { surface, .. } if surface.nodes.iter().any(|primitive| matches!(primitive,
+                        starkit::native_surface::Primitive::Text { text, .. } if text.contains("Permission denied"))))));
             }
             app.view.ops_active = false;
             app.view.ops.clear();
+        }
+    }
+
+    #[test]
+    fn preview_divider_drag_keeps_focus_geometry_and_never_starts_file_drag() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().pixel_layout = true;
+        let v = Viewport {
+            width: 1000,
+            height: 800,
+            columns: 100,
+            rows: 50,
+            ..Viewport::default()
+        };
+        let original = Controller::scene(&mut app, v);
+        let before = app.layout.last.clone().unwrap();
+        app.layout.focus_set(ModuleId::Preview);
+        let focused = Controller::scene(&mut app, v);
+        assert_eq!(original.placements, focused.placements);
+        app.layout.focus_set(ModuleId::Stack);
+        Controller::scene(&mut app, v);
+        let handle = original.resize_handles[0];
+        let y = u32::from(handle.y) + 8;
+        let send = |app: &mut App, action: &str, y| {
+            Controller::input(
+                app,
+                Input::Pointer {
+                    action: action.into(),
+                    button: 0,
+                    x: 50,
+                    y: 0,
+                    pixel: Some([500, y]),
+                    modifiers: 0,
+                },
+            )
+        };
+        send(&mut app, "down", y);
+        assert!(app.graphical.as_ref().unwrap().preview_resize.is_some());
+        assert!(app.graphical.as_ref().unwrap().drag.is_none());
+        send(&mut app, "drag", y - 64);
+        Controller::scene(&mut app, v);
+        let enlarged = app.layout.last.clone().unwrap();
+        assert_eq!(
+            enlarged.rect_of(ModuleId::Preview).height,
+            before.rect_of(ModuleId::Preview).height + 4
+        );
+        assert_eq!(
+            enlarged.rect_of(ModuleId::Preview).bottom(),
+            before.rect_of(ModuleId::Preview).bottom()
+        );
+        send(&mut app, "drag", y - 64);
+        Controller::scene(&mut app, v);
+        assert_eq!(
+            enlarged,
+            app.layout.last.clone().unwrap(),
+            "redraw must not move the drag origin"
+        );
+        send(&mut app, "up", y - 64);
+        assert!(app.graphical.as_ref().unwrap().preview_resize.is_none());
+        app.layout.focus_set(ModuleId::Preview);
+        Controller::scene(&mut app, v);
+        assert_eq!(enlarged, app.layout.last.clone().unwrap());
+        app.layout.focus_set(ModuleId::Stack);
+        let scene = Controller::scene(&mut app, v);
+        let y = u32::from(scene.resize_handles[0].y) + 8;
+        send(&mut app, "down", y);
+        send(&mut app, "drag", 799);
+        Controller::scene(&mut app, v);
+        assert!(
+            app.layout
+                .last
+                .as_ref()
+                .unwrap()
+                .rect_of(ModuleId::Preview)
+                .height
+                >= 8
+        );
+        Controller::input(&mut app, Input::CancelPointer);
+        assert!(app.graphical.as_ref().unwrap().preview_resize.is_none());
+        assert!(app.bars.held().is_none());
+        assert!(!app.dnd.drag_active);
+        assert!(app.core.state().queue.is_empty());
+    }
+
+    #[test]
+    fn native_tree_rows_are_compact_and_branches_connect_at_row_edges() {
+        use starkit::native_surface::Primitive;
+        let theme = crate::ui::theme::tests_support::theme("terminal");
+        let rows = vec![
+            "│   ├── one".into(),
+            "│   └── two".into(),
+            "└── three".into(),
+        ];
+        let (surface, scroll, visible) = native_tree_surface(&rows, 0, (300, 34), (8, 18), &theme);
+        surface.validate().unwrap();
+        assert_eq!((scroll, visible), (0, 2));
+        let stems: Vec<_> = surface
+            .nodes
+            .iter()
+            .filter_map(|n| match n {
+                Primitive::Fill { rect, .. } if rect.x == 4 => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stems[0].y + stems[0].height, stems[1].y);
+        assert_eq!(stems[0].height, 17);
+        let (surface, scroll, _) =
+            native_tree_surface(&rows, usize::MAX, (300, 34), (8, 18), &theme);
+        assert_eq!(scroll, 1);
+        assert!(surface
+            .nodes
+            .iter()
+            .any(|n| matches!(n, Primitive::Text { text, .. } if text == "three")));
+    }
+
+    #[test]
+    fn graphical_menu_spacing_and_shortcuts_share_mouse_slots_in_both_themes() {
+        use starkit::chrome::header::{self, Word as _};
+        use starkit::native_surface::Primitive;
+        let _padding = starkit::chrome::frame::padding_scope(true);
+        let rect = Rect::new(0, 0, 100, 20);
+        let words: Vec<_> = panels::words(ModuleId::Stack)
+            .into_iter()
+            .filter(|w| *w != panels::Word::Back)
+            .collect();
+        for name in ["terminal", "catppuccin-latte"] {
+            let theme = crate::ui::theme::tests_support::theme(name);
+            let shortcut = hex(theme
+                .panel_bg
+                .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]));
+            for enabled in [false, true] {
+                let Component::Surface { surface, .. } =
+                    native_header(rect, "Files", &words, &theme, (8, 18), enabled)
+                else {
+                    unreachable!()
+                };
+                surface.validate().unwrap();
+                for (word, slot) in header::slots(rect, &words) {
+                    assert_ne!(word, panels::Word::Back);
+                    for (offset, c) in word.word().chars().enumerate() {
+                        let expected_x = (slot.x - 1 + offset as u16) * 8;
+                        let node = surface
+                            .nodes
+                            .iter()
+                            .skip(1)
+                            .find(|node| node.rect().x == expected_x)
+                            .unwrap();
+                        let Primitive::Text {
+                            rect,
+                            text,
+                            color,
+                            bold,
+                            mono,
+                            ..
+                        } = node
+                        else {
+                            unreachable!()
+                        };
+                        assert_eq!(rect.width, 8);
+                        assert_eq!(*text, c.to_string());
+                        assert!(*mono);
+                        let highlighted = enabled && word.mnemonic() == Some((c, offset as u16));
+                        assert_eq!(*bold, highlighted);
+                        assert_eq!(
+                            *color,
+                            if highlighted {
+                                shortcut.clone()
+                            } else {
+                                hex(theme.dim)
+                            }
+                        );
+                        assert_eq!(
+                            header::hit(
+                                Rect::new(0, 0, 100, 20),
+                                &words,
+                                slot.x + offset as u16,
+                                slot.y
+                            ),
+                            Some(word)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn image_preview_zoom_buttons_keys_and_reset_are_bounded() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.view.preview = Some(Arc::new(Preview::Image {
+            data: Arc::new(RgbaImage::new(2, 1)),
+            width: 2,
+            height: 1,
+            format: "png",
+        }));
+        app.layout.focus_set(ModuleId::Preview);
+        app.word_click(panels::Word::ZoomIn);
+        assert_eq!(app.graphical.as_ref().unwrap().image_zoom, Some(125));
+        app.key(KeyEvent::new(
+            KeyCode::Char('-'),
+            starkit::crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(app.graphical.as_ref().unwrap().image_zoom, Some(100));
+        for _ in 0..30 {
+            app.word_click(panels::Word::ZoomIn);
+        }
+        assert_eq!(app.graphical.as_ref().unwrap().image_zoom, Some(800));
+        for _ in 0..30 {
+            app.word_click(panels::Word::ZoomOut);
+        }
+        assert_eq!(app.graphical.as_ref().unwrap().image_zoom, Some(25));
+        app.key(KeyEvent::new(
+            KeyCode::Char('0'),
+            starkit::crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(app.graphical.as_ref().unwrap().image_zoom, None);
+        app.cfg.preview.image_scale = crate::config::Scale::Pixels;
+        app.word_click(panels::Word::ZoomIn);
+        assert_eq!(app.graphical.as_ref().unwrap().image_zoom, Some(200));
+        assert!(app
+            .panel_words(ModuleId::Preview)
+            .contains(&panels::Word::ZoomReset(200)));
+        app.word_click(panels::Word::ZoomReset(200));
+        assert_eq!(app.graphical.as_ref().unwrap().image_zoom, None);
+    }
+
+    #[test]
+    fn graphical_preview_scale_control_updates_image_policy_and_saved_setting() {
+        use starkit::terminal_graphics::protocol::ImageScale;
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        let mut scene = Controller::scene(&mut app, Viewport::default());
+        let regions = app.layout.last.clone().unwrap();
+        let source = Arc::new(RgbaImage::new(2, 1));
+        app.view.preview = Some(Arc::new(Preview::Image {
+            data: source.clone(),
+            width: 2,
+            height: 1,
+            format: "png",
+        }));
+        app.layout.preview_open = true;
+        let state = app.graphical.as_mut().unwrap();
+        state.image_source = Some(source);
+        state.image = Some(("test".into(), "payload".into()));
+        for expected in [ImageScale::Pixels, ImageScale::Smooth, ImageScale::One] {
+            let word = app.panel_words(ModuleId::Preview)[0];
+            assert!(matches!(word, panels::Word::PictureScale(_)));
+            app.word_click(word);
+            scene.components.clear();
+            app.graphical_image(&mut scene, &regions);
+            assert!(scene
+                .components
+                .iter()
+                .any(|c| matches!(c, Component::Image { scale, .. } if *scale == expected)));
+            assert!(std::fs::read_to_string(&app.cfg_path)
+                .unwrap()
+                .contains(app.cfg.preview.image_scale.name()));
         }
     }
 
@@ -1526,10 +2753,15 @@ mod tests {
 
     #[test]
     fn graphical_drag_preserves_marks_scroll_ownership_and_copy_identity() {
-        graphical_drag_fixture(false);
-        graphical_drag_fixture(true);
+        for pixels in [false, true] {
+            for fast in [false, true] {
+                for desktop in [false, true] {
+                    graphical_drag_fixture(pixels, fast, desktop);
+                }
+            }
+        }
     }
-    fn graphical_drag_fixture(pixel_layout: bool) {
+    fn graphical_drag_fixture(pixel_layout: bool, fast: bool, desktop: bool) {
         let cfg = Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
         let source = fake.home().join("source");
@@ -1579,6 +2811,7 @@ mod tests {
             Controller::input(
                 app,
                 Input::Pointer {
+                    pixel: None,
                     action: action.into(),
                     button: 0,
                     x,
@@ -1665,8 +2898,26 @@ mod tests {
             target_track.bottom() - 1,
         );
         assert_eq!(app.dnd.offer.as_ref().unwrap().sources.len(), 2);
+        let source_cursor = app.view.cursor_path.clone();
         app.dnd_autoscroll();
+        assert_eq!(
+            app.active_pane, 0,
+            "destination hover must not steal pane focus"
+        );
+        assert_eq!(app.view.cursor_path, source_cursor);
         assert_eq!(app.scroll[&target_key], target_scroll + 1);
+        pointer(
+            &mut app,
+            "scroll_down",
+            target_track.x - 4,
+            target_track.y + 3,
+        );
+        assert_eq!(
+            app.scroll[&target_key],
+            target_scroll + 4,
+            "wheel scrolls the receiving pane during drag"
+        );
+        assert_eq!(app.active_pane, 0);
         pointer(
             &mut app,
             "scroll_down",
@@ -1688,9 +2939,114 @@ mod tests {
 
         Controller::scene(&mut app, viewport);
         pointer(&mut app, "down", row.x + 4, row.y);
-        pointer(&mut app, "drag", target_track.x - 4, target_track.y + 3);
-        assert_eq!(app.dnd.hover.as_ref(), Some(&destination));
+        pointer(&mut app, "drag", row.x + 5, row.y);
+        assert!(app.dnd.drag_active, "one cell of movement starts the drag");
+        let held = app.layout.last.clone();
+        let preview_open = app.layout.preview_open;
+        app.layout.preview_open = !preview_open;
+        app.view.ops_active = true;
+        Controller::scene(&mut app, viewport);
+        assert_eq!(
+            app.layout.last, held,
+            "background changes must not move the drag target"
+        );
+        app.layout.preview_open = preview_open;
+        app.view.ops_active = false;
+        Controller::input(
+            &mut app,
+            Input::Key {
+                code: "escape".into(),
+                modifiers: 0,
+            },
+        );
+        assert!(!app.dnd.drag_active);
+        assert!(app.graphical.as_ref().unwrap().drag.is_none());
+        pointer(&mut app, "down", row.x + 4, row.y);
+        if desktop {
+            app.dnd.enabled = true;
+            Controller::input(
+                &mut app,
+                Input::Osc72 {
+                    text: format!("t=o:x={}:y={}", row.x + 4, row.y),
+                },
+            );
+        }
+        if desktop {
+            Controller::input(&mut app, Input::CancelPointer);
+            assert!(
+                app.dnd.offer.is_some(),
+                "focus loss must preserve desktop source"
+            );
+            assert!(app.graphical.as_ref().unwrap().drag.is_some());
+        }
+        if !fast {
+            pointer(&mut app, "drag", target_track.x - 4, target_track.y + 3);
+            if desktop {
+                Controller::input(
+                    &mut app,
+                    Input::Osc72 {
+                        text: format!(
+                            "t=m:x={}:y={}:o=1:i=1;text/uri-list",
+                            target_track.x - 4,
+                            target_track.y + 3
+                        ),
+                    },
+                );
+            }
+            assert_eq!(app.dnd.hover.as_ref(), Some(&destination));
+            if desktop {
+                Controller::effects(&mut app);
+                Controller::input(
+                    &mut app,
+                    Input::Osc72 {
+                        text: format!(
+                            "t=m:x={}:y={}:o=1:i=1;text/uri-list",
+                            target_track.x - 4,
+                            target_track.y + 3
+                        ),
+                    },
+                );
+                assert!(
+                    Controller::effects(&mut app).is_empty(),
+                    "unchanged hover must not cause an acceptance feedback loop"
+                );
+            }
+            Controller::scene(&mut app, viewport);
+        }
+        // Fast terminals may coalesce motion: a displaced release must also drop.
         pointer(&mut app, "up", target_track.x - 4, target_track.y + 3);
+        if desktop {
+            assert!(app.core.state().queue.is_empty());
+            assert!(
+                !app.overlays.is_open(),
+                "ordinary mouse release must not finish Kitty's gesture"
+            );
+            Controller::input(
+                &mut app,
+                Input::Osc72 {
+                    text: format!(
+                        "t=M:x={}:y={}:o=1:i=1;text/uri-list",
+                        target_track.x - 4,
+                        target_track.y + 3
+                    ),
+                },
+            );
+        }
+        assert!(
+            app.overlays.is_open(),
+            "graphical drop must offer the ASCII copy/move choice"
+        );
+        assert!(
+            app.core.state().queue.is_empty(),
+            "no copy before choosing an operation"
+        );
+        Controller::input(
+            &mut app,
+            Input::Key {
+                code: "char:c".into(),
+                modifiers: 0,
+            },
+        );
         fake.pump();
         app.tick();
         fake.pump();

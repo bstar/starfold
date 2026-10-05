@@ -142,6 +142,8 @@ pub struct LayoutState {
     /// `[ui] preview_rows`: how far PREVIEW grows when it is open but not
     /// focused.
     pub preview_rows: u16,
+    /// User-sized native preview; focus never changes this allocation.
+    pub native_preview_rows: Option<u16>,
     /// `[ui] ops_rows`: how far OPERATIONS grows while focused, up to its own
     /// queue length.
     pub ops_rows: u16,
@@ -165,6 +167,7 @@ impl LayoutState {
             editor_active: false,
             ops_active: false,
             preview_rows,
+            native_preview_rows: None,
             ops_rows,
             fold_rows,
             last: None,
@@ -223,7 +226,7 @@ impl LayoutState {
             STACK_MIN_ROWS + extra
         }
         .saturating_sub(tab_rows);
-        let ops_floor = if extra > 0 && !self.ops_active && self.focus != ModuleId::Operations {
+        let ops_floor = if extra > 0 && self.focus != ModuleId::Operations {
             2
         } else {
             collapsed_rows
@@ -236,7 +239,7 @@ impl LayoutState {
         // focusing it is asking to see the queue, and a queue that could not
         // open because the preview had the room was the first thing a real
         // terminal showed to be wrong.
-        let ops_desired = if self.focus == ModuleId::Operations || self.ops_active {
+        let ops_desired = if self.focus == ModuleId::Operations || (extra == 0 && self.ops_active) {
             // One entry of the queue already shows on the folded line.
             queued
                 .max(if self.ops_active { 2 } else { 1 })
@@ -252,7 +255,14 @@ impl LayoutState {
         // while the stack has focus: at thirty rows the room is nine, and a
         // preview of ten pinned the listing to its seven-row floor, which
         // made a roomy terminal feel like the smallest one allowed.
-        let preview_desired = if self.editor_active {
+        let preview_desired = if extra > 0 {
+            if self.preview_open {
+                self.native_preview_rows
+                    .unwrap_or_else(|| self.preview_rows.min(room / 2))
+            } else {
+                0
+            }
+        } else if self.editor_active {
             room
         } else if self.audio_active {
             9 // 13 outer rows: border + header + ten-row player body.
@@ -372,6 +382,44 @@ mod tests {
 
     fn state() -> LayoutState {
         LayoutState::new(10, 6, 6)
+    }
+
+    #[test]
+    fn native_preview_focus_never_changes_height_and_manual_size_survives_clamping() {
+        let _padding = starkit::chrome::frame::padding_scope(true);
+        let mut layout = state();
+        for rows in [None, Some(2), Some(20), Some(500)] {
+            layout.native_preview_rows = rows;
+            for height in [40, 60, 100] {
+                let area = Rect::new(0, 0, 120, height);
+                layout.focus_set(ModuleId::Stack);
+                let before = layout.regions(area, (0, 0), 0).unwrap().clone();
+                layout.focus_set(ModuleId::Preview);
+                assert_eq!(&before, layout.regions(area, (0, 0), 0).unwrap());
+                assert_eq!(layout.native_preview_rows, rows);
+            }
+        }
+    }
+
+    #[test]
+    fn native_operations_do_not_resize_panes_as_work_starts_or_finishes() {
+        let _chrome = starkit::chrome::frame::padding_scope(true);
+        let mut layout = state();
+        let area = Rect::new(0, 0, 160, 60);
+        let idle = layout.regions(area, (1, 0), 0).cloned().unwrap();
+        for (active, count) in [(true, 1), (true, 12), (false, 12), (false, 0)] {
+            layout.ops_active = active;
+            assert_eq!(layout.regions(area, (1, 0), count).unwrap(), &idle);
+        }
+        layout.focus_set(ModuleId::Operations);
+        assert!(
+            layout
+                .regions(area, (1, 0), 12)
+                .unwrap()
+                .rect_of(ModuleId::Operations)
+                .height
+                > idle.rect_of(ModuleId::Operations).height
+        );
     }
 
     #[test]

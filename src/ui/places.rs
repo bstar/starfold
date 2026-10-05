@@ -487,6 +487,37 @@ impl Places {
         self.move_selection(if down { 3 } else { -3 });
     }
 
+    #[cfg(feature = "terminal-graphics")]
+    pub fn pointer_regions(&self, area: Rect) -> Vec<Rect> {
+        let inner = overlay::inner(rect(area));
+        let mut regions = Vec::new();
+        if matches!(self.mode, Mode::Browse) {
+            let list = Self::list_rect(inner);
+            for (row, item) in self
+                .rows()
+                .iter()
+                .skip(self.scroll)
+                .take(usize::from(list.height))
+                .enumerate()
+            {
+                if matches!(item, Row::Item(_)) {
+                    regions.push(Rect::new(list.x, list.y + row as u16, list.width, 1));
+                }
+            }
+            for (x, width) in [(0, 7), (9, 10), (21, 7), (30, 10), (42, 7), (51, 16)] {
+                if x < inner.width {
+                    regions.push(Rect::new(
+                        inner.x + x,
+                        inner.bottom().saturating_sub(1),
+                        width.min(inner.width - x),
+                        1,
+                    ));
+                }
+            }
+        }
+        regions
+    }
+
     /// Click a row to open it; a footer button edits the selected bookmark.
     pub fn click(&mut self, x: u16, y: u16, area: Rect) -> PlaceAction {
         let rr = rect(area);

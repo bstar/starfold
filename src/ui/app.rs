@@ -1763,6 +1763,24 @@ impl App {
             }
             return;
         }
+        #[cfg(feature = "terminal-graphics")]
+        if self.graphical.as_ref().is_some_and(|g| !g.cell_mode)
+            && self.layout.focus() == ModuleId::Preview
+            && matches!(self.view.preview.as_deref(), Some(Preview::Image { .. }))
+            && (k.modifiers.is_empty()
+                || k.modifiers == starkit::crossterm::event::KeyModifiers::SHIFT)
+        {
+            let direction = match k.code {
+                KeyCode::Char('+') | KeyCode::Char('=') => Some(1),
+                KeyCode::Char('-') => Some(-1),
+                KeyCode::Char('0') => Some(0),
+                _ => None,
+            };
+            if let Some(direction) = direction {
+                self.zoom_preview_image(direction);
+                return;
+            }
+        }
         if self.audio_here() && self.layout.focus() == ModuleId::Preview && self.audio_key(k) {
             return;
         }
@@ -2549,7 +2567,7 @@ impl App {
                     self.focus_pane(pane);
                     if button == MouseButton::Left {
                         if let Some(word) =
-                            header::hit(rect, &panels::words(ModuleId::Stack), m.column, m.row)
+                            header::hit(rect, &self.panel_words(ModuleId::Stack), m.column, m.row)
                         {
                             self.word_click(word);
                             return;
@@ -2673,7 +2691,19 @@ impl App {
     }
 
     fn click(&mut self, regions: &Regions, x: u16, y: u16) {
-        if let Some(hit) = status::hit(regions.status, &self.status_view(Instant::now()), x, y) {
+        let view = self.status_view(Instant::now());
+        let status_hit: fn(Rect, &status::View<'_>, u16, u16) -> Option<status::Hit> = status::hit;
+        #[cfg(feature = "terminal-graphics")]
+        let status_hit = if self
+            .graphical
+            .as_ref()
+            .is_some_and(|g| g.uses_pixel_layout())
+        {
+            status::native_hit
+        } else {
+            status_hit
+        };
+        if let Some(hit) = status_hit(regions.status, &view, x, y) {
             match hit {
                 status::Hit::Help => {
                     self.overlays.open_help();
@@ -2696,7 +2726,7 @@ impl App {
                 self.layout.focus() == ModuleId::Operations,
             )
         } else {
-            panels::words(module)
+            self.panel_words(module)
         };
         if let Some(word) = header::hit(rect, &words, x, y) {
             self.word_click(word);
@@ -2759,8 +2789,17 @@ impl App {
         };
         match module {
             ModuleId::Stack => {
-                let entry = self.scroll.entry(self.view.frame_id).or_insert(0);
-                *entry = (*entry as i64 + i64::from(delta)).max(0) as usize;
+                let rows = panels::stack::visible_rows(
+                    regions.rect_of(ModuleId::Stack),
+                    self.view.crumbs.len(),
+                    self.layout.fold_rows,
+                );
+                let current = self.scroll.get(&self.view.frame_id).copied().unwrap_or(0);
+                let above = ((current as i64 + i64::from(delta)).max(0) as usize)
+                    .min(self.view.rows.len().saturating_sub(rows));
+                // Like a scrollbar drag, wheel movement must carry the cursor
+                // into the viewport or clamp_scrolls immediately undoes it.
+                self.scroll_bar_to(Bar::Stack, above as u32);
             }
             ModuleId::Preview => {
                 self.preview_scroll =
@@ -2771,6 +2810,60 @@ impl App {
                 self.ops_scroll = (self.ops_scroll as i64 + i64::from(delta)).max(0) as usize;
             }
         }
+    }
+
+    fn zoom_preview_image(&mut self, _direction: i8) {
+        #[cfg(feature = "terminal-graphics")]
+        if matches!(self.view.preview.as_deref(), Some(Preview::Image { .. })) {
+            if let Some(state) = self.graphical.as_mut().filter(|g| !g.cell_mode) {
+                let steps: &[u16] = if self.cfg.preview.image_scale == crate::config::Scale::Pixels
+                {
+                    &[25, 50, 100, 200, 300, 400, 600, 800]
+                } else {
+                    &[25, 50, 75, 100, 125, 150, 200, 300, 400, 600, 800]
+                };
+                let current = state.image_zoom.unwrap_or(100);
+                state.image_zoom = match _direction.cmp(&0) {
+                    std::cmp::Ordering::Greater => {
+                        Some(steps.iter().copied().find(|p| *p > current).unwrap_or(800))
+                    }
+                    std::cmp::Ordering::Less => Some(
+                        steps
+                            .iter()
+                            .copied()
+                            .rev()
+                            .find(|p| *p < current)
+                            .unwrap_or(25),
+                    ),
+                    std::cmp::Ordering::Equal => None,
+                };
+                self.repaint = true;
+            }
+        }
+    }
+
+    fn panel_words(&self, module: ModuleId) -> Vec<panels::Word> {
+        #[cfg(feature = "terminal-graphics")]
+        if module == ModuleId::Stack && self.graphical.as_ref().is_some_and(|g| !g.cell_mode) {
+            return panels::words(module)
+                .into_iter()
+                .filter(|word| *word != panels::Word::Back)
+                .collect();
+        }
+        #[cfg(feature = "terminal-graphics")]
+        if module == ModuleId::Preview
+            && self.graphical.as_ref().is_some_and(|g| !g.cell_mode)
+            && matches!(self.view.preview.as_deref(), Some(Preview::Image { .. }))
+        {
+            return vec![
+                panels::Word::PictureScale(self.cfg.preview.image_scale),
+                panels::Word::ZoomOut,
+                panels::Word::ZoomReset(self.graphical.as_ref().unwrap().image_zoom.unwrap_or(100)),
+                panels::Word::ZoomIn,
+                panels::Word::Close,
+            ];
+        }
+        panels::words(module)
     }
 
     fn word_click(&mut self, word: panels::Word) {
@@ -2788,6 +2881,10 @@ impl App {
             panels::Word::Copy => self.act(Action::CopyOperations),
             panels::Word::Clear => self.act(Action::ClearQueue),
             panels::Word::Close => self.act(Action::TogglePreview),
+            panels::Word::PictureScale(_) => self.cycle_picture_scale(),
+            panels::Word::ZoomOut => self.zoom_preview_image(-1),
+            panels::Word::ZoomReset(_) => self.zoom_preview_image(0),
+            panels::Word::ZoomIn => self.zoom_preview_image(1),
         }
     }
 
@@ -2929,6 +3026,18 @@ impl App {
                     ("d", "seek style"),
                     ("O", "external"),
                 ],
+                #[cfg(feature = "terminal-graphics")]
+                ModuleId::Preview
+                    if self.graphical.as_ref().is_some_and(|g| !g.cell_mode)
+                        && matches!(self.view.preview.as_deref(), Some(Preview::Image { .. })) =>
+                {
+                    &[
+                        ("+/-", "zoom"),
+                        ("0", "reset zoom"),
+                        ("z", "scale"),
+                        ("i", "fold"),
+                    ]
+                }
                 ModuleId::Preview => &[("j/k", "scroll"), ("i", "fold"), ("z", "scale")],
             }
         };
@@ -2987,7 +3096,8 @@ impl App {
                 padding = (1, 0);
             }
         }
-        let incoming = self.dnd.receiving_uri && self.dnd.choice.is_some();
+        let incoming =
+            self.dnd.receiving_uri && self.dnd.choice.is_some() && self.dnd.result_kind.is_some();
         let queued = u16::try_from(
             self.view.ops.len()
                 + usize::from(self.view.unmounting.is_some())
@@ -2996,7 +3106,23 @@ impl App {
         .unwrap_or(u16::MAX);
         self.layout.ops_active = self.view.ops_active || incoming;
         self.layout.tabs_visible = self.core.state().tabs.tabs.len() > 1;
-        let Some(regions) = self.layout.regions(area, padding, queued).cloned() else {
+        #[cfg(feature = "terminal-graphics")]
+        let held_regions = self
+            .graphical
+            .as_ref()
+            .and_then(|state| state.drag_regions())
+            .cloned();
+        #[cfg(not(feature = "terminal-graphics"))]
+        let held_regions: Option<layout::Regions> = None;
+        // Use the same geometry for painting and hit testing throughout a file
+        // gesture, even if background preview/queue state changes meanwhile.
+        let regions = if let Some(regions) = held_regions {
+            self.layout.last = Some(regions.clone());
+            Some(regions)
+        } else {
+            self.layout.regions(area, padding, queued).cloned()
+        };
+        let Some(regions) = regions else {
             too_small(area, buf, &self.theme);
             self.bars = bars;
             return;
@@ -3165,7 +3291,7 @@ impl App {
                     focus == ModuleId::Operations,
                 )
             } else {
-                panels::words(module)
+                self.panel_words(module)
             };
             panels::highlight_header_hotkeys_for_words(
                 regions.rect_of(module),
@@ -4052,7 +4178,7 @@ mod tests {
                 app.layout.focus() == ModuleId::Operations,
             )
         } else {
-            panels::words(module)
+            app.panel_words(module)
         };
         let (_, slot) = header::slots(rect, &words)
             .into_iter()
@@ -4680,6 +4806,30 @@ mod tests {
     /// arithmetic): forty files overflow that by a wide margin, so the bar
     /// dragged here is never in doubt about having something to scroll.
     #[test]
+    fn wheel_scroll_survives_refresh_and_reverses_without_snapping_back() {
+        let (mut app, fk, _dir) = app();
+        many_files(&fk, 100);
+        fake::open(&app.core, &fk, "many");
+        app.tick();
+        let area = Rect::new(0, 0, 60, 21);
+        let mut buffer = Buffer::empty(area);
+        app.draw(area, &mut buffer);
+        let track = app.bars.track_of(Bar::Stack).unwrap();
+        for expected in [3, 6, 9, 12] {
+            app.mouse(mouse(MouseEventKind::ScrollDown, track.x - 3, track.y + 1));
+            fk.pump();
+            app.tick();
+            app.draw(area, &mut buffer);
+            assert_eq!(app.scroll[&app.view.frame_id], expected);
+        }
+        app.mouse(mouse(MouseEventKind::ScrollUp, track.x - 3, track.y + 1));
+        fk.pump();
+        app.tick();
+        app.draw(area, &mut buffer);
+        assert_eq!(app.scroll[&app.view.frame_id], 9);
+    }
+
+    #[test]
     fn dragging_the_stack_scrollbar_scrolls_and_keeps_the_cursor_in_view() {
         let (mut app, fk, _dir) = app();
         many_files(&fk, 40);
@@ -4918,6 +5068,177 @@ mod tests {
         assert!(!dump(&buf, area).contains("waiting for file list"));
     }
 
+    #[cfg(feature = "terminal-graphics")]
+    #[test]
+    fn external_drop_requests_metadata_before_choice_and_defers_file_work() {
+        use base64::Engine as _;
+        for early in [false, true] {
+            for (kind, cancel) in [
+                (OpKind::Copy, false),
+                (OpKind::Move, false),
+                (OpKind::Copy, true),
+            ] {
+                let (mut app, fake, _dir) = app();
+                let source_dir = tempfile::tempdir().unwrap();
+                let source = source_dir.path().join("external.txt");
+                std::fs::write(&source, b"external bytes").unwrap();
+                fake.pump();
+                app.tick();
+                let area = Rect::new(0, 0, 100, 30);
+                app.draw(area, &mut Buffer::empty(area));
+                let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
+                let (tx, rx) = crossbeam_channel::bounded(32);
+                wire_dnd::graphical_output(tx);
+                app.dnd.enabled = true;
+                app.dnd_message(&format!(
+                    "t=M:x={}:y={}:o=3:i=1;text/uri-list",
+                    stack.x + 4,
+                    stack.bottom() - 3
+                ));
+                assert_eq!(rx.try_recv().unwrap().meta, "t=r:x=1:i=1");
+                assert!(app.overlays.is_open());
+                assert!(app.dnd.choice.as_ref().unwrap().terminal_drop_open);
+                let uri = format!("{}\r\n", wire_dnd::file_uri(&source).unwrap());
+                let data = base64::engine::general_purpose::STANDARD.encode(uri);
+                if early {
+                    app.dnd_message(&format!("t=r:x=1:m=1:i=1;{data}"));
+                    app.dnd_message("t=r:x=1:m=0:i=1;");
+                    if cfg!(target_os = "linux") {
+                        assert_eq!(rx.try_recv().unwrap().meta, "t=r:o=0:i=1");
+                        assert!(!app.dnd.choice.as_ref().unwrap().terminal_drop_open);
+                        assert_eq!(
+                            app.dnd.choice.as_ref().unwrap().own_sources,
+                            Some(vec![source.clone()])
+                        );
+                    } else {
+                        assert!(app.dnd.prepared_paths.is_some());
+                    }
+                }
+                assert!(
+                    app.core.state().queue.is_empty(),
+                    "metadata must not start an operation"
+                );
+                app.draw(area, &mut Buffer::empty(area));
+                assert!(
+                    !app.layout.ops_active,
+                    "metadata must not shift pane heights"
+                );
+                if cancel {
+                    app.dnd_cancel_choice();
+                    if early && cfg!(target_os = "linux") {
+                        assert!(rx.is_empty(), "the desktop gesture already ended");
+                    } else {
+                        assert_eq!(rx.try_recv().unwrap().meta, "t=r:o=0:i=1");
+                    }
+                    app.dnd_message(&format!("t=r:x=1:m=1:i=1;{data}"));
+                    app.dnd_message("t=r:x=1:m=0:i=1;");
+                    assert!(app.core.state().queue.is_empty());
+                    assert!(app.dnd.prepared_paths.is_none());
+                } else {
+                    app.dnd_choose(kind);
+                    assert!(rx.is_empty(), "choice must not request metadata twice");
+                    if !early {
+                        app.dnd_message(&format!("t=r:x=1:m=1:i=1;{data}"));
+                        app.dnd_message("t=r:x=1:m=0:i=1;");
+                        if cfg!(target_os = "linux") {
+                            assert_eq!(rx.try_recv().unwrap().meta, "t=r:o=0:i=1");
+                        }
+                    }
+                    fake.pump();
+                    app.tick();
+                    fake.pump();
+                    app.tick();
+                    assert_eq!(
+                        std::fs::read(fake.home().join("external.txt")).unwrap(),
+                        b"external bytes"
+                    );
+                }
+                assert_eq!(
+                    source.exists(),
+                    cancel || kind != OpKind::Move || !cfg!(target_os = "linux")
+                );
+            }
+        }
+    }
+
+    #[cfg(all(feature = "terminal-graphics", target_os = "linux"))]
+    #[test]
+    fn kitty_downloaded_drop_files_keep_their_offer_alive() {
+        use base64::Engine as _;
+        let (mut app, fake, _dir) = app();
+        fake.pump();
+        app.tick();
+        let area = Rect::new(0, 0, 100, 30);
+        app.draw(area, &mut Buffer::empty(area));
+        let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
+        let (tx, rx) = crossbeam_channel::bounded(32);
+        wire_dnd::graphical_output(tx);
+        app.dnd.enabled = true;
+        app.dnd_message(&format!(
+            "t=M:x={}:y={}:o=3:i=1;text/uri-list",
+            stack.x + 4,
+            stack.bottom() - 3
+        ));
+        assert_eq!(rx.try_recv().unwrap().meta, "t=r:x=1:i=1");
+        let data = base64::engine::general_purpose::STANDARD
+            .encode(b"file:///home/test/.cache/kitty/dnd-drag-test/0/photo.png\r\n");
+        app.dnd_message(&format!("t=r:x=1:m=1:i=1;{data}"));
+        app.dnd_message("t=r:x=1:m=0:i=1;");
+        assert!(app.dnd.choice.as_ref().unwrap().terminal_drop_open);
+        assert!(app.dnd.choice.as_ref().unwrap().own_sources.is_none());
+        assert!(app.dnd.prepared_paths.is_some());
+        assert!(app.core.state().queue.is_empty());
+        assert!(
+            rx.is_empty(),
+            "downloaded files must not be released before consumption"
+        );
+        app.dnd_cancel_choice();
+        assert_eq!(rx.try_recv().unwrap().meta, "t=r:o=0:i=1");
+    }
+
+    #[cfg(feature = "terminal-graphics")]
+    #[test]
+    fn external_remote_metadata_keeps_drop_alive_until_chosen_import() {
+        use base64::Engine as _;
+        let (mut app, fake, _dir) = app();
+        fake.pump();
+        app.tick();
+        let area = Rect::new(0, 0, 100, 30);
+        app.draw(area, &mut Buffer::empty(area));
+        let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
+        let (tx, rx) = crossbeam_channel::bounded(32);
+        wire_dnd::graphical_output(tx);
+        app.dnd.enabled = true;
+        app.dnd_message(&format!(
+            "t=M:x={}:y={}:o=3:i=1;text/uri-list",
+            stack.x + 4,
+            stack.bottom() - 3
+        ));
+        assert_eq!(rx.try_recv().unwrap().meta, "t=r:x=1:i=1");
+        let data =
+            base64::engine::general_purpose::STANDARD.encode(b"file:///remote/photo.jpg\r\n");
+        app.dnd_message(&format!("t=r:x=1:X=1:m=1:i=1;{data}"));
+        app.dnd_message("t=r:x=1:m=0:i=1;");
+        assert!(app.core.state().queue.is_empty());
+        assert!(app.dnd.choice.as_ref().unwrap().remote);
+        assert!(app.dnd.choice.as_ref().unwrap().terminal_drop_open);
+        assert!(rx.is_empty(), "metadata must not finish the desktop drop");
+        app.dnd_choose(OpKind::Move);
+        assert_eq!(app.dnd.result_kind, Some(OpKind::Move));
+        assert_eq!(
+            app.dnd.pending_paths,
+            Some(vec![PathBuf::from("/remote/photo.jpg")])
+        );
+        assert!(app.dnd.import_op.is_some());
+        assert!(app.dnd.choice.as_ref().unwrap().terminal_drop_open);
+        assert!(
+            rx.is_empty(),
+            "SSH handles must remain available to the import worker"
+        );
+        app.dnd_cancel_choice();
+        assert_eq!(rx.try_recv().unwrap().meta, "t=r:o=0:i=1");
+    }
+
     #[test]
     fn internal_drop_label_names_source_action_and_destination() {
         let offer = wire_dnd::Offer {
@@ -4934,6 +5255,69 @@ mod tests {
             drop_target_hint(Some(&offer), Path::new("/destination/videos"), 1, 32)
                 .ends_with("→  videos/")
         );
+    }
+
+    #[cfg(feature = "terminal-graphics")]
+    #[test]
+    fn own_drop_releases_terminal_before_mouse_choice_and_keeps_captured_sources() {
+        for kind in [OpKind::Copy, OpKind::Move] {
+            let (mut app, fake, _dir) = app();
+            let source_dir = tempfile::tempdir().unwrap();
+            let source = source_dir.path().join("drop.txt");
+            std::fs::write(&source, b"captured bytes").unwrap();
+            fake.pump();
+            app.tick();
+            let area = Rect::new(0, 0, 100, 30);
+            app.draw(area, &mut Buffer::empty(area));
+            let stack = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack);
+            let x = stack.x + 4;
+            let y = stack.bottom() - 3;
+            let (tx, rx) = crossbeam_channel::bounded(32);
+            wire_dnd::graphical_output(tx);
+            app.dnd.enabled = true;
+            app.dnd.offer = Some(wire_dnd::Offer {
+                source_tab: app.core.state().tabs.active().id,
+                sources: vec![source.clone()],
+                uri_text: String::new(),
+                source_stack: 0,
+            });
+            app.dnd_message(&format!("t=M:x={x}:y={y}:o=1:i=1;text/uri-list"));
+            assert_eq!(rx.try_recv().unwrap().meta, "t=r:o=0:i=1");
+            assert!(app.overlays.is_open());
+            assert!(app.core.state().queue.is_empty());
+            assert!(!app.dnd.choice.as_ref().unwrap().terminal_drop_open);
+            // Kitty acknowledges the completed desktop gesture before the user chooses.
+            app.dnd_message("t=e:x=4:y=1:i=1");
+            assert!(app.dnd.offer.is_none());
+            let label = if kind == OpKind::Copy { "Copy" } else { "Move" };
+            let mut buf = Buffer::empty(area);
+            app.draw(area, &mut buf);
+            let hit = (0..area.height)
+                .find_map(|row| {
+                    (0..area.width).find_map(|col| {
+                        let text: String =
+                            (col..area.width).map(|x| buf[(x, row)].symbol()).collect();
+                        text.starts_with(label).then_some((col, row))
+                    })
+                })
+                .expect("mouse action is visible");
+            app.mouse(mouse(MouseEventKind::Down(MouseButton::Left), hit.0, hit.1));
+            fake.pump();
+            app.tick();
+            fake.pump();
+            app.tick();
+            assert_eq!(
+                std::fs::read(fake.home().join("drop.txt")).unwrap(),
+                b"captured bytes"
+            );
+            assert_eq!(source.exists(), kind == OpKind::Copy);
+            assert!(app.dnd.active.is_none());
+            assert!(
+                !rx.try_iter()
+                    .any(|message| message.meta.starts_with("t=r:o=")),
+                "do not finish the desktop drop twice"
+            );
+        }
     }
 
     #[test]

@@ -197,6 +197,25 @@ impl Fold {
 pub struct Theme {
     core: Core,
     pub fold: Fold,
+    pub(crate) graphical_rows: bool,
+}
+
+impl Theme {
+    pub fn file_cursor_bg(&self) -> Rgb {
+        if self.graphical_rows {
+            self.panel_bg.mix(self.accent, 0.28)
+        } else {
+            self.row_cursor_bg.ensure_contrast(self.panel_bg, 3.0)
+        }
+    }
+
+    pub fn file_marked_bg(&self) -> Rgb {
+        if self.graphical_rows {
+            self.panel_bg.mix(self.accent, 0.14)
+        } else {
+            self.fold.marked_bg
+        }
+    }
 }
 
 impl Deref for Theme {
@@ -216,7 +235,11 @@ impl Resolve for Theme {
             FoldColors::default()
         });
         let fold = Fold::derive(&core, &stated, file.base16.as_ref());
-        Self { core, fold }
+        Self {
+            core,
+            fold,
+            graphical_rows: false,
+        }
     }
 
     fn core(&self) -> &Core {

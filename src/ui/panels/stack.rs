@@ -526,21 +526,24 @@ fn render_row(
     // A cursor must remain distinct from the marked-row tint in both dark and
     // light themes. The pointer and the mark get separate cells and colours.
     let cursor_colors = cursor.then(|| {
-        let bg = t.row_cursor_bg.ensure_contrast(t.panel_bg, 3.0);
+        let bg = t.file_cursor_bg();
         let fg = t.row_cursor_fg.ensure_contrast(bg, 4.5);
         (bg, fg)
     });
     let highlight_bg = if let Some((bg, _)) = cursor_colors {
         Some(rgb(bg))
     } else if marked {
-        Some(rgb(t.fold.marked_bg))
+        Some(rgb(t.file_marked_bg()))
     } else {
         None
     };
     let highlight_fg = if let Some((_, fg)) = cursor_colors {
         Some(rgb(fg))
     } else if marked {
-        Some(rgb(t.fold.marked_fg))
+        Some(rgb(t
+            .fold
+            .marked_fg
+            .ensure_contrast(t.file_marked_bg(), 4.5)))
     } else {
         None
     };
@@ -576,11 +579,13 @@ fn render_row(
         };
         let mark_style = if marked {
             let mark_fg = if cursor {
-                t.fold.marked_fg.ensure_contrast(t.fold.marked_bg, 4.5)
+                t.fold.marked_fg.ensure_contrast(t.file_marked_bg(), 4.5)
             } else {
                 t.fold.marked_fg
             };
-            Style::default().fg(rgb(mark_fg)).bg(rgb(t.fold.marked_bg))
+            Style::default()
+                .fg(rgb(mark_fg))
+                .bg(rgb(t.file_marked_bg()))
         } else {
             style_for(t.dim)
         };

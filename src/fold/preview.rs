@@ -298,6 +298,44 @@ mod tests {
     }
 
     #[test]
+    fn bmp_previews_decode_pixels_and_detect_the_format_without_an_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("picture.bmp");
+        starkit::image::RgbImage::from_pixel(17, 11, starkit::image::Rgb([12, 34, 56]))
+            .save(&path)
+            .unwrap();
+        for name in ["picture.bmp", "picture.bin"] {
+            let candidate = dir.path().join(name);
+            if candidate != path {
+                std::fs::copy(&path, &candidate).unwrap();
+            }
+            let got = build(
+                &candidate,
+                &PreviewConfig::default(),
+                &AtomicBool::new(false),
+            );
+            match got {
+                Preview::Image {
+                    width,
+                    height,
+                    format,
+                    data,
+                } => {
+                    assert_eq!((width, height), (17, 11));
+                    assert_eq!(format, "bmp");
+                    assert_eq!(data.get_pixel(16, 10).0, [12, 34, 56, 255]);
+                }
+                other => panic!("expected a BMP image, got {other:?}"),
+            }
+        }
+        std::fs::write(&path, b"BMtruncated").unwrap();
+        assert!(matches!(
+            build(&path, &PreviewConfig::default(), &AtomicBool::new(false)),
+            Preview::Error(_)
+        ));
+    }
+
+    #[test]
     fn an_image_wider_than_the_preview_limit_is_downscaled() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("wide.png");

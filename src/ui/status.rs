@@ -187,6 +187,9 @@ fn right_field(area: Rect, help_w: u16, v: &View<'_>) -> (String, String) {
 }
 
 pub fn fields(area: Rect, v: &View<'_>) -> Fields {
+    fields_with_help(area, v, width_of(HELP).min(area.width))
+}
+fn fields_with_help(area: Rect, v: &View<'_>, help_w: u16) -> Fields {
     let empty_at = |r: Rect| Rect {
         width: 0,
         height: 0,
@@ -200,7 +203,6 @@ pub fn fields(area: Rect, v: &View<'_>) -> Fields {
         };
     }
 
-    let help_w = width_of(HELP).min(area.width);
     let help = Rect {
         x: area.x,
         y: area.y,
@@ -252,7 +254,13 @@ pub fn fields(area: Rect, v: &View<'_>) -> Fields {
 }
 
 pub fn hit(area: Rect, v: &View<'_>, x: u16, y: u16) -> Option<Hit> {
-    let f = fields(area, v);
+    hit_fields(area, v, x, y, fields(area, v))
+}
+#[cfg(feature = "terminal-graphics")]
+pub fn native_hit(area: Rect, v: &View<'_>, x: u16, y: u16) -> Option<Hit> {
+    hit(area, v, x, y)
+}
+fn hit_fields(area: Rect, v: &View<'_>, x: u16, y: u16, f: Fields) -> Option<Hit> {
     let inside =
         |r: Rect| r.width > 0 && y >= r.y && y < area.bottom() && x >= r.x && x < r.x + r.width;
     if inside(f.help) {
@@ -409,68 +417,40 @@ pub fn native_surface(
     let mut s = Surface::new(area.width * cw, area.height * ch, hex(v.theme.panel_bg));
     let m = Metrics::from_cell(cw, ch);
     let h = s.height;
-    let fg = hex(v.theme.fg);
-    let dim = hex(v.theme.dim);
     let border = hex(v.theme.border);
     s.fill(R::new(0, 0, s.width, 1), &border, 0);
+    // Use exactly the cell footer's fields and state priority. Only the
+    // presentation differs: compact text instead of raised keycap buttons.
     let f = fields(area, v);
+    let (middle, kind) = v.middle();
+    let body_h = h.saturating_sub(1);
     s.text(
-        R::new(4, 1, f.help.width * cw - 4, h - 1),
-        HELP,
-        &fg,
+        R::new(0, 1, f.help.width * cw, body_h),
+        fit(HELP, f.help.width),
+        &hex(v.theme.hint_desc_fg),
         m.font,
         false,
     );
-    let (middle, kind) = v.middle();
-    let x = (f.middle.x - area.x) * cw;
-    let w = f.middle.width * cw;
-    if matches!(kind, MiddleKind::Hints) {
-        let mut left = x;
-        for (key, desc) in v.hints {
-            let kw = ((width_of(key) + 1) * cw + 8).max(ch);
-            let dw = desc.chars().count() as u16 * cw;
-            if left + kw + dw + 12 > x + w {
-                break;
-            }
-            s.fill(R::new(left, 5, kw, h.saturating_sub(10)), &border, 3);
-            s.text(
-                R::new(left + 4, 5, kw - 8, h.saturating_sub(10)),
-                *key,
-                &fg,
-                m.font,
-                true,
-            );
-            if let Some(starkit::native_surface::Primitive::Text { mono, .. }) = s.nodes.last_mut()
-            {
-                *mono = true;
-            }
-            s.text(
-                R::new(left + kw + 4, 1, dw, h - 1),
-                *desc,
-                &dim,
-                m.font,
-                false,
-            );
-            left += kw + dw + 12;
-        }
-    } else {
-        let color = if matches!(kind, MiddleKind::Note(NoteLevel::Error)) {
-            hex(v.theme.error)
-        } else {
-            fg.clone()
-        };
-        let text: String = middle
-            .chars()
-            .filter(|c| !matches!(c, '█' | '░' | '▓' | '▒'))
-            .collect();
-        s.text(R::new(x, 1, w, h - 1), text, &color, m.font, false);
-    }
+    let color = match kind {
+        MiddleKind::Note(NoteLevel::Error) => v.theme.error,
+        MiddleKind::Note(NoteLevel::Warning) => v.theme.warn,
+        MiddleKind::Note(NoteLevel::Info) => v.theme.accent,
+        MiddleKind::Progress => v.theme.fold.progress_fg,
+        MiddleKind::Hints => v.theme.hint_desc_fg,
+    };
+    s.text(
+        R::new((f.middle.x - area.x) * cw, 1, f.middle.width * cw, body_h),
+        fit(&middle, f.middle.width),
+        &hex(color),
+        m.font,
+        false,
+    );
     let (right, _) = right_field(area, f.help.width, v);
     let width = width_of(&right).min(area.width) * cw;
     s.text(
-        R::new(s.width - width, 1, width, h - 1),
+        R::new(s.width - width, 1, width, body_h),
         right,
-        &dim,
+        &hex(v.theme.status_fg),
         m.font,
         false,
     );
@@ -496,6 +476,56 @@ mod tests {
             marked: "2 marked \u{b7} 14.2 MB",
             location: "~/projects/starwire",
             graphics: "kitty",
+        }
+    }
+
+    #[cfg(feature = "terminal-graphics")]
+    #[test]
+    fn native_footer_matches_ascii_content_priority_and_click_targets() {
+        use starkit::native_surface::Primitive;
+        let t = theme("terminal");
+        let now = Instant::now();
+        let note = ("Permission denied".to_string(), NoteLevel::Error, now);
+        let area = Rect::new(0, 0, 180, 2);
+        for (note, progress, elapsed) in [
+            (None, None, Duration::ZERO),
+            (
+                None,
+                Some("COPYING ███░ 60% · 12 MB/s · 2m remaining"),
+                Duration::ZERO,
+            ),
+            (Some(&note), Some("COPYING 60%"), Duration::ZERO),
+            (Some(&note), Some("COPYING 60%"), NOTE_FOR),
+        ] {
+            let mut v = view(&t, note, now + elapsed);
+            v.progress = progress;
+            let surface = native_surface(area, &v, 8, 18);
+            surface.validate().unwrap();
+            let texts: Vec<_> = surface
+                .nodes
+                .iter()
+                .filter_map(|n| match n {
+                    Primitive::Text { text, .. } => Some(text.trim_end()),
+                    _ => None,
+                })
+                .collect();
+            let mut buf = Buffer::empty(area);
+            render(area, &mut buf, &v);
+            let f = fields(area, &v);
+            let read = |rect: Rect| {
+                (rect.x..rect.right())
+                    .map(|x| buf[(x, area.y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            };
+            assert_eq!(texts[0], read(f.help));
+            assert_eq!(texts[1], read(f.middle));
+            assert_eq!(texts[2], right_field(area, f.help.width, &v).0);
+            for x in 0..area.width {
+                assert_eq!(native_hit(area, &v, x, 0), hit(area, &v, x, 0));
+            }
+            assert_eq!(native_hit(area, &v, 0, 0), Some(Hit::Help));
         }
     }
 

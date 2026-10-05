@@ -836,10 +836,14 @@ fn osc72_commander_drag_between_panes() {
         .unwrap()
         .write_all(drop.as_bytes())
         .unwrap();
-    let _ = collect_for(&mut child, Duration::from_millis(40));
+    // Desktop drag ownership ends before the app-local choice is answered.
+    let released = collect_for(&mut child, Duration::from_millis(40));
+    assert!(released
+        .windows(b"t=r:o=0:i=1".len())
+        .any(|w| w == b"t=r:o=0:i=1"));
     child.master.as_mut().unwrap().write_all(b"\x1b").unwrap();
     let cancelled = collect_for(&mut child, Duration::from_millis(40));
-    assert!(cancelled
+    assert!(!cancelled
         .windows(b"t=r:o=0:i=1".len())
         .any(|w| w == b"t=r:o=0:i=1"));
     child

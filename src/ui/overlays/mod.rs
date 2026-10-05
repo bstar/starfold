@@ -89,6 +89,57 @@ pub struct Overlays {
 
 #[cfg(feature = "terminal-graphics")]
 impl Overlays {
+    pub fn pointer_regions(&mut self, area: Rect) -> Vec<Rect> {
+        if let Some(Overlay::Context(menu) | Overlay::Drop(menu)) = self.current.as_mut() {
+            return menu.popup.pointer_regions(area);
+        }
+        let Some(rect) = self.graphical_rect(area) else {
+            return Vec::new();
+        };
+        let Some(overlay) = self.current.as_ref() else {
+            return Vec::new();
+        };
+        let footer = match overlay {
+            Overlay::Destination(d) => Some(d.footer()),
+            Overlay::Rename(_) | Overlay::ConflictRename(_) => Some(rename::FOOTER),
+            Overlay::Create(_) => Some(create::FOOTER),
+            Overlay::Search(_) => Some(search::FOOTER),
+            Overlay::Failure(f) => Some(failure::footer(f)),
+            _ => None,
+        };
+        let mut result = Vec::new();
+        for y in rect.y..rect.bottom() {
+            let mut start = None;
+            for x in rect.x..=rect.right() {
+                let hit = x < rect.right()
+                    && (footer.is_some_and(|f| footer_key(rect, f, x, y).is_some())
+                        || match overlay {
+                            Overlay::Confirm(c) => confirm::layout(area, c).is_some_and(|l| {
+                                in_word(l.yes, l.footer_y, x, y) || in_word(l.no, l.footer_y, x, y)
+                            }),
+                            Overlay::TrashWarning(_) => trash_warning::click(rect, x, y).is_some(),
+                            Overlay::Sort(p) => {
+                                y > rect.y && p.choose(usize::from(y - rect.y - 1)).is_some()
+                            }
+                            Overlay::Conflict(p) => conflict::layout(area, p).is_some_and(|l| {
+                                conflict::hit_footer(&l, x, y).is_some()
+                                    || conflict::hit_esc(&l, x, y)
+                                    || conflict::hit_row(&l, x, y, p).is_some()
+                            }),
+                            _ => false,
+                        });
+                if hit && start.is_none() {
+                    start = Some(x);
+                }
+                if !hit {
+                    if let Some(left) = start.take() {
+                        result.push(Rect::new(left, y, x - left, 1));
+                    }
+                }
+            }
+        }
+        result
+    }
     pub fn graphical_rects(&mut self, area: Rect) -> Vec<Rect> {
         if let Some(Overlay::Context(menu) | Overlay::Drop(menu)) = self.current.as_mut() {
             return menu.popup.graphical_rects(area);
@@ -226,17 +277,31 @@ impl Overlays {
     }
 
     pub fn paste(&mut self, text: &str) -> bool {
-        if let Some(Overlay::Search(form)) = self.current.as_mut() {
-            form.input.paste(text);
-            form.error = None;
-            return true;
-        }
-        if let Some(Overlay::ConflictRename(sequence)) = self.current.as_mut() {
-            sequence.form.input.paste(text);
-            sequence.form.error = None;
-            return true;
-        }
-        false
+        let input = match self.current.as_mut() {
+            Some(Overlay::Search(form)) => {
+                form.error = None;
+                &mut form.input
+            }
+            Some(Overlay::Rename(form)) => {
+                form.error = None;
+                &mut form.input
+            }
+            Some(Overlay::Create(form)) => {
+                form.error = None;
+                &mut form.input
+            }
+            Some(Overlay::Destination(form)) => {
+                form.error = None;
+                &mut form.input
+            }
+            Some(Overlay::ConflictRename(sequence)) => {
+                sequence.form.error = None;
+                &mut sequence.form.input
+            }
+            _ => return false,
+        };
+        input.paste(text);
+        true
     }
 
     pub fn open_conflict(&mut self, p: conflict::Prompt) {
@@ -466,6 +531,23 @@ impl Overlays {
     pub fn click(&mut self, x: u16, y: u16, area: Rect) -> Answer {
         if self.current.is_none() {
             return Answer::Closed;
+        }
+        // Route visible footer actions through the same validation and state
+        // transitions as keys. No duplicate operation/confirmation logic.
+        let footer = match self.current.as_ref().unwrap() {
+            Overlay::Destination(d) => Some((context::Destination::rect(area), d.footer())),
+            Overlay::Rename(_) | Overlay::ConflictRename(_) => {
+                Some((rename::rect(area), rename::FOOTER))
+            }
+            Overlay::Create(_) => Some((create::rect(area), create::FOOTER)),
+            Overlay::Search(_) => Some((search::rect(area), search::FOOTER)),
+            Overlay::Failure(f) => Some((failure::rect(area), failure::footer(f))),
+            _ => None,
+        };
+        if let Some((rect, footer)) = footer {
+            if let Some(code) = footer_key(rect, footer, x, y) {
+                return self.handle(KeyEvent::new(code, KeyModifiers::NONE));
+            }
         }
         let overlay = self.current.as_mut().expect("checked above");
         let mut start_rename = None;
@@ -707,6 +789,37 @@ impl Overlays {
     }
 }
 
+/// Footer labels use the exact right alignment and fit rule of KIT's frame.
+/// Separators, clipped labels and body text must never submit an operation.
+fn footer_key(rect: Rect, footer: &str, x: u16, y: u16) -> Option<KeyCode> {
+    let width = starkit::wrap::width_of(footer).saturating_add(2);
+    // Native chrome reserves two extra cells; the ordinary frame reserves two.
+    let inset = if starkit::chrome::frame::extra_rows() > 0 {
+        4
+    } else {
+        2
+    };
+    if rect.height == 0 || y != rect.bottom() - 1 || width > rect.width.saturating_sub(inset) {
+        return None;
+    }
+    let mut start = rect.right() - width;
+    for word in footer.split(" · ") {
+        let end = start + starkit::wrap::width_of(word);
+        if x >= start && x < end {
+            return match word.split_whitespace().next()? {
+                "enter" => Some(KeyCode::Enter),
+                "esc" => Some(KeyCode::Esc),
+                "tab" => Some(KeyCode::Tab),
+                "r" => Some(KeyCode::Char('r')),
+                "s" => Some(KeyCode::Char('s')),
+                _ => None,
+            };
+        }
+        start = end + 3;
+    }
+    None
+}
+
 fn inside(r: Rect, x: u16, y: u16) -> bool {
     x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
 }
@@ -761,6 +874,94 @@ mod tests {
             |o: &mut Overlays| o.open_rename(PathBuf::from("/tmp/a.txt")),
             |o: &mut Overlays| o.open_conflict(one_conflict()),
         ]
+    }
+
+    // Locate the actual drawn label, rather than duplicating footer geometry.
+    fn click_label(o: &mut Overlays, label: &str) -> Answer {
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buf = Buffer::empty(area);
+        let theme = crate::ui::theme::tests_support::theme("terminal");
+        o.render(area, &mut buf, &theme, &mut Bars::default());
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let row: String = (x..area.width).map(|col| buf[(col, y)].symbol()).collect();
+                if row.starts_with(label) {
+                    return o.click(x, y, area);
+                }
+            }
+        }
+        panic!("missing action {label}");
+    }
+
+    #[test]
+    fn mouse_submits_destination_and_conflict_names_in_both_presentations() {
+        for native in [false, true] {
+            let _scope = starkit::chrome::frame::padding_scope(native);
+            let mut o = Overlays::new();
+            for kind in [
+                crate::fold::ops::OpKind::Copy,
+                crate::fold::ops::OpKind::Move,
+            ] {
+                o.current = Some(Overlay::Destination(context::Destination::new(
+                    context::Request {
+                        kind,
+                        sources: vec!["/src/a.txt".into()],
+                        destination: "/dest".into(),
+                    },
+                )));
+                match click_label(&mut o, "enter ") {
+                    Answer::Operation(request) => {
+                        assert_eq!(request.kind, kind);
+                        assert_eq!(request.sources, vec![PathBuf::from("/src/a.txt")]);
+                        assert_eq!(request.destination, PathBuf::from("/dest"));
+                    }
+                    answer => panic!("{answer:?}"),
+                }
+                assert!(!o.is_open());
+            }
+            o.open_conflict(one_conflict());
+            assert_eq!(click_label(&mut o, "r edit name"), Answer::Consumed);
+            // The editable suggestion must remain visible beneath the native title.
+            let area = Rect::new(0, 0, 120, 40);
+            let mut buf = Buffer::empty(area);
+            o.render(
+                area,
+                &mut buf,
+                &crate::ui::theme::tests_support::theme("terminal"),
+                &mut Bars::default(),
+            );
+            assert!(buf
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>()
+                .contains("a (1).txt"));
+            match click_label(&mut o, "enter rename") {
+                Answer::ConflictNames { targets, .. } => assert_eq!(targets.len(), 1),
+                answer => panic!("{answer:?}"),
+            }
+            assert!(!o.is_open());
+        }
+    }
+
+    #[test]
+    fn mouse_submit_keeps_invalid_form_open_and_cancel_closes_it() {
+        let mut o = Overlays::new();
+        o.open_rename("/tmp/a.txt".into());
+        assert_eq!(click_label(&mut o, "enter rename"), Answer::Consumed);
+        assert!(matches!(o.current(), Some(Overlay::Rename(r)) if r.error.is_some()));
+        assert_eq!(click_label(&mut o, "esc cancel"), Answer::Closed);
+        assert!(!o.is_open());
+    }
+
+    #[test]
+    fn footer_separators_and_hidden_actions_do_not_submit() {
+        let rect = Rect::new(10, 10, 60, 4);
+        let text = rename::FOOTER;
+        let start = rect.right() - starkit::wrap::width_of(text) - 2;
+        assert_eq!(footer_key(rect, text, start + 12, rect.bottom() - 1), None);
+        assert_eq!(footer_key(Rect::new(0, 0, 10, 4), text, 1, 3), None);
+        assert_eq!(footer_key(rect, text, start, rect.y + 1), None);
     }
 
     #[test]

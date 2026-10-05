@@ -104,6 +104,10 @@ pub enum Word {
     Copy,
     Clear,
     Close,
+    PictureScale(crate::config::Scale),
+    ZoomOut,
+    ZoomReset(u16),
+    ZoomIn,
 }
 
 impl Word {
@@ -111,7 +115,11 @@ impl Word {
     /// `Back` stays an arrow: `h` remains the Stack navigation key.
     pub fn mnemonic(self) -> Option<(char, u16)> {
         match self {
-            Word::Back => None,
+            Word::Back
+            | Word::PictureScale(_)
+            | Word::ZoomOut
+            | Word::ZoomReset(_)
+            | Word::ZoomIn => None,
             Word::Actions => Some(('c', 1)),
             Word::Hidden => Some(('n', 5)),
             Word::Sort => Some(('s', 0)),
@@ -143,6 +151,10 @@ impl header::Word for Word {
             Word::Copy => "Copy".into(),
             Word::Clear => "remove".into(),
             Word::Close => "close".into(),
+            Word::PictureScale(scale) => format!("scale: {scale}").into(),
+            Word::ZoomOut => " − ".into(),
+            Word::ZoomReset(percent) => format!(" {percent}% ").into(),
+            Word::ZoomIn => " + ".into(),
         }
     }
 }

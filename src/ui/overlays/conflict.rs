@@ -205,12 +205,13 @@ pub(super) struct Layout {
 /// actually needs.
 pub(super) fn layout(area: Rect, p: &Prompt) -> Option<Layout> {
     let rows = p.conflicts.len().max(1) as u16;
-    let want_h = rows + 2;
-    let rect = overlay::rect(area, (30, 70), want_h, 5, Anchor::Centre);
+    let extra = starkit::chrome::frame::extra_rows();
+    let want_h = rows + 2 + extra;
+    let rect = overlay::rect(area, (30, 70), want_h, 5 + extra, Anchor::Centre);
     if rect.height < 5 {
         return None;
     }
-    let inner = overlay::inner(rect);
+    let inner = starkit::chrome::frame::body(rect, starkit::chrome::frame::NO_WORDS);
     if inner.width == 0 || inner.height == 0 {
         return None;
     }

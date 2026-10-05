@@ -154,6 +154,11 @@ pub fn main() -> Result<()> {
                 attach_only: options.attach,
             },
             |event| match event {
+                // A release may happen in another window. Never retain a
+                // captured drag/scrollbar when the terminal loses focus.
+                starkit::crossterm::event::Event::FocusLost => {
+                    Some(starkit::terminal_graphics::Input::CancelPointer)
+                }
                 starkit::crossterm::event::Event::Osc72(text) => {
                     Some(starkit::terminal_graphics::Input::Osc72 { text: text.clone() })
                 }

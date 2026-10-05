@@ -134,6 +134,25 @@ impl<A: Copy> Popup<A> {
             .map(|panel| panel.rect)
             .collect()
     }
+    #[cfg(feature = "terminal-graphics")]
+    pub fn pointer_regions(&mut self, area: Rect) -> Vec<Rect> {
+        let mut result = Vec::new();
+        for panel in self.panels(area) {
+            let level = &self.levels[panel.level];
+            for y in panel.rect.y + 1..panel.rect.bottom().saturating_sub(1) {
+                let index = level.scroll + usize::from(y - panel.rect.y - 1);
+                if level.entries.get(index).is_some_and(Entry::selectable) {
+                    result.push(Rect::new(
+                        panel.rect.x + 1,
+                        y,
+                        panel.rect.width.saturating_sub(2),
+                        1,
+                    ));
+                }
+            }
+        }
+        result
+    }
     pub fn root_rect(&self, area: Rect) -> Rect {
         let w = self.levels[0].width().min(area.width);
         let h = (self.levels[0]

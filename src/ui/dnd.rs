@@ -231,6 +231,8 @@ pub struct Choice {
     pub allowed: i32,
     pub mime_index: Option<i32>,
     pub remote: bool,
+    /// False once local paths have handed off to our own file queue.
+    pub terminal_drop_open: bool,
 }
 
 #[derive(Debug)]
@@ -254,6 +256,7 @@ pub struct State {
     pub receiving_uri: bool,
     pub received: Vec<u8>,
     pub pending_paths: Option<Vec<PathBuf>>,
+    pub prepared_paths: Option<Vec<PathBuf>>,
     pub result_kind: Option<OpKind>,
     pub remote: Option<Remote>,
     pub staged: Option<tempfile::TempDir>,

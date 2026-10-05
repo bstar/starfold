@@ -546,7 +546,7 @@ fn document_lines(d: &crate::fold::preview::model::Document, width: u16) -> Vec<
     lines
 }
 
-fn dir_lines(tree: &Tree) -> Vec<String> {
+pub(crate) fn dir_lines(tree: &Tree) -> Vec<String> {
     fn append(entries: &[TreeEntry], prefix: &str, out: &mut Vec<String>) {
         for (i, entry) in entries.iter().enumerate() {
             let last = i + 1 == entries.len();
@@ -706,7 +706,11 @@ fn render_image(
     let p = plan(v.scale, (width, height), pic, cell);
     let meta = format!(
         "{format} \u{b7} {width} \u{d7} {height} \u{b7} {}",
-        scale_label(v.scale, p.factor)
+        if v.pixel_image {
+            v.scale.name().to_string()
+        } else {
+            scale_label(v.scale, p.factor)
+        }
     );
 
     let usable = v

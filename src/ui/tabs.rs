@@ -64,6 +64,12 @@ impl Picker {
             .map_or_else(|| vec![Self::rect(area)], |menu| menu.graphical_rects(area))
     }
 
+    #[cfg(feature = "terminal-graphics")]
+    pub fn pointer_regions(&mut self, area: Rect) -> Vec<Rect> {
+        self.menu
+            .as_mut()
+            .map_or_else(Vec::new, |m| m.pointer_regions(area))
+    }
     pub fn new(items: Vec<Item>, active: TabId) -> Self {
         let cursor = items.iter().position(|i| i.id == active).unwrap_or(0);
         Self {
@@ -335,9 +341,10 @@ pub fn rail(
     let active_index = items.iter().position(|i| i.id == active).unwrap_or(0);
     *offset = (*offset).min(active_index);
     let native = area.height > 1;
+    let controls_width = if native { 3 } else { 7 };
     let tab_width = |item: &Item| {
         if native {
-            (starkit::wrap::width_of(&item.label) + 8).clamp(12, 36)
+            (starkit::wrap::width_of(&item.label) + 16).clamp(19, 42)
         } else {
             24
         }
@@ -348,7 +355,7 @@ pub fn rail(
                 .iter()
                 .map(|item| u32::from(tab_width(item)))
                 .sum::<u32>()
-                > u32::from(area.width.saturating_sub(7))
+                > u32::from(area.width.saturating_sub(controls_width))
         {
             *offset += 1;
         }
@@ -360,12 +367,12 @@ pub fn rail(
             .skip(*offset)
             .take_while(|item| {
                 used = used.saturating_add(tab_width(item));
-                used <= area.width.saturating_sub(7)
+                used <= area.width.saturating_sub(controls_width)
             })
             .count()
             .max(1)
     } else {
-        usize::from(area.width.saturating_sub(7) / 24).max(1)
+        usize::from(area.width.saturating_sub(controls_width) / 24).max(1)
     };
     if !native && active_index >= *offset + capacity {
         *offset = active_index + 1 - capacity;
@@ -379,7 +386,7 @@ pub fn rail(
     let mut hits = vec![];
     let mut x = area.x;
     for (i, item) in items.iter().enumerate().skip(*offset).take(capacity) {
-        let w = (area.right().saturating_sub(x + 7)).min(tab_width(item));
+        let w = (area.right().saturating_sub(x + controls_width)).min(tab_width(item));
         if w < 9 {
             break;
         }
@@ -420,7 +427,14 @@ pub fn rail(
         x += w;
     }
     for (text, hit) in [("‹ ", Hit::Previous), ("› ", Hit::Next), (" + ", Hit::New)] {
-        let w = text.chars().count() as u16;
+        if native && matches!(hit, Hit::Previous | Hit::Next) {
+            continue;
+        }
+        let w = if native {
+            3
+        } else {
+            text.chars().count() as u16
+        };
         if x + w <= area.right() {
             buf.set_string(x, area.y, text, normal);
             hits.push((Rect::new(x, area.y, w, area.height), hit));

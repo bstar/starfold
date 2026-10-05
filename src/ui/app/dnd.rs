@@ -84,6 +84,34 @@ impl App {
         }
         self.dnd_edge = Some((bar, direction, now));
 
+        self.dnd_scroll_destination(x, y, i32::from(direction));
+    }
+
+    pub(super) fn dnd_scroll_destination(&mut self, x: u16, y: u16, direction: i32) {
+        let Some(regions) = self.layout.last.as_ref() else {
+            return;
+        };
+        if regions.hit(x, y) != Some(ModuleId::Stack)
+            || self.bars.held().is_some()
+            || self.overlays.is_open()
+        {
+            return;
+        }
+        let area = regions.rect_of(ModuleId::Stack);
+        let (bar, stack_index) = if self.commander {
+            let pane = usize::from(x >= area.x + area.width / 2);
+            (Bar::Commander(pane), pane + 1)
+        } else {
+            (Bar::Stack, 0)
+        };
+        if self.dnd.offer.as_ref().is_some_and(|o| {
+            o.source_stack == stack_index && o.source_tab == self.core.state().tabs.active().id
+        }) {
+            return;
+        }
+        let Some(track) = self.bars.track_of(bar) else {
+            return;
+        };
         let (above, total) = match bar {
             Bar::Commander(pane) => {
                 let p = &self.panes[pane];
@@ -97,14 +125,22 @@ impl App {
         };
         let max = total.saturating_sub(usize::from(track.height));
         let next = if direction < 0 {
-            above.saturating_sub(1)
+            above.saturating_sub(direction.unsigned_abs() as usize)
         } else {
-            above.saturating_add(1).min(max)
+            above.saturating_add(direction as usize).min(max)
         };
         if next == above {
             return;
         }
+        let active_pane = self.active_pane;
+        let focus = self.layout.focus();
         self.scroll_bar_to(bar, next as u32);
+        // Edge scrolling a drop destination must not steal selection from
+        // the source pane. Only the destination viewport should move.
+        if self.commander && self.active_pane != active_pane {
+            self.focus_pane(active_pane);
+            self.layout.focus_set(focus);
+        }
 
         // A stationary pointer now rests on a different row. Update both
         // STAR/FOLD's highlight and Kitty's acceptance without waiting for
@@ -222,7 +258,14 @@ impl App {
         {
             return;
         }
-        let Some((source_stack, sources)) = self.dnd_sources(x, y) else {
+        if self.dnd.choice.is_some() {
+            return;
+        }
+        #[cfg(feature = "terminal-graphics")]
+        let captured = self.graphical.as_ref().and_then(|g| g.drag_sources());
+        #[cfg(not(feature = "terminal-graphics"))]
+        let captured = None;
+        let Some((source_stack, sources)) = captured.or_else(|| self.dnd_sources(x, y)) else {
             return;
         };
         let uri_text: String = sources
@@ -257,6 +300,8 @@ impl App {
             return;
         };
         let allowed = m.number("o").unwrap_or(0);
+        let previous_allowed = self.dnd.hover_allowed;
+        let previous_mime = self.dnd.offered_uri;
         self.dnd.hover_allowed = allowed;
         if x >= 0 && y >= 0 && !m.payload.is_empty() {
             self.dnd.offered_uri = m.payload.split_whitespace().any(|s| s == "text/uri-list");
@@ -265,6 +310,19 @@ impl App {
         let target = (self.bars.held().is_none() && mime_ok && allowed != 0 && x >= 0 && y >= 0)
             .then(|| self.dnd_target(x, y))
             .flatten();
+        // Native terminals can emit another hover when acceptance is updated.
+        // Reply only when acceptance changes; otherwise this forms a feedback
+        // loop that floods the scene relay and starves mouse release events.
+        let acceptance_changed = target.is_some() != self.dnd.hover.is_some()
+            || allowed != previous_allowed
+            || self.dnd.offered_uri != previous_mime;
+        #[cfg(feature = "terminal-graphics")]
+        let should_reply = self.graphical.is_none() || acceptance_changed;
+        #[cfg(not(feature = "terminal-graphics"))]
+        let should_reply = {
+            let _ = acceptance_changed;
+            true
+        };
         tracing::debug!(
             x,
             y,
@@ -276,6 +334,9 @@ impl App {
         let coords = target.as_ref().map(|_| (x as u16, y as u16));
         self.dnd.hover = target;
         self.dnd.hover_coords = coords;
+        if !should_reply {
+            return;
+        }
         if self.dnd.hover.is_some() {
             let action = if allowed == 2 { 2 } else { 1 };
             let _ = wire::send(&format!("t=m:o={action}:i=1"), Some("text/uri-list"));
@@ -317,16 +378,34 @@ impl App {
         }
         let own_sources = self.dnd.offer.as_ref().map(|offer| offer.sources.clone());
         let allowed = m.number("o").unwrap_or(1);
+        tracing::debug!(
+            allowed,
+            own_sources = own_sources.as_ref().map_or(0, Vec::len),
+            "Drop choice source ownership"
+        );
         if allowed == 0 {
             let _ = wire::send("t=r:o=0:i=1", None);
             return;
         }
+        // Our own source paths remain valid without Kitty's data offer. End
+        // the desktop gesture BEFORE presenting a choice/conflict dialog;
+        // waiting for UI input must not keep an OS drag session alive.
+        let terminal_drop_open = own_sources.is_none();
+        if !terminal_drop_open {
+            if let Err(error) = wire::send("t=r:o=0:i=1", None) {
+                self.dnd_error_with(error);
+                return;
+            }
+        }
+        self.dnd.result_kind = None;
+        self.dnd.prepared_paths = None;
         self.dnd.choice = Some(Choice {
             dest,
             own_sources,
             allowed,
             mime_index,
             remote: false,
+            terminal_drop_open,
         });
         if allowed == 3
             || self
@@ -337,6 +416,12 @@ impl App {
         {
             self.overlays.open_drop((x.max(0) as u16, y.max(0) as u16));
             self.repaint = true;
+            // Request metadata while the user chooses. Desktop sources may
+            // retain their drag grab until the destination requests its data.
+            // Keep the terminal drop open: promised/SSH files need it later.
+            if terminal_drop_open {
+                self.dnd_request_uri();
+            }
         } else {
             self.dnd_choose(if allowed == 2 {
                 OpKind::Move
@@ -348,34 +433,38 @@ impl App {
 
     pub(super) fn dnd_choose(&mut self, kind: OpKind) {
         let Some(choice) = self.dnd.choice.as_ref() else {
+            tracing::warn!(?kind, "Drop choice has no pending transfer");
             return;
         };
-        if choice.own_sources.is_none()
-            && ((kind == OpKind::Move && choice.allowed & 2 == 0)
-                || (kind == OpKind::Copy && choice.allowed & 1 == 0))
+        tracing::debug!(?kind, "Drop choice selected");
+        if (kind == OpKind::Move && choice.allowed & 2 == 0)
+            || (kind == OpKind::Copy && choice.allowed & 1 == 0)
         {
             self.dnd_cancel_choice();
             return;
         }
         if let Some(sources) = choice.own_sources.clone() {
             self.dnd_queue(sources, kind);
-            // Our offer is copy-only to prevent an external target from
-            // deleting a remote source. An in-window Move is performed by
-            // our own queue, so the terminal still completes a copy offer.
-            if let Some(active) = &mut self.dnd.active {
-                active.result_operation = OpKind::Copy;
-            }
-        } else if let Some(index) = choice.mime_index {
-            self.dnd.receiving_uri = true;
-            self.dnd.received.clear();
-            if let Err(err) = wire::send(&format!("t=r:x={index}:i=1"), None) {
-                self.dnd_error_with(err);
-                return;
-            }
-            // Remember the choice until the URI list arrives.
+        } else if choice.mime_index.is_some() {
             self.dnd_requested_kind(kind);
+            if let Some(paths) = self.dnd.prepared_paths.take() {
+                self.dnd_received_paths(paths);
+            } else if !self.dnd.receiving_uri {
+                self.dnd_request_uri();
+            }
         } else {
             self.dnd_cancel_choice();
+        }
+    }
+
+    fn dnd_request_uri(&mut self) {
+        let Some(index) = self.dnd.choice.as_ref().and_then(|c| c.mime_index) else {
+            return;
+        };
+        self.dnd.receiving_uri = true;
+        self.dnd.received.clear();
+        if let Err(err) = wire::send(&format!("t=r:x={index}:i=1"), None) {
+            self.dnd_error_with(err);
         }
     }
 
@@ -431,37 +520,89 @@ impl App {
                 self.dnd_error();
                 return;
             };
-            let kind = self.dnd.result_kind.unwrap_or(OpKind::Copy);
-            if self.dnd.choice.as_ref().is_some_and(|choice| choice.remote) {
-                tracing::info!(files = paths.len(), "receiving remote drop files");
-                let choice = self.dnd.choice.as_ref().unwrap();
-                let Some(_) = choice.mime_index else {
-                    self.dnd_error();
-                    return;
-                };
-                let previous = self.core.state().queue.iter().last().map(|op| op.id);
-                self.core.send(Command::BeginImport {
-                    sources: paths.clone(),
-                    dest: choice.dest.clone(),
-                });
-                let latest = {
-                    let state = self.core.state();
-                    state.queue.iter().last().map(|op| op.id)
-                };
-                let Some(op_id) =
-                    latest.filter(|id| previous.is_none_or(|previous| *id > previous))
-                else {
-                    self.dnd_error_with("copy in progress; destination is locked");
-                    return;
-                };
-                self.dnd.import_op = Some(op_id);
-                self.dnd.pending_paths = Some(paths);
-            } else {
-                // An external source owns removal on successful Move completion.
-                self.dnd_queue(paths, OpKind::Copy);
-                if let Some(active) = &mut self.dnd.active {
-                    active.result_operation = kind;
-                }
+            self.dnd_received_paths(paths);
+        }
+    }
+
+    fn dnd_received_paths(&mut self, paths: Vec<std::path::PathBuf>) {
+        // Linux's native URI list names existing local files, unlike macOS
+        // file promises or SSH handles. Hand these paths to our queue before
+        // asking for UI input. Hyprland retains its pointer grab until the
+        // offer ends, so leaving it open makes the action menu unclickable.
+        // Cancel the desktop transfer: only our queue may remove a source,
+        // after the user selects Move and the operation succeeds.
+        #[cfg(target_os = "linux")]
+        if self
+            .dnd
+            .choice
+            .as_ref()
+            .is_some_and(|choice| !choice.remote && choice.terminal_drop_open)
+            // A different Kitty window can expose downloaded SSH files as
+            // local URLs. Those remain owned by its active drag session.
+            && !paths.iter().any(|path| {
+                path.components().any(|part| part.as_os_str().to_string_lossy().starts_with("dnd-drag-"))
+            })
+        {
+            if let Err(error) = wire::send("t=r:o=0:i=1", None) {
+                self.dnd_error_with(error);
+                return;
+            }
+            let choice = self.dnd.choice.as_mut().unwrap();
+            choice.terminal_drop_open = false;
+            choice.own_sources = Some(paths.clone());
+            tracing::debug!(
+                files = paths.len(),
+                "Local drop handed off; desktop pointer released"
+            );
+        }
+        let Some(kind) = self.dnd.result_kind else {
+            if self
+                .dnd
+                .choice
+                .as_ref()
+                .is_some_and(|c| c.terminal_drop_open)
+            {
+                self.dnd.prepared_paths = Some(paths);
+            }
+            return;
+        };
+        if self.dnd.choice.as_ref().is_some_and(|choice| choice.remote) {
+            tracing::info!(files = paths.len(), "receiving remote drop files");
+            let choice = self.dnd.choice.as_ref().unwrap();
+            let Some(_) = choice.mime_index else {
+                self.dnd_error();
+                return;
+            };
+            let previous = self.core.state().queue.iter().last().map(|op| op.id);
+            self.core.send(Command::BeginImport {
+                sources: paths.clone(),
+                dest: choice.dest.clone(),
+            });
+            let latest = {
+                let state = self.core.state();
+                state.queue.iter().last().map(|op| op.id)
+            };
+            let Some(op_id) = latest.filter(|id| previous.is_none_or(|previous| *id > previous))
+            else {
+                self.dnd_error_with("copy in progress; destination is locked");
+                return;
+            };
+            self.dnd.import_op = Some(op_id);
+            self.dnd.pending_paths = Some(paths);
+        } else {
+            if self
+                .dnd
+                .choice
+                .as_ref()
+                .is_some_and(|c| !c.terminal_drop_open)
+            {
+                self.dnd_queue(paths, kind);
+                return;
+            }
+            // An external source owns removal on successful Move completion.
+            self.dnd_queue(paths, OpKind::Copy);
+            if let Some(active) = &mut self.dnd.active {
+                active.result_operation = kind;
             }
         }
     }
@@ -632,6 +773,7 @@ impl App {
             self.dnd_error();
             return;
         }
+        let terminal_drop_open = choice.terminal_drop_open;
         let previous = self.core.state().queue.iter().last().map(|op| op.id);
         self.core.send(Command::QueueDrop {
             kind,
@@ -648,7 +790,7 @@ impl App {
             .filter(|id| previous.is_none_or(|previous| *id > previous));
         if let Some(op) = op {
             self.dnd.choice.take();
-            self.dnd.active = Some(Active {
+            self.dnd.active = terminal_drop_open.then_some(Active {
                 op,
                 result_operation: kind,
             });
@@ -747,16 +889,19 @@ impl App {
     }
 
     pub(super) fn dnd_cancel_choice(&mut self) {
-        if self.dnd.choice.take().is_none() {
+        let Some(choice) = self.dnd.choice.take() else {
             return;
+        };
+        if choice.terminal_drop_open {
+            let _ = wire::send("t=r:o=0:i=1", None);
         }
-        let _ = wire::send("t=r:o=0:i=1", None);
         if let Some(op) = self.dnd.import_op.take() {
             self.core.send(Command::FinishImport { op, success: false });
         }
         self.dnd.receiving_uri = false;
         self.dnd.received.clear();
         self.dnd.pending_paths = None;
+        self.dnd.prepared_paths = None;
         self.dnd.result_kind = None;
         self.dnd.remote = None;
         self.dnd.staged = None;
@@ -903,8 +1048,8 @@ impl App {
             offer.sources.iter().any(|source| {
                 target == *source
                     || source.parent() == Some(target.as_path())
-                    || std::fs::symlink_metadata(source)
-                        .is_ok_and(|meta| meta.is_dir() && target.starts_with(source))
+                    || (target.starts_with(source)
+                        && std::fs::symlink_metadata(source).is_ok_and(|meta| meta.is_dir()))
             })
         }) {
             return None;

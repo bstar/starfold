@@ -262,6 +262,14 @@ impl Destination {
         }
         None
     }
+    pub fn footer(&self) -> &'static str {
+        match self.request.kind {
+            OpKind::Compress(_) => "enter start · tab format · esc cancel",
+            OpKind::Move => "enter move · esc cancel",
+            OpKind::Copy => "enter copy · esc cancel",
+            _ => "enter start · esc cancel",
+        }
+    }
     pub fn rect(area: Rect) -> Rect {
         overlay::rect(area, (24, 76), 6, 3, Anchor::Centre)
     }
@@ -280,7 +288,7 @@ impl Destination {
                 theme: t,
                 title,
                 detail: None,
-                footer: Some("enter queue · tab format · esc cancel"),
+                footer: Some(self.footer()),
             },
         );
         if inner.width == 0 || inner.height == 0 {

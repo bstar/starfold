@@ -117,11 +117,19 @@ fn validate(name: &str, from: &Path) -> Result<PathBuf, &'static str> {
     Ok(from.with_file_name(name))
 }
 
+pub const FOOTER: &str = "enter rename · esc cancel";
+
 /// Where the box lands -- the same shape every overlay opens in, just tall
 /// enough for the field and, when there is one, the row underneath it that
 /// says why the last submission was refused.
 pub fn rect(area: Rect) -> Rect {
-    overlay::rect(area, (24, 60), 4, 3, Anchor::Centre)
+    overlay::rect(
+        area,
+        (24, 60),
+        4 + starkit::chrome::frame::extra_rows(),
+        3,
+        Anchor::Centre,
+    )
 }
 
 /// Draw the field and hand back where the terminal's own cursor belongs, so
@@ -145,7 +153,7 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, r: &mut Rename) -> Op
                 "rename"
             },
             detail: r.detail.as_deref(),
-            footer: Some("enter rename \u{b7} esc cancel"),
+            footer: Some(FOOTER),
         },
     );
     if inner.width == 0 || inner.height == 0 {

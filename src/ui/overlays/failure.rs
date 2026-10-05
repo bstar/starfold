@@ -76,15 +76,19 @@ pub fn rect(area: Rect) -> Rect {
     overlay::rect(area, (40, 100), 22, 9, Anchor::Centre)
 }
 
-pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, failure: &Failure) {
-    let rr = rect(area);
-    let footer = if failure.sudo_retry.is_some() {
+pub fn footer(failure: &Failure) -> &'static str {
+    if failure.sudo_retry.is_some() {
         "r retry · s retry with sudo · j/k scroll · esc close"
     } else if failure.retry.is_some() {
         "r retry delete · j/k scroll · esc close"
     } else {
         "j/k scroll · esc close"
-    };
+    }
+}
+
+pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, failure: &Failure) {
+    let rr = rect(area);
+    let footer = footer(failure);
     let inner = overlay::render(
         rr,
         buf,

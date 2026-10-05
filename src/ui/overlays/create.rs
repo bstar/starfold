@@ -64,8 +64,16 @@ impl Create {
     }
 }
 
+pub const FOOTER: &str = "enter create · esc cancel";
+
 pub fn rect(area: Rect) -> Rect {
-    overlay::rect(area, (24, 60), 4, 3, Anchor::Centre)
+    overlay::rect(
+        area,
+        (24, 60),
+        4 + starkit::chrome::frame::extra_rows(),
+        3,
+        Anchor::Centre,
+    )
 }
 
 pub fn render(
@@ -89,7 +97,7 @@ pub fn render(
                 Kind::Directory => "new directory",
             },
             detail: None,
-            footer: Some("enter create · esc cancel"),
+            footer: Some(FOOTER),
         },
     );
     if inner.width == 0 || inner.height == 0 {

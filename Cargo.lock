@@ -2946,7 +2946,7 @@ dependencies = [
 [[package]]
 name = "starkit"
 version = "0.3.0"
-source = "git+https://github.com/bstar/starkit?rev=50b5424adecbf59fb65b2db6b04be306dda72d2f#50b5424adecbf59fb65b2db6b04be306dda72d2f"
+source = "git+https://github.com/bstar/starkit?rev=b9749d45f298894d760a37458a266440c8fa711f#b9749d45f298894d760a37458a266440c8fa711f"
 dependencies = [
  "anyhow",
  "base64",
@@ -2956,6 +2956,7 @@ dependencies = [
  "image",
  "ratatui",
  "ratatui-image",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "tiny-skia",
