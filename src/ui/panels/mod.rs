@@ -108,6 +108,7 @@ pub enum Word {
     ZoomOut,
     ZoomReset(u16),
     ZoomIn,
+    AudioOutput(bool),
     VideoPlay(bool),
     VideoMute(bool),
     VideoVolumeDown,
@@ -120,6 +121,7 @@ impl Word {
     /// `Back` stays an arrow: `h` remains the Stack navigation key.
     pub fn mnemonic(self) -> Option<(char, u16)> {
         match self {
+            Word::AudioOutput(_) => Some(('a', 0)),
             Word::VideoPlay(_)
             | Word::VideoMute(_)
             | Word::VideoVolumeDown
@@ -148,6 +150,7 @@ impl Word {
 impl header::Word for Word {
     fn word(self) -> Cow<'static, str> {
         match self {
+            Word::AudioOutput(local) => if local { "audio: local" } else { "audio: host" }.into(),
             Word::VideoPlay(paused) => if paused { "Play" } else { "Pause" }.into(),
             Word::VideoMute(muted) => if muted { "Unmute" } else { "Mute" }.into(),
             Word::VideoVolumeDown => "−".into(),

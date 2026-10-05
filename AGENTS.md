@@ -388,3 +388,19 @@ are captured before modal painting, and popup spans are separate layers.
 Keep ordinary cell clients and older graphical clients on their negotiated
 geometry. Terminal pointer precision remains cells. Physical macOS Kitty
 interaction remains separately unverified; green headless CI is not that proof.
+
+### SSH audio output
+
+Preview offers `audio: host` / `audio: local` (`a`) to graphical SSH clients
+that negotiate `audio_relay`. AMP owns decoding, queue, volume and seeking;
+its `audio_relay_v1` embed capability exports bounded 48 kHz stereo PCM instead
+of opening the host device. KIT plays it on the presentation machine. Credits
+bound both transport and playback queues. Stream epochs invalidate queued audio
+on seeks and reattachments; closing Preview closes the local output and reaps
+AMP. Ordinary cell clients and older helpers retain host playback. The toggle
+is a session preference, independent of player artwork settings.
+
+`scripts/test-ssh-audio.py` exercises AMP's real child protocol without a sound
+device and optionally the FOLD controller with a simulated remote frontend.
+Physical macOS Kitty audio over the user's SSH connection still needs a
+listening check; generated PCM and headless controller tests do not prove it.

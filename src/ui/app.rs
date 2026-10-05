@@ -407,6 +407,8 @@ impl App {
     }
 
     fn stop_audio(&mut self) {
+        #[cfg(feature = "terminal-graphics")]
+        self.close_audio_relay();
         if let Err(error) = self.audio.stop() {
             self.note = Some((error, NoteLevel::Error, Instant::now()));
         }
@@ -528,6 +530,22 @@ impl App {
         }
         for event in self.audio.take_events() {
             match event {
+                #[cfg(feature = "terminal-graphics")]
+                audio_embed::Event::AudioOpen { generation, epoch }
+                    if generation == self.audio_activation =>
+                {
+                    if let Some(state) = self.graphical.as_mut().filter(|s| s.audio_local) {
+                        state.audio_epoch = Some(epoch);
+                        state.effects.push(
+                            starkit::terminal_graphics::protocol::ServerMessage::Media {
+                                message: starkit::terminal_graphics::media::ToClient::AudioOpen {
+                                    session: generation,
+                                    epoch,
+                                },
+                            },
+                        );
+                    }
+                }
                 audio_embed::Event::Accepted { generation }
                     if generation == self.audio_activation =>
                 {
@@ -583,7 +601,15 @@ impl App {
                         self.audio_path = Some(path);
                     }
                     if status.playing {
-                        self.audio_error = None;
+                        #[cfg(feature = "terminal-graphics")]
+                        let local_output_failed = self.graphical.as_ref().is_some_and(|s| {
+                            s.audio_local && s.audio_epoch.is_none() && self.audio_error.is_some()
+                        });
+                        #[cfg(not(feature = "terminal-graphics"))]
+                        let local_output_failed = false;
+                        if !local_output_failed {
+                            self.audio_error = None;
+                        }
                     }
                 }
                 _ => {}
@@ -616,6 +642,11 @@ impl App {
             return true;
         }
         let (action, value) = match key.code {
+            #[cfg(feature = "terminal-graphics")]
+            KeyCode::Char('a') if self.audio_output_word().is_some() => {
+                self.toggle_audio_output();
+                return true;
+            }
             KeyCode::Char('o') => {
                 self.toggle_audio_buttons();
                 return true;
@@ -648,7 +679,7 @@ impl App {
 
     fn draw_audio(&mut self, area: Rect, buf: &mut Buffer) {
         use starkit::chrome::frame;
-        let words = panels::words(ModuleId::Preview);
+        let words = self.panel_words(ModuleId::Preview);
         frame::frame(
             area,
             buf,
@@ -2935,6 +2966,12 @@ impl App {
                 .collect();
         }
         #[cfg(feature = "terminal-graphics")]
+        if module == ModuleId::Preview {
+            if let Some(word) = self.audio_output_word() {
+                return vec![word, panels::Word::Close];
+            }
+        }
+        #[cfg(feature = "terminal-graphics")]
         if module == ModuleId::Preview
             && self.graphical.as_ref().is_some_and(|g| !g.cell_mode)
             && matches!(self.view.preview.as_deref(), Some(Preview::Image { .. }))
@@ -2958,6 +2995,10 @@ impl App {
 
     fn word_click(&mut self, word: panels::Word) {
         match word {
+            panels::Word::AudioOutput(_) => {
+                #[cfg(feature = "terminal-graphics")]
+                self.toggle_audio_output();
+            }
             panels::Word::VideoPlay(_)
             | panels::Word::VideoMute(_)
             | panels::Word::VideoVolumeDown

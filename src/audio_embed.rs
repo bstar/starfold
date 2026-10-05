@@ -115,6 +115,10 @@ pub enum Event {
         generation: u64,
         message: String,
     },
+    AudioOpen {
+        generation: u64,
+        epoch: u64,
+    },
     Stopped {
         generation: u64,
     },
@@ -128,6 +132,7 @@ impl Event {
             | Self::Status { generation, .. }
             | Self::Error { generation, .. }
             | Self::Notice { generation, .. }
+            | Self::AudioOpen { generation, .. }
             | Self::Stopped { generation } => *generation,
         }
     }
@@ -142,6 +147,9 @@ struct Shared {
     transport_images: bool,
     player_styles: bool,
     native_surface: bool,
+    audio_relay: bool,
+    audio_local: bool,
+    audio_blocks: Option<Receiver<(u64, Vec<i16>)>>,
     frame: Option<Frame>,
     events: VecDeque<Event>,
 }
@@ -194,6 +202,10 @@ fn enqueue_event(data: &mut Shared, event: Event) {
     if event.generation() != data.request_generation {
         return;
     }
+    if matches!(event, Event::AudioOpen { .. }) {
+        data.events
+            .retain(|event| !matches!(event, Event::AudioOpen { .. }));
+    }
     if data.events.len() >= MAX_EVENTS {
         if let Some(i) = data
             .events
@@ -201,8 +213,12 @@ fn enqueue_event(data: &mut Shared, event: Event) {
             .position(|e| matches!(e, Event::Status { .. }))
         {
             data.events.remove(i);
-        } else {
-            data.events.pop_front();
+        } else if let Some(i) = data
+            .events
+            .iter()
+            .position(|event| !matches!(event, Event::AudioOpen { .. }))
+        {
+            data.events.remove(i);
         }
     }
     data.events.push_back(event);
@@ -317,6 +333,13 @@ enum ChildMessage {
     Notice {
         message: String,
     },
+    AudioOpen {
+        epoch: u64,
+    },
+    Audio {
+        epoch: u64,
+        samples: Vec<i16>,
+    },
     Stopped,
 }
 
@@ -360,6 +383,23 @@ pub struct Client {
 }
 
 impl Client {
+    pub fn set_audio_local(&mut self, local: bool) -> Result<(), String> {
+        self.control("audio_relay", Some(if local { 1.0 } else { 0.0 }))?;
+        lock(&self.shared).audio_local = local;
+        Ok(())
+    }
+    pub fn audio_relay_available(&self) -> bool {
+        lock(&self.shared).audio_relay
+    }
+    pub fn take_audio_block(&self) -> Option<(u64, Vec<i16>)> {
+        lock(&self.shared)
+            .audio_blocks
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+    }
+    pub fn discard_audio_blocks(&self) {
+        while self.take_audio_block().is_some() {}
+    }
     pub fn new() -> Self {
         Self::with_executable(PathBuf::from("staramp"))
     }
@@ -601,7 +641,7 @@ fn supervise(
                         player.activation = activation;
                     }
                 } else {
-                    match spawn_child(&mut command, activation) {
+                    match spawn_child(&mut command, activation, &shared) {
                         Ok(player) => running = Some(player),
                         Err((token, path, reason)) => push_event(
                             &shared,
@@ -793,6 +833,7 @@ fn supervise(
 fn spawn_child(
     command: &mut Command,
     activation: Activation,
+    shared: &Arc<Mutex<Shared>>,
 ) -> Result<Running, (u64, PathBuf, String)> {
     let token = activation.token;
     let path = activation.selected.clone();
@@ -821,7 +862,15 @@ fn spawn_child(
     let (io_tx, io) = bounded(16);
     let (writer, writes) = bounded(8);
     let frames = Arc::new(Mutex::new(None));
-    spawn_reader(stdout, io_tx.clone(), Arc::clone(&frames));
+    let (audio_tx, audio_rx) = bounded(8);
+    lock(shared).audio_blocks = Some(audio_rx.clone());
+    spawn_reader(
+        stdout,
+        io_tx.clone(),
+        Arc::clone(&frames),
+        audio_tx,
+        audio_rx,
+    );
     spawn_writer(stdin, writes, io_tx);
     Ok(Running {
         child,
@@ -845,6 +894,8 @@ fn spawn_reader(
     stdout: impl Read + Send + 'static,
     events: Sender<IoEvent>,
     frames: Arc<Mutex<Option<ChildMessage>>>,
+    audio: Sender<(u64, Vec<i16>)>,
+    stale_audio: Receiver<(u64, Vec<i16>)>,
 ) {
     thread::Builder::new()
         .name("starfold-audio-read".into())
@@ -890,6 +941,31 @@ fn spawn_reader(
                                     images,
                                     surface,
                                 });
+                        }
+                        Ok(ChildMessage::AudioOpen { epoch }) => {
+                            for _ in stale_audio.try_iter() {}
+                            if events
+                                .send_timeout(
+                                    IoEvent::Child(ChildMessage::AudioOpen { epoch }),
+                                    Duration::from_millis(250),
+                                )
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Ok(ChildMessage::Audio { epoch, samples }) => {
+                            if samples.is_empty()
+                                || samples.len() > 1920
+                                || !samples.len().is_multiple_of(2)
+                                || audio.try_send((epoch, samples)).is_err()
+                            {
+                                let _ = events.send_timeout(
+                                    IoEvent::Failure("Invalid or excessive audio blocks".into()),
+                                    Duration::from_millis(100),
+                                );
+                                break;
+                            }
                         }
                         Ok(message) => {
                             if events
@@ -1030,6 +1106,19 @@ fn queue_play(player: &mut Running, shared: &Arc<Mutex<Shared>>) -> Result<(), S
         paths.insert(0, path.to_owned());
     }
     send_configure(player)?;
+    let local = {
+        let data = lock(shared);
+        data.audio_relay && data.audio_local
+    };
+    if local {
+        queue_message(
+            player,
+            &HostMessage::Control {
+                action: "audio_relay",
+                value: Some(1.0),
+            },
+        )?;
+    }
     let sequence = queue_message(
         player,
         &HostMessage::Play {
@@ -1044,6 +1133,18 @@ fn queue_play(player: &mut Running, shared: &Arc<Mutex<Shared>>) -> Result<(), S
 
 fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) -> bool {
     match event {
+        IoEvent::Child(ChildMessage::AudioOpen { epoch }) => {
+            push_event(
+                shared,
+                Event::AudioOpen {
+                    generation: player.activation.token,
+                    epoch,
+                },
+            );
+        }
+        IoEvent::Child(ChildMessage::Audio { .. }) => {
+            unreachable!("audio has its own bounded pipe")
+        }
         IoEvent::Child(ChildMessage::Hello {
             protocol,
             extensions,
@@ -1076,6 +1177,7 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
                 data.transport_images = player.transport_images;
                 data.player_styles = player.player_styles;
                 data.native_surface = player.native_surface;
+                data.audio_relay = capabilities.iter().any(|value| value == "audio_relay_v1");
             }
             if let Err(message) = queue_play(player, shared) {
                 push_event(
@@ -1417,6 +1519,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audio_epoch_survives_notice_pressure_and_new_epoch_replaces_it() {
+        let mut shared = Shared {
+            request_generation: 1,
+            ..Shared::default()
+        };
+        enqueue_event(
+            &mut shared,
+            Event::AudioOpen {
+                generation: 1,
+                epoch: 3,
+            },
+        );
+        for _ in 0..100 {
+            enqueue_event(
+                &mut shared,
+                Event::Notice {
+                    generation: 1,
+                    message: "notice".into(),
+                },
+            );
+        }
+        assert!(shared
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::AudioOpen { epoch: 3, .. })));
+        enqueue_event(
+            &mut shared,
+            Event::AudioOpen {
+                generation: 1,
+                epoch: 4,
+            },
+        );
+        assert_eq!(
+            shared
+                .events
+                .iter()
+                .filter(|e| matches!(e, Event::AudioOpen { .. }))
+                .count(),
+            1
+        );
+        assert!(shared
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::AudioOpen { epoch: 4, .. })));
+        assert!(shared.events.len() <= MAX_EVENTS);
+    }
     #[test]
     fn bad_frames_cannot_reach_the_terminal() {
         let cell = Cell {

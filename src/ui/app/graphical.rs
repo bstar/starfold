@@ -21,6 +21,9 @@ pub(super) struct State {
     pointer_capture: Option<starkit::terminal_graphics::placement::Placement>,
     video_capable: bool,
     local_media: bool,
+    pub(super) audio_relay_capable: bool,
+    pub(super) audio_local: bool,
+    pub(super) audio_epoch: Option<u64>,
     video: Option<starkit::terminal_graphics::media::Host>,
     video_sequence: u64,
     video_path: Option<PathBuf>,
@@ -933,8 +936,24 @@ impl Controller for App {
         &mut self,
         capabilities: starkit::terminal_graphics::capabilities::Capabilities,
     ) {
+        if (!capabilities.audio_relay || capabilities.local_media)
+            && self.graphical.as_ref().is_some_and(|s| s.audio_local)
+        {
+            let _ = self.audio.set_audio_local(false);
+            self.close_audio_relay();
+            self.graphical.as_mut().unwrap().audio_local = false;
+        }
+        // A new presentation connection needs a fresh audio epoch and credits.
+        if capabilities.audio_relay && self.graphical.as_ref().is_some_and(|s| s.audio_local) {
+            self.close_audio_relay();
+            if let Err(error) = self.audio.set_audio_local(true) {
+                self.audio_error = Some(error);
+            }
+        }
         self.graphical.as_mut().unwrap().video_capable = capabilities.video;
         self.graphical.as_mut().unwrap().local_media = capabilities.local_media;
+        self.graphical.as_mut().unwrap().audio_relay_capable =
+            capabilities.audio_relay && !capabilities.local_media;
         let cells = capabilities.image_transport
             == starkit::terminal_graphics::capabilities::ImageTransport::None;
         self.graphical.as_mut().unwrap().cell_mode = cells;
@@ -2032,18 +2051,73 @@ impl Controller for App {
         }
     }
     fn media(&mut self, message: starkit::terminal_graphics::media::ToHost) {
+        use starkit::terminal_graphics::media::ToHost;
+        let state = self.graphical.as_mut().unwrap();
+        match &message {
+            ToHost::AudioCredit {
+                session,
+                epoch,
+                blocks,
+            } if state.audio_local
+                && *session == self.audio_activation
+                && state.audio_epoch == Some(*epoch) =>
+            {
+                if let Err(error) = self
+                    .audio
+                    .control("audio_credit", Some((*blocks).min(8) as f64))
+                {
+                    self.audio_error = Some(error);
+                }
+                return;
+            }
+            ToHost::AudioError {
+                session,
+                epoch,
+                message,
+            } if *session == self.audio_activation && state.audio_epoch == Some(*epoch) => {
+                self.audio_error = Some(message.clone());
+                // A local-device failure must not start sound on the host.
+                let _ = self.audio.control("pause", None);
+                self.close_audio_relay();
+                return;
+            }
+            _ => {}
+        }
         if let Some(video) = &mut self.graphical.as_mut().unwrap().video {
             video.receive(message);
         }
     }
     fn media_chunks(&mut self) -> Vec<ServerMessage> {
-        self.graphical
-            .as_mut()
-            .unwrap()
-            .video
-            .as_mut()
-            .map(|v| v.chunks())
-            .unwrap_or_default()
+        use starkit::terminal_graphics::media::ToClient;
+        let mut messages = Vec::new();
+        let state = self.graphical.as_ref().unwrap();
+        for _ in 0..2 {
+            let Some((epoch, samples)) = self.audio.take_audio_block() else {
+                break;
+            };
+            if state.audio_local && state.audio_epoch == Some(epoch) {
+                messages.push(ServerMessage::Media {
+                    message: ToClient::AudioChunk {
+                        session: self.audio_activation,
+                        epoch,
+                        samples,
+                    },
+                });
+            }
+        }
+        // The session's bounded media lane reserves room for two messages.
+        if messages.is_empty() {
+            messages.extend(
+                self.graphical
+                    .as_mut()
+                    .unwrap()
+                    .video
+                    .as_mut()
+                    .map(|v| v.chunks())
+                    .unwrap_or_default(),
+            );
+        }
+        messages
     }
     fn effects(&mut self) -> Vec<ServerMessage> {
         let state = self.graphical.as_mut().unwrap();
@@ -2074,6 +2148,47 @@ impl Controller for App {
 }
 
 impl App {
+    pub(super) fn audio_output_word(&self) -> Option<panels::Word> {
+        let state = self.graphical.as_ref()?;
+        (self.audio_here() && state.audio_relay_capable && !state.cell_mode)
+            .then_some(panels::Word::AudioOutput(state.audio_local))
+    }
+    pub(super) fn close_audio_relay(&mut self) {
+        let Some(state) = self.graphical.as_mut() else {
+            return;
+        };
+        if state.audio_epoch.take().is_some() {
+            state.effects.push(ServerMessage::Media {
+                message: starkit::terminal_graphics::media::ToClient::AudioClose {
+                    session: self.audio_activation,
+                },
+            });
+        }
+        self.audio.discard_audio_blocks();
+    }
+    pub(super) fn toggle_audio_output(&mut self) {
+        if self.audio_output_word().is_none() {
+            return;
+        }
+        if !self.audio.audio_relay_available() {
+            self.note = Some((
+                "Update STAR/AMP for local SSH audio playback".into(),
+                NoteLevel::Warning,
+                Instant::now(),
+            ));
+            self.repaint = true;
+            return;
+        }
+        let local = !self.graphical.as_ref().unwrap().audio_local;
+        self.close_audio_relay();
+        if let Err(error) = self.audio.set_audio_local(local) {
+            self.audio_error = Some(error);
+        } else {
+            self.graphical.as_mut().unwrap().audio_local = local;
+            self.audio_error = None;
+        }
+        self.repaint = true;
+    }
     pub(super) fn video_words(&self) -> Option<Vec<panels::Word>> {
         let state = self.graphical.as_ref()?;
         if !state.video_capable
@@ -2375,6 +2490,64 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_local_audio_does_not_switch_on_host_output() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.graphical = Some(State {
+            audio_local: true,
+            audio_epoch: Some(7),
+            ..State::default()
+        });
+        let session = app.audio_activation;
+        Controller::media(
+            &mut app,
+            starkit::terminal_graphics::media::ToHost::AudioError {
+                session,
+                epoch: 7,
+                message: "No local device".into(),
+            },
+        );
+        assert!(app.graphical.as_ref().unwrap().audio_local);
+        assert!(app.graphical.as_ref().unwrap().audio_epoch.is_none());
+        assert_eq!(app.audio_error.as_deref(), Some("No local device"));
+    }
+    #[test]
+    fn audio_output_toggle_is_only_offered_to_remote_capable_clients() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.graphical = Some(State::default());
+        app.audio_path = Some(std::path::PathBuf::from("/music/test.wav"));
+        app.audio_tab = Some(app.core.state().tabs.active().id);
+        assert!(app.audio_output_word().is_none());
+        app.graphical.as_mut().unwrap().audio_relay_capable = true;
+        assert_eq!(
+            app.audio_output_word(),
+            Some(panels::Word::AudioOutput(false))
+        );
+        app.graphical.as_mut().unwrap().audio_local = true;
+        assert_eq!(
+            app.audio_output_word(),
+            Some(panels::Word::AudioOutput(true))
+        );
+        app.graphical.as_mut().unwrap().cell_mode = true;
+        assert!(app.audio_output_word().is_none());
+    }
+
     #[test]
     fn video_preview_mouse_keys_seek_and_expand_preserve_height() {
         let cfg = Config::default();

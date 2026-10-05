@@ -68,6 +68,11 @@ rest of it.
   Fold, Commander and previews; no special font is required.
   Open an audio track to play it here using a separately installed,
   embedding-compatible STAR/AMP; without it, the existing opener still works.
+  In graphical SSH sessions, Preview's `audio: host` / `audio: local` toggle
+  (or `a` while the player is focused) chooses the remote or this computer's
+  speakers. Local streaming requires updated graphical FOLD builds on both
+  ends and a matching AMP helper on the host. The graphical Nix package bundles
+  that helper; ordinary terminal sessions retain host playback.
 - **File actions menu.** Press `c` with the Stack focused, click `actions` in its heading, Ctrl+click a
   file, or press Menu / Shift+F10 for creation, editing, compression, extraction
   and other file actions. “Copy current path” puts the open directory on the system clipboard.
