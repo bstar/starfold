@@ -416,7 +416,10 @@ Kitty's RGBA presentation is not HDR output. The SSH path burns the chosen subti
 and sends the selected audio through its existing adaptive H.264/AAC proxy.
 
 Desktop fullscreen uses a fixed local Kitty kitten and restores the prior window
-state and tab layout. Kitty remote control must allow the operation; if unavailable,
+state and tab layout. During playback it hides Kitty's tab bar, removes window
+padding and margins, and uses a black background. Exit restores the previous tabs,
+spacing and background. Movies retain their aspect ratio, with black letterboxing
+where needed. Kitty remote control must allow the operation; if unavailable,
 terminal fullscreen still works and you can use Kitty's fullscreen key.
 Controls sent through the terminal request no reply, so desktop fullscreen cannot
 inject control-response bytes into STAR/FOLD's keyboard input. Socket controls use

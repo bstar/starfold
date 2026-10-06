@@ -404,6 +404,11 @@ the original size and delivers no reply bytes to the raw application input.
 Kitty removes the temporary helper only after handling the final restore command;
 the frontend must not delete it immediately after a one-way send. The same Mac
 check verified final restore and helper removal.
+Desktop movie fullscreen also temporarily hides that OS window's Kitty tab bar,
+zeros the playback window's padding/margins and uses a black terminal background.
+Restore all captured values on exit; do not rewrite Kitty configuration or affect
+other OS windows. A Mac check with visible tabs and large spacing verified the
+full terminal grid while playing and restoration afterward.
 
 ### Original remote movies
 
