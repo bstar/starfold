@@ -61,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
                 return message
     def controls(value):
         return next((c for c in value.get('components', []) if c['kind'] == 'surface'
-                     and any(h['action'] == 'play' for h in c['surface']['hits'])), None)
+                     and any(h['action'] in ('play', 'pause') for h in c['surface']['hits'])), None)
     def input(value):
         global sequence
         sequence += 1
