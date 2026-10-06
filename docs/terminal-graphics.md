@@ -119,6 +119,32 @@ that always launches the ordinary CLI. Video audio plays through the Mac's
 output device and starts at 80%; click the audio percentage or press **M** to mute. Launching a renderer on the
 SSH host without the local Kitty integration sends audio to that host instead.
 
+### Remote movie quality
+
+Current graphical clients negotiate original-file streaming. With Preview focused,
+press **O** or click **mode** to cycle **Auto → Original → Preview**. Auto starts
+with Original and falls back to Preview if opening or decoding fails. Original
+keeps the source quality and buffers instead of reducing resolution when the
+connection falls behind. Preview uses the adaptive, lower-bandwidth proxy.
+Older clients retain that proxy without requiring an upgrade.
+
+Original streams seekable file ranges over SSH and decodes video and the selected
+audio track on the presentation machine. It avoids server-side video/audio
+re-encoding and retains the source resolution before fitting it into the window.
+The playback status shows **SSH stream**, the mode, source bitrate, buffered bytes
+and dropped frames. Both machines need matching feature-enabled builds.
+
+The compressed-data cache is bounded to 64 MiB, with an 8 MiB read-ahead target
+and a 4 MiB initial buffer. Seeking starts a new stream generation; stale replies
+cannot enter the new decoder. This does not eliminate network or rendering
+limits: sustained playback needs sufficient bandwidth and a fast local decoder.
+
+Kitty presentation remains SDR RGBA, with HDR tone mapping where needed; original
+transport does not provide native HDR output or surround-audio passthrough.
+Embedded and external subtitles currently require Preview mode. Turn subtitles
+off before returning to Original; automatic forced subtitles are not rendered
+in Original mode.
+
 ### Launch after an ordinary SSH login
 
 With the experimental STAR/KIT Kitty integration installed on the **client

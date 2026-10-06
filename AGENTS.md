@@ -393,6 +393,22 @@ Keep ordinary cell clients and older graphical clients on their negotiated
 geometry. Terminal pointer precision remains cells. Physical macOS Kitty
 interaction remains separately unverified; green headless CI is not that proof.
 
+### Original remote movies
+
+KIT's negotiated `original_media` capability streams opaque, generation-scoped
+256 KiB file ranges over the existing relay. KIT owns seekable custom IO, local
+decode/audio, bounded cache (64 MiB), read-ahead and cancellation; FOLD owns the
+Auto/Original/Preview preference and status presentation. Original must not
+silently downgrade on bandwidth stalls. Auto may use Preview after a decode/open
+failure. Older clients keep the proxy. Subtitle selections currently require
+Preview; switching to Original must not silently discard explicit subtitles.
+Original bytes and 4K decode are covered by KIT's movie integration test. Physical
+Kitty playback is a separate gate; its SDR presentation does not prove native HDR.
+2026-10-06: A muted Mac frontend check read the user's remote 4K80 MKV through
+SSH range requests and decoded 124 original 3840×2160 frames across five seconds
+of playback with zero decoder drops (74 Mb/s source, approximately 10 MiB cached).
+This checked transport and local decoding, not visible Kitty pacing or listening.
+
 ### SSH audio output
 
 Preview offers `audio: host` / `audio: local` (`a`) to graphical SSH clients

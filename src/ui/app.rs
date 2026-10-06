@@ -3014,6 +3014,7 @@ impl App {
                 self.toggle_audio_output();
             }
             panels::Word::VideoPlay(_)
+            | panels::Word::VideoMode(_)
             | panels::Word::VideoMute(_)
             | panels::Word::VideoVolumeDown
             | panels::Word::VideoVolumeUp

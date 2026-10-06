@@ -110,6 +110,7 @@ pub enum Word {
     ZoomIn,
     AudioOutput(bool),
     VideoPlay(bool),
+    VideoMode(u8),
     VideoMute(u8),
     VideoVolumeDown,
     VideoVolumeUp,
@@ -123,6 +124,7 @@ impl Word {
         match self {
             Word::AudioOutput(_) | Word::VideoMute(_) => Some(('a', 0)),
             Word::VideoPlay(_) => Some(('P', 0)),
+            Word::VideoMode(_) => Some(('o', 1)),
             Word::VideoExpand(false) => Some(('E', 0)),
             Word::VideoExpand(true) => Some(('e', 1)),
             Word::VideoVolumeDown | Word::VideoVolumeUp => None,
@@ -151,6 +153,15 @@ impl header::Word for Word {
         match self {
             Word::AudioOutput(local) => if local { "audio: local" } else { "audio: host" }.into(),
             Word::VideoPlay(paused) => if paused { "Play" } else { "Pause" }.into(),
+            Word::VideoMode(mode) => format!(
+                "mode: {}",
+                match mode {
+                    1 => "Original",
+                    2 => "Preview",
+                    _ => "Auto",
+                }
+            )
+            .into(),
             Word::VideoMute(0) => "audio: muted".into(),
             Word::VideoMute(volume) => format!("audio: {volume}%").into(),
             Word::VideoVolumeDown => "−".into(),

@@ -21,6 +21,8 @@ pub(super) struct State {
     pointer_capture: Option<starkit::terminal_graphics::placement::Placement>,
     video_capable: bool,
     video_player: bool,
+    original_media: bool,
+    video_mode: u8,
     video_fullscreen: Option<bool>,
     video_overlay_at: Option<Instant>,
     video_overlay_visible: bool,
@@ -983,6 +985,7 @@ impl Controller for App {
         }
         self.graphical.as_mut().unwrap().video_capable = capabilities.video;
         self.graphical.as_mut().unwrap().video_player = capabilities.video_player;
+        self.graphical.as_mut().unwrap().original_media = capabilities.original_media;
         self.graphical.as_mut().unwrap().local_media = capabilities.local_media;
         self.graphical.as_mut().unwrap().audio_relay_capable =
             capabilities.audio_relay && !capabilities.local_media;
@@ -2289,14 +2292,18 @@ impl App {
         }
         let paused = state.video.as_ref().is_none_or(|v| v.paused || v.finished);
         let volume = state.video.as_ref().map_or(80, |v| v.volume);
-        Some(vec![
+        let mut words = vec![
             panels::Word::VideoPlay(paused),
             panels::Word::VideoMute(volume),
             panels::Word::VideoVolumeDown,
             panels::Word::VideoVolumeUp,
             panels::Word::VideoExpand(state.video_expanded.is_some()),
             panels::Word::Close,
-        ])
+        ];
+        if state.original_media && !state.local_media {
+            words.push(panels::Word::VideoMode(state.video_mode));
+        }
+        Some(words)
     }
     fn stop_video(&mut self) {
         let Some(state) = self.graphical.as_mut() else {
@@ -2435,6 +2442,23 @@ impl App {
             return;
         }
         let state = self.graphical.as_mut().unwrap();
+        if state.video_mode == 0 {
+            if let Some(video) = state.video.as_mut().filter(|v| v.original && v.finished) {
+                if let Some(error) = video
+                    .warning
+                    .clone()
+                    .filter(|v| v.starts_with("Video preview:") || v.starts_with("Original media:"))
+                {
+                    video.set_original(false);
+                    self.note = Some((
+                        format!("Original playback failed; using Preview: {error}"),
+                        NoteLevel::Warning,
+                        Instant::now(),
+                    ));
+                    self.repaint = true;
+                }
+            }
+        }
         let visible = state.video_picker.is_some()
             || state.video_subtitle_input.is_some()
             || state.video.as_ref().is_none_or(|v| v.paused || v.finished)
@@ -2447,32 +2471,22 @@ impl App {
         }
         if let Some(v) = &state.video {
             let seconds = v.position as u64;
-            state.video_status = Some(v.warning.clone().unwrap_or_else(|| {
-                format!(
-                    "Video · {}:{:02} · {} · {} · {}",
-                    seconds / 60,
-                    seconds % 60,
-                    if v.finished {
-                        "finished"
-                    } else if v.paused {
-                        "paused"
-                    } else if v.buffering {
-                        "buffering"
-                    } else {
-                        "playing"
-                    },
-                    if v.volume == 0 { "muted" } else { "audio" },
-                    if v.local_playback() {
-                        "local"
-                    } else {
-                        match v.quality {
-                            starkit::media::Quality::Low => "SSH stream · 360p",
-                            starkit::media::Quality::Balanced => "SSH stream · 480p",
-                            starkit::media::Quality::High => "SSH stream · 720p",
-                        }
-                    }
-                )
-            }));
+            state.video_status = Some(format!(
+                "Video · {}:{:02} · {} · {} · {}",
+                seconds / 60,
+                seconds % 60,
+                if v.finished {
+                    "finished"
+                } else if v.paused {
+                    "paused"
+                } else if v.buffering {
+                    "buffering"
+                } else {
+                    "playing"
+                },
+                if v.volume == 0 { "muted" } else { "audio" },
+                Self::video_stream_label(v)
+            ));
         }
     }
     pub(super) fn video_action(&mut self, word: panels::Word) {
@@ -2482,6 +2496,7 @@ impl App {
         tracing::debug!(?word, "Video preview action");
         self.layout.focus_set(ModuleId::Preview);
         match word {
+            panels::Word::VideoMode(_) => self.cycle_video_mode(),
             panels::Word::VideoPlay(_) => {
                 if self.graphical.as_ref().unwrap().video.is_none() {
                     let Some(Preview::Video { path, .. }) = self.view.preview.as_deref() else {
@@ -2498,11 +2513,12 @@ impl App {
                     }
                     let state = self.graphical.as_mut().unwrap();
                     state.video_sequence += 1;
-                    state.video = Some(starkit::terminal_graphics::media::Host::new(
+                    state.video = Some(starkit::terminal_graphics::media::Host::new_with_original(
                         path.clone(),
                         format!("video-{}-1", state.video_sequence),
                         state.video_sequence,
                         state.local_media,
+                        state.original_media && state.video_mode != 2,
                     ));
                     state.video.as_mut().unwrap().set_control(false, 80);
                     if let Some(placement) = state.placements.iter().find(|p| {
@@ -2562,6 +2578,60 @@ impl App {
         }
         self.repaint = true;
     }
+    fn video_stream_label(video: &starkit::terminal_graphics::media::Host) -> String {
+        if video.local_playback() {
+            return "local".into();
+        }
+        if video.original {
+            let bitrate = if video.source_bitrate > 0 {
+                format!(" · {:.1} Mb/s", video.source_bitrate as f64 / 1_000_000.0)
+            } else {
+                String::new()
+            };
+            return format!(
+                "SSH stream · Original{bitrate} · buffer {:.1} MiB · dropped {}",
+                video.buffered_bytes as f64 / 1_048_576.0,
+                video.dropped_frames
+            );
+        }
+        format!(
+            "SSH stream · Preview · {}p",
+            match video.quality {
+                starkit::media::Quality::Low => 360,
+                starkit::media::Quality::Balanced => 480,
+                starkit::media::Quality::High => 720,
+            }
+        )
+    }
+    fn cycle_video_mode(&mut self) {
+        let state = self.graphical.as_mut().unwrap();
+        if !state.original_media || state.local_media {
+            return;
+        }
+        let next = (state.video_mode + 1) % 3;
+        if next != 2
+            && state.video.as_ref().is_some_and(|video| {
+                !matches!(
+                    video.options.subtitle,
+                    starkit::media::tracks::Selection::Off
+                        | starkit::media::tracks::Selection::Auto
+                )
+            })
+        {
+            self.note = Some((
+                "Turn subtitles off before selecting Original mode".into(),
+                NoteLevel::Warning,
+                Instant::now(),
+            ));
+            self.repaint = true;
+            return;
+        }
+        state.video_mode = next;
+        if let Some(video) = &mut state.video {
+            video.set_original(state.video_mode != 2);
+        }
+        self.repaint = true;
+    }
     fn video_key(&mut self, code: &str, modifiers: u8) -> bool {
         if modifiers & !starkit::crossterm::event::KeyModifiers::SHIFT.bits() != 0
             || self.layout.focus() != ModuleId::Preview
@@ -2582,6 +2652,7 @@ impl App {
             "a" | "A" if !self.graphical.as_ref().unwrap().video_player => {
                 self.video_action(panels::Word::VideoMute(0))
             }
+            "o" | "O" if self.graphical.as_ref().unwrap().original_media => self.cycle_video_mode(),
             "m" | "M" => self.video_action(panels::Word::VideoMute(0)),
             "+" | "=" => self.video_action(panels::Word::VideoVolumeUp),
             "-" => self.video_action(panels::Word::VideoVolumeDown),
@@ -2924,6 +2995,24 @@ impl App {
             return;
         };
         let entries = self.video_choices(audio);
+        if !audio
+            && index > 1
+            && self
+                .graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .is_some_and(|v| v.original)
+        {
+            self.note = Some((
+                "Subtitles currently require Preview mode; press O to change mode".into(),
+                NoteLevel::Warning,
+                Instant::now(),
+            ));
+            self.repaint = true;
+            return;
+        }
         if !audio && index + 1 == entries.len() {
             self.graphical.as_mut().unwrap().video_subtitle_input = Some(String::new());
             self.repaint = true;
@@ -2932,6 +3021,27 @@ impl App {
         let Some((_, selection)) = entries.get(index) else {
             return;
         };
+        if !audio
+            && self
+                .graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .is_some_and(|v| v.original)
+            && !matches!(
+                selection,
+                starkit::media::tracks::Selection::Off | starkit::media::tracks::Selection::Auto
+            )
+        {
+            self.note = Some((
+                "Subtitles currently require Preview mode; press O to change mode".into(),
+                NoteLevel::Warning,
+                Instant::now(),
+            ));
+            self.repaint = true;
+            return;
+        }
         if let Some(video) = self.graphical.as_mut().unwrap().video.as_mut() {
             if let Err(error) = video.select(audio, selection.clone()) {
                 video.warning = Some(error.to_string());
@@ -3201,25 +3311,20 @@ impl App {
             surface,
         });
         if let Some(video) = state.video.as_ref() {
-            let text = video.warning.clone().unwrap_or_else(|| {
-                format!(
-                    "{:02}:{:02} / {:02}:{:02} · {}% volume · {}",
-                    position as u64 / 60,
-                    position as u64 % 60,
-                    poster.duration as u64 / 60,
-                    poster.duration as u64 % 60,
-                    video.volume,
-                    if video.local_playback() {
-                        "local"
-                    } else {
-                        match video.quality {
-                            starkit::media::Quality::Low => "SSH stream · 360p",
-                            starkit::media::Quality::Balanced => "SSH stream · 480p",
-                            starkit::media::Quality::High => "SSH stream · 720p",
-                        }
-                    }
-                )
-            });
+            let mut text = format!(
+                "{:02}:{:02} / {:02}:{:02} · {}% volume · {}×{} · {}",
+                position as u64 / 60,
+                position as u64 % 60,
+                poster.duration as u64 / 60,
+                poster.duration as u64 % 60,
+                video.volume,
+                poster.width,
+                poster.height,
+                Self::video_stream_label(video)
+            );
+            if let Some(warning) = &video.warning {
+                text.push_str(&format!(" · {warning}"));
+            }
             let info = Rect::new(rect.x, rect.y.saturating_sub(1), rect.width, 1);
             let mut surface = starkit::native_surface::Surface::new(
                 info.width.saturating_mul(cw).max(1),
@@ -3427,6 +3532,116 @@ mod tests {
             app.graphical.as_ref().unwrap().video_fullscreen,
             Some(false)
         );
+    }
+
+    #[test]
+    fn original_quality_is_negotiated_and_explicit_preview_remains_available() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().video_capable = true;
+        app.graphical.as_mut().unwrap().original_media = true;
+        app.view.preview = Some(Arc::new(Preview::Video {
+            path: fake.home().join("original.mkv"),
+            poster: starkit::media::Poster {
+                pixels: Arc::new(RgbaImage::new(32, 24)),
+                duration: 60.0,
+                width: 3840,
+                height: 2160,
+                audio: true,
+            },
+        }));
+        app.layout.preview_open = true;
+        app.video_action(panels::Word::VideoPlay(true));
+        assert!(
+            app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .original
+        );
+        assert!(app
+            .video_words()
+            .unwrap()
+            .contains(&panels::Word::VideoMode(0)));
+        app.word_click(panels::Word::VideoMode(0));
+        assert_eq!(app.graphical.as_ref().unwrap().video_mode, 1);
+        let generation = app
+            .graphical
+            .as_ref()
+            .unwrap()
+            .video
+            .as_ref()
+            .unwrap()
+            .generation;
+        app.word_click(panels::Word::VideoMode(1));
+        let state = app.graphical.as_ref().unwrap();
+        assert_eq!(state.video_mode, 2);
+        assert!(!state.video.as_ref().unwrap().original);
+        assert!(state.video.as_ref().unwrap().generation > generation);
+        app.graphical
+            .as_mut()
+            .unwrap()
+            .video
+            .as_mut()
+            .unwrap()
+            .options
+            .subtitle = starkit::media::tracks::Selection::Stream(4);
+        app.word_click(panels::Word::VideoMode(2));
+        assert_eq!(app.graphical.as_ref().unwrap().video_mode, 2);
+        assert!(
+            !app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .original
+        );
+        app.graphical
+            .as_mut()
+            .unwrap()
+            .video
+            .as_mut()
+            .unwrap()
+            .options
+            .subtitle = starkit::media::tracks::Selection::Off;
+        app.word_click(panels::Word::VideoMode(2));
+        assert!(
+            app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .original
+        );
+        app.stop_video();
+        app.graphical.as_mut().unwrap().original_media = false;
+        app.video_action(panels::Word::VideoPlay(true));
+        assert!(
+            !app.graphical
+                .as_ref()
+                .unwrap()
+                .video
+                .as_ref()
+                .unwrap()
+                .original
+        );
+        assert!(!app
+            .video_words()
+            .unwrap()
+            .iter()
+            .any(|w| matches!(w, panels::Word::VideoMode(_))));
     }
 
     #[test]

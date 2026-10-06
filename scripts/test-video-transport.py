@@ -19,6 +19,7 @@ parser.add_argument('--starfold', required=True)
 parser.add_argument('--video', required=True, help='Generated silent video fixture')
 parser.add_argument('--pixel-layout', action='store_true')
 parser.add_argument('--movie-player', action='store_true')
+parser.add_argument('--original', action='store_true', help='Negotiate original media and exercise quality modes')
 args = parser.parse_args()
 
 with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
@@ -40,6 +41,7 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
     scene = None
     server_pid = None
     sequence = 0
+    media_kinds = set()
     def send(message):
         process.stdin.write(json.dumps(message) + '\n')
         process.stdin.flush()
@@ -50,6 +52,8 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
             message = messages.get(timeout=max(.01, deadline - time.monotonic()))
             if message['type'] == 'error':
                 raise AssertionError(message)
+            if message['type'] == 'media':
+                media_kinds.add(message['message']['kind'])
             if message['type'] == 'scene':
                 scene = message['scene']
                 send(dict(type='presented', revision=scene['revision'], generation=scene['viewport']['generation']))
@@ -102,18 +106,30 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
             return ''.join(texts(v) for v in value)
         return ''
     def scene_with(text):
+        if scene and text in texts(scene) and controls(scene):
+            return scene
         return wait(lambda m: m['type'] == 'scene' and text in texts(m['scene']) and controls(m['scene']))
     try:
         send(dict(type='hello', version=1, client='video-proof',
             viewport=dict(columns=100, rows=40, width=1000, height=800, generation=1),
             capabilities=dict(image_transport='kitty', pixel_geometry='measured', pointer_precision='cells',
                               keyboard=True, paste=True, native_surfaces=True, pixel_layout=args.pixel_layout,
-                              presentation_ack=True, video=True, video_player=args.movie_player, local_media=False)))
+                              presentation_ack=True, video=True, video_player=args.movie_player,
+                              original_media=args.original, local_media=False)))
         hello = wait(lambda m: m['type'] == 'hello')
         server_pid = int(hello['epoch'].split('-')[0])
         wait(lambda m: m['type'] == 'scene')
         input(dict(kind='key', code='enter', modifiers=0))
         scene_with('SSH stream')
+        if args.original:
+            scene_with('SSH stream · Original')
+            input(dict(kind='key', code='char:o', modifiers=0))
+            scene_with('mode: Original')
+            input(dict(kind='key', code='char:o', modifiers=0))
+            scene_with('SSH stream · Preview')
+            input(dict(kind='key', code='char:o', modifiers=0))
+            scene_with('mode: Auto')
+            assert 'original_open' in media_kinds
         click('pause')
         scene_with('paused')
         click('next')
