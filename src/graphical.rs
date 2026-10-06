@@ -32,6 +32,9 @@ struct Options {
     capabilities: bool,
     #[arg(long, default_value = "starfold")]
     remote_executable: String,
+    /// Open a movie directly in desktop full screen, on the selected host.
+    #[arg(long)]
+    play: Option<String>,
     directory: Option<PathBuf>,
 }
 impl Options {
@@ -131,6 +134,18 @@ pub fn main() -> Result<()> {
         let args =
             std::iter::once("starfold-graphical".to_string()).chain(std::env::args().skip(2));
         let options = Options::parse_from(args);
+        let play = options.play.as_ref().map(|path| {
+            if options.ssh.is_none()
+                && !path.starts_with("~/")
+                && !PathBuf::from(path).is_absolute()
+            {
+                std::env::current_dir()
+                    .map(|dir| dir.join(path).to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| path.clone())
+            } else {
+                path.clone()
+            }
+        });
         let session = options
             .session_name(std::env::var_os("SSH_CONNECTION").is_some())
             .to_owned();
@@ -175,7 +190,7 @@ pub fn main() -> Result<()> {
         if options.ssh.is_none() {
             if let Some(terminal) = starkit::terminal_graphics::terminal_bridge::probe()? {
                 let socket = ensure(&session, options.directory, options.attach)?;
-                return terminal.relay(&socket);
+                return terminal.relay_with_play(&socket, play);
             }
         }
         crate::PATHS.init_private_dirs();
@@ -192,6 +207,7 @@ pub fn main() -> Result<()> {
                 session,
                 directory: options.directory.map(|p| p.to_string_lossy().into_owned()),
                 attach_only: options.attach,
+                play,
             },
             terminal_event,
         );

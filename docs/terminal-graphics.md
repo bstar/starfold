@@ -325,8 +325,11 @@ without sending it to the music player. Conversion starts from the first decoded
 frame, so an incomplete stream header cannot abort FFmpeg during startup or seek.
 
 With Preview focused: **P** or **Space** plays/pauses, **Left/Right** seek five seconds,
-**M** or **A** toggles mute, **+/-** adjusts volume, **E** (or **F**) expands/restores, and **Esc**
-restores an expanded Preview. Position, buffering, mute and quality appear in
+**M** toggles mute, **+/-** adjusts volume, and **E** expands/restores Preview.
+**F** enters desktop fullscreen; **Shift+F** fills the terminal without changing
+its desktop window. **Esc** restores the file manager while playback continues.
+**A** opens audio tracks and **S** opens subtitles. Both menus support mouse
+selection and keyboard navigation; subtitles include Off and Load subtitle file. Position, buffering, mute and quality appear in
 the status footer. Streamed playback is labeled **SSH stream** in the playback
 details and status footer. The unplayed timeline track is slightly lighter than
 the panel in dark themes.
@@ -347,7 +350,7 @@ transport headroom. AAC is 96 kb/s.
 Encoding never upscales and is bounded by the visible Preview. Quality changes
 and seeks start a fresh generation at the current position; stale chunks cannot
 enter the new decoder. Media uses 32 KiB chunks and a 256 KiB credit window;
-control and scene messages have priority. Decoded video queues hold three frames
+control and scene messages have priority. Decoded video queues hold one frame
 and audio rings hold half a second of samples. Closing, changing files, quitting
 or disconnecting cancels playback and streaming.
 
@@ -355,5 +358,45 @@ Both the host and local Kitty frontend need builds with `terminal-graphics`.
 Native build dependencies: FFmpeg with libx264, libavfilter, libswscale and
 libswresample, clang/libclang and pkg-config; Linux additionally needs ALSA.
 Nix supplies these and matching PipeWire/PulseAudio plugins. macOS archives
-require Homebrew FFmpeg. Hardware decoding, subtitles and alternate audio tracks
-are deferred. Physical macOS audio/Kitty interaction still needs testing.
+require Homebrew FFmpeg with libass, zscale and tonemap filters. Physical macOS
+audio/Kitty interaction still needs testing.
+
+
+### Local fullscreen movies and 4K
+
+```sh
+starfold-graphical --play "/path/to/movie.mkv"
+starfold-graphical --ssh user@host --play "/remote/path/to/movie.mkv"
+```
+
+Local playback decodes the original video dimensions and follows its timestamps;
+it does not use the SSH preview proxy. FFmpeg attempts VideoToolbox on macOS and
+VAAPI on Linux, falling back to software when device initialization is unavailable.
+Nix Linux launchers provide Mesa's VAAPI driver path unless overridden. Intel or
+other drivers can be selected through `LIBVA_DRIVERS_PATH`; `STAR_VIDEO_SOFTWARE=1`
+disables hardware decoding for diagnosis. Logs report the initialized decoder.
+
+Frames pass to Kitty as raw RGBA, separate from application chrome. Local Kitty
+uses temporary-file transfer, avoiding PNG compression and base64 frame expansion.
+Kitty performs display scaling. Hardware decode still downloads frames for CPU
+color conversion and subtitle composition; this is not an all-GPU pipeline.
+
+Embedded audio tracks, text/ASS subtitles, PGS/DVD bitmaps and matching SRT/ASS/VTT
+sidecars are selectable. Track changes restart at the current position and retain
+pause/volume. Local audio uses decoded PCM, prefers the source sample rate and
+channel count when supported by the output device, and reports necessary conversion.
+It does not promise encoded HDMI bitstream passthrough. HDR is tone-mapped to SDR;
+Kitty's RGBA presentation is not HDR output. The SSH path burns the chosen subtitles
+and sends the selected audio through its existing adaptive H.264/AAC proxy.
+
+Desktop fullscreen uses a fixed local Kitty kitten and restores the prior window
+state and tab layout. Kitty remote control must allow the operation; if unavailable,
+terminal fullscreen still works and a notice asks you to use Kitty's fullscreen key.
+Controls hide after three seconds while playing and reappear on pointer/key input.
+
+Bounded six-second decoder/conversion measurements on an AMD Radeon 8060S with
+VAAPI: two actual 3840×2160 movies sustained approximately 24 fps. Generated 4K
+24/30 fps sources kept pace; a 60 fps source reached approximately 46 fps.
+A 3840×1600 HDR movie also kept pace at approximately 24 fps with tone mapping.
+These measurements exclude Kitty upload/display and do not guarantee smooth 4K60.
+Run KIT's `movie-bench` example with `--features media` to measure another machine.

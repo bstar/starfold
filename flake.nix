@@ -5,7 +5,7 @@
     nixpkgs.url = "nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     staramp-native = {
-      url = "github:bstar/staramp/31efde7480f2bb6959afb47d5c66458cad1252fc";
+      url = "github:bstar/staramp/86aebe690c0f9f9296842e7f3bcceb8a15ba4331";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-utils.follows = "flake-utils";
     };
@@ -184,7 +184,8 @@
           postBuild = ''
             wrapProgram $out/bin/starfold \
               --prefix PATH : ${staramp-native.packages.${system}.default}/bin \
-              --set ALSA_PLUGIN_DIR "${alsaPluginDir}"
+              --set ALSA_PLUGIN_DIR "${alsaPluginDir}" \
+              ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''--set-default LIBVA_DRIVERS_PATH "${pkgs.mesa}/lib/dri"''}
           '';
         };
         packages.graphical = pkgs.symlinkJoin {
@@ -224,6 +225,7 @@
 
         devShells.default = pkgs.mkShell {
           ALSA_PLUGIN_DIR = alsaPluginDir;
+          LIBVA_DRIVERS_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.mesa}/lib/dri";
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
           BINDGEN_EXTRA_CLANG_ARGS = "-I${pkgs.ffmpeg.dev}/include";
           buildInputs = [ pkgs.ffmpeg ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.alsa-lib;

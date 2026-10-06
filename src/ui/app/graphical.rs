@@ -20,6 +20,18 @@ pub(super) struct State {
     viewport: Option<Viewport>,
     pointer_capture: Option<starkit::terminal_graphics::placement::Placement>,
     video_capable: bool,
+    video_player: bool,
+    video_fullscreen: Option<bool>,
+    video_overlay_at: Option<Instant>,
+    video_overlay_visible: bool,
+    video_picker: Option<bool>,
+    video_picker_index: usize,
+    video_picker_rect: Option<Rect>,
+    video_picker_controls: Option<crate::video_transport::Client>,
+    video_picker_request: Option<crate::video_transport::Request>,
+    video_subtitle_input: Option<String>,
+    direct_play: Option<PathBuf>,
+    direct_fullscreen: bool,
     local_media: bool,
     pub(super) audio_relay_capable: bool,
     pub(super) audio_local: bool,
@@ -970,6 +982,7 @@ impl Controller for App {
             }
         }
         self.graphical.as_mut().unwrap().video_capable = capabilities.video;
+        self.graphical.as_mut().unwrap().video_player = capabilities.video_player;
         self.graphical.as_mut().unwrap().local_media = capabilities.local_media;
         self.graphical.as_mut().unwrap().audio_relay_capable =
             capabilities.audio_relay && !capabilities.local_media;
@@ -1085,6 +1098,9 @@ impl Controller for App {
             (viewport.width / u32::from(viewport.columns)).clamp(1, 64) as u16,
             (viewport.height / u32::from(viewport.rows)).clamp(1, 128) as u16,
         ));
+        if self.graphical.as_ref().unwrap().video_fullscreen.is_some() {
+            return self.fullscreen_video_scene(viewport);
+        }
         let area = Rect::new(0, 0, viewport.columns, viewport.rows);
         let mut buffer = Buffer::empty(area);
         self.graphical.as_mut().unwrap().base_buffer = None;
@@ -1491,6 +1507,7 @@ impl Controller for App {
             }
         }
         self.graphical_tree(&mut scene, &regions, viewport, modal);
+        self.video_picker_scene(&mut scene);
         // Draw pixel scrollbars from the exact geometry used for pointer grabs.
         // Add before modal chrome so menus can cover the underlying track.
         let current_scrollbars: Vec<_> = self
@@ -1778,6 +1795,22 @@ impl Controller for App {
                     .hash(&mut targets);
             }
             scene.interaction = targets.finish();
+            if let Some(rect) = state
+                .video_picker_rect
+                .filter(|_| state.video_picker.is_some())
+            {
+                let mut placement = starkit::terminal_graphics::placement::Placement::new(
+                    rect.into(),
+                    starkit::native_surface::PixelRect::new(
+                        rect.x * cw,
+                        rect.y * ch,
+                        rect.width * cw,
+                        rect.height * ch,
+                    ),
+                );
+                placement.overlay = Some(vec![]);
+                scene.placements.push(placement);
+            }
             state.placements = scene.placements.clone();
             if !modal && self.layout.preview_open {
                 if let Some(p) = scene
@@ -1913,7 +1946,21 @@ impl Controller for App {
             return;
         }
         match input {
+            Input::Notice { message } => {
+                self.note = Some((message.clone(), NoteLevel::Warning, Instant::now()));
+                let state = self.graphical.as_mut().unwrap();
+                if let Some(video) = &mut state.video {
+                    video.warning = Some(message.clone());
+                }
+                state.video_status = Some(message);
+                self.repaint = true;
+            }
+            Input::Play { path } => self.launch_movie(path),
             Input::Key { code, modifiers } => {
+                self.reveal_video_controls();
+                if self.video_picker_key(&code, modifiers) {
+                    return;
+                }
                 if self.graphical.as_ref().unwrap().video_scrub.is_some() {
                     self.cancel_video_scrub();
                     if code == "escape" {
@@ -1947,6 +1994,14 @@ impl Controller for App {
                 pixel,
                 modifiers,
             } => {
+                if self.graphical.as_ref().unwrap().video_fullscreen.is_some() {
+                    self.reveal_video_controls();
+                    self.video_pointer(&action, button, x, y);
+                    return;
+                }
+                if self.video_picker_pointer(&action, button, x, y) {
+                    return;
+                }
                 if self.overlays.is_open() && matches!(action.as_str(), "down" | "up") {
                     tracing::debug!(%action, button, x, y, ?pixel, "Graphical modal pointer received");
                 }
@@ -2010,6 +2065,15 @@ impl Controller for App {
                 }
             }
             Input::Paste { text } => {
+                if let Some(input) = &mut self.graphical.as_mut().unwrap().video_subtitle_input {
+                    input.extend(
+                        text.chars()
+                            .filter(|c| !c.is_control())
+                            .take(4096usize.saturating_sub(input.len())),
+                    );
+                    self.repaint = true;
+                    return;
+                }
                 if self.editor.is_some() {
                     self.editor_paste(&text);
                 } else if self.overlays.paste(&text) {
@@ -2241,6 +2305,14 @@ impl App {
         if let Some(video) = state.video.take() {
             state.effects.push(video.close());
         }
+        if state.video_fullscreen.take().is_some() && state.video_player {
+            state
+                .effects
+                .push(ServerMessage::Fullscreen { enabled: false });
+        }
+        state.video_picker = None;
+        state.video_picker_controls = None;
+        state.video_subtitle_input = None;
         state.video_scrub = None;
         state.video_path = None;
         state.video_status = None;
@@ -2266,6 +2338,40 @@ impl App {
         self.repaint = true;
     }
     fn tick_video(&mut self) {
+        if let Some(path) = self.graphical.as_ref().unwrap().direct_play.clone() {
+            let found = {
+                let state = self.core.state();
+                state
+                    .rows(state.active_frame())
+                    .iter()
+                    .position(|entry| entry.path == path)
+            };
+            if let Some(index) = found {
+                if self.view.cursor_path.as_ref() == Some(&path) {
+                    self.graphical.as_mut().unwrap().direct_play = None;
+                    self.activate_video_entry(path);
+                } else {
+                    self.core.send(Command::CursorTo(index));
+                }
+            } else {
+                let ready = {
+                    let state = self.core.state();
+                    state.active_listing().is_some()
+                        && path.parent() == Some(state.active_frame().dir.as_path())
+                };
+                if ready {
+                    let state = self.graphical.as_mut().unwrap();
+                    state.direct_play = None;
+                    state.direct_fullscreen = false;
+                    self.note = Some((
+                        format!("Movie not found: {}", path.display()),
+                        NoteLevel::Error,
+                        Instant::now(),
+                    ));
+                    self.repaint = true;
+                }
+            }
+        }
         let mut actions = Vec::new();
         if let Some(controls) = self
             .graphical
@@ -2281,6 +2387,19 @@ impl App {
                 actions.push(action);
             }
         }
+        if let Some(controls) = self
+            .graphical
+            .as_ref()
+            .unwrap()
+            .video_picker_controls
+            .as_ref()
+        {
+            let (changed, _) = controls.poll();
+            self.repaint |= changed;
+            while let Some(action) = controls.action() {
+                actions.push(action);
+            }
+        }
         for (action, value) in actions {
             self.video_transport_action(&action, value);
         }
@@ -2291,6 +2410,10 @@ impl App {
             {
                 self.graphical.as_mut().unwrap().video_pending = None;
                 self.video_action(panels::Word::VideoPlay(true));
+                if self.graphical.as_mut().unwrap().direct_fullscreen {
+                    self.graphical.as_mut().unwrap().direct_fullscreen = false;
+                    self.toggle_video_fullscreen(true);
+                }
             }
         }
         let path = match self.view.preview.as_deref() {
@@ -2312,6 +2435,16 @@ impl App {
             return;
         }
         let state = self.graphical.as_mut().unwrap();
+        let visible = state.video_picker.is_some()
+            || state.video_subtitle_input.is_some()
+            || state.video.as_ref().is_none_or(|v| v.paused || v.finished)
+            || state
+                .video_overlay_at
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(3));
+        if visible != state.video_overlay_visible {
+            state.video_overlay_visible = visible;
+            self.repaint = true;
+        }
         if let Some(v) = &state.video {
             let seconds = v.position as u64;
             state.video_status = Some(v.warning.clone().unwrap_or_else(|| {
@@ -2440,10 +2573,33 @@ impl App {
         let code = code.strip_prefix("char:").unwrap_or(code);
         match code {
             "p" | "P" | " " | "space" => self.video_action(panels::Word::VideoPlay(true)),
-            "a" | "A" | "m" | "M" => self.video_action(panels::Word::VideoMute(0)),
+            "a" | "A" if self.graphical.as_ref().unwrap().video_player => {
+                self.open_video_picker(true)
+            }
+            "s" | "S" if self.graphical.as_ref().unwrap().video_player => {
+                self.open_video_picker(false)
+            }
+            "a" | "A" if !self.graphical.as_ref().unwrap().video_player => {
+                self.video_action(panels::Word::VideoMute(0))
+            }
+            "m" | "M" => self.video_action(panels::Word::VideoMute(0)),
             "+" | "=" => self.video_action(panels::Word::VideoVolumeUp),
             "-" => self.video_action(panels::Word::VideoVolumeDown),
-            "e" | "E" | "f" | "F" => self.video_action(panels::Word::VideoExpand(false)),
+            "f" | "F" if self.graphical.as_ref().unwrap().video_player => self
+                .toggle_video_fullscreen(
+                    code == "f"
+                        && modifiers & starkit::crossterm::event::KeyModifiers::SHIFT.bits() == 0,
+                ),
+            "f" | "F" if !self.graphical.as_ref().unwrap().video_player => {
+                self.video_action(panels::Word::VideoExpand(false))
+            }
+            "e" | "E" => self.video_action(panels::Word::VideoExpand(false)),
+            "escape" if self.graphical.as_ref().unwrap().video_fullscreen.is_some() => {
+                self.exit_video_fullscreen()
+            }
+            "q" | "Q" if self.graphical.as_ref().unwrap().video_fullscreen.is_some() => {
+                self.stop_video()
+            }
             "escape" if self.graphical.as_ref().unwrap().video_expanded.is_some() => {
                 self.video_action(panels::Word::VideoExpand(true))
             }
@@ -2465,6 +2621,19 @@ impl App {
     }
     fn video_transport_action(&mut self, action: &str, value: Option<f32>) {
         match action {
+            "fullscreen" => self.toggle_video_fullscreen(true),
+            "audio_tracks" => self.open_video_picker(true),
+            "subtitle_tracks" => self.open_video_picker(false),
+            "picker_close" => {
+                let state = self.graphical.as_mut().unwrap();
+                state.video_picker = None;
+                state.video_subtitle_input = None;
+            }
+            action if action.starts_with("track:") => {
+                if let Ok(index) = action[6..].parse::<usize>() {
+                    self.choose_video_track(index);
+                }
+            }
             "play" => {
                 let video = self.graphical.as_ref().unwrap().video.as_ref();
                 if video.is_none_or(|v| v.paused || v.finished) {
@@ -2521,6 +2690,9 @@ impl App {
         }
     }
     fn video_pointer(&mut self, action: &str, button: u8, x: u16, y: u16) -> bool {
+        if self.video_picker_pointer(action, button, x, y) {
+            return true;
+        }
         if button != 0 || self.overlays.is_open() || self.video_words().is_none() {
             return false;
         }
@@ -2590,6 +2762,383 @@ impl App {
         }
         true
     }
+
+    fn reveal_video_controls(&mut self) {
+        let state = self.graphical.as_mut().unwrap();
+        state.video_overlay_at = Some(Instant::now());
+        if !state.video_overlay_visible {
+            state.video_overlay_visible = true;
+            self.repaint = true;
+        }
+    }
+    fn launch_movie(&mut self, path: String) {
+        if !self.graphical.as_ref().unwrap().video_player {
+            self.note = Some((
+                "Update the graphical client for movie playback".into(),
+                NoteLevel::Warning,
+                Instant::now(),
+            ));
+            return;
+        }
+        let path = if let Some(rest) = path.strip_prefix("~/") {
+            self.view.home.join(rest)
+        } else {
+            PathBuf::from(path)
+        };
+        let path = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| self.view.home.clone())
+                .join(path)
+        };
+        let Some(parent) = path.parent() else { return };
+        self.core.send(Command::ClearFilter);
+        self.core.send(Command::SetHidden(true));
+        self.core.send(Command::Push(parent.into()));
+        let state = self.graphical.as_mut().unwrap();
+        state.direct_play = Some(path);
+        state.direct_fullscreen = true;
+        self.repaint = true;
+    }
+    fn toggle_video_fullscreen(&mut self, desktop: bool) {
+        if self.graphical.as_ref().unwrap().video.is_none() {
+            self.video_action(panels::Word::VideoPlay(true));
+        }
+        let state = self.graphical.as_mut().unwrap();
+        if state.video_fullscreen == Some(desktop) {
+            self.exit_video_fullscreen();
+            return;
+        }
+        if !state.video_player {
+            return;
+        }
+        state.video_fullscreen = Some(desktop);
+        state
+            .effects
+            .push(ServerMessage::Fullscreen { enabled: desktop });
+        self.layout.focus_set(ModuleId::Preview);
+        self.reveal_video_controls();
+        self.repaint = true;
+    }
+    fn exit_video_fullscreen(&mut self) {
+        let state = self.graphical.as_mut().unwrap();
+        if state.video_fullscreen.take().is_some() {
+            state
+                .effects
+                .push(ServerMessage::Fullscreen { enabled: false });
+        }
+        state.video_picker = None;
+        state.video_picker_rect = None;
+        state.video_subtitle_input = None;
+        self.repaint = true;
+    }
+    fn fullscreen_video_scene(&mut self, viewport: Viewport) -> Scene {
+        let area = Rect::new(0, 0, viewport.columns, viewport.rows);
+        let mut scene = Scene::from_buffer(&Buffer::empty(area), viewport, 0);
+        scene.spans.clear();
+        scene.background = "#000000".into();
+        scene.accent = hex(self.theme.accent);
+        scene.border = hex(self.theme.border);
+        let state = self.graphical.as_mut().unwrap();
+        if let Some(video) = &mut state.video {
+            video.set_bounds(viewport.width, viewport.height);
+            scene.components.push(Component::Image {
+                rect: area.into(),
+                id: format!("video-{}-{}", video.session, video.generation),
+                png: None,
+                scale: Default::default(),
+                zoom: 100,
+            });
+        }
+        if let Some(regions) = self.layout.last.clone() {
+            self.video_scene(&mut scene, &regions);
+        }
+        self.video_picker_scene(&mut scene);
+        let state = self.graphical.as_ref().unwrap();
+        scene.interaction = state
+            .video
+            .as_ref()
+            .map_or(0, |v| v.generation)
+            .wrapping_add(if state.video_picker.is_some() {
+                1 << 32
+            } else {
+                0
+            });
+        scene
+    }
+    fn video_choices(&self, audio: bool) -> Vec<(String, starkit::media::tracks::Selection)> {
+        use starkit::media::tracks::Selection;
+        let mut entries = vec![
+            (
+                if audio {
+                    "Automatic"
+                } else {
+                    "Forced tracks automatically"
+                }
+                .into(),
+                Selection::Auto,
+            ),
+            ("Off".into(), Selection::Off),
+        ];
+        if let Some(video) = self.graphical.as_ref().unwrap().video.as_ref() {
+            let tracks = if audio {
+                &video.tracks.audio
+            } else {
+                &video.tracks.subtitles
+            };
+            entries.extend(
+                tracks
+                    .iter()
+                    .map(|track| (track.label.clone(), track.selection.clone())),
+            );
+        }
+        if !audio {
+            entries.push(("Load subtitle file…".into(), Selection::Off));
+        }
+        entries
+    }
+    fn open_video_picker(&mut self, audio: bool) {
+        if self.graphical.as_ref().unwrap().video.is_none() {
+            self.video_action(panels::Word::VideoPlay(true));
+        }
+        let entries = self.video_choices(audio);
+        let state = self.graphical.as_mut().unwrap();
+        let selection = state.video.as_ref().map(|v| {
+            if audio {
+                &v.options.audio
+            } else {
+                &v.options.subtitle
+            }
+        });
+        state.video_picker_index = selection
+            .and_then(|selection| entries.iter().position(|(_, s)| s == selection))
+            .unwrap_or(0);
+        state.video_picker = Some(audio);
+        state.video_subtitle_input = None;
+        self.reveal_video_controls();
+        self.repaint = true;
+    }
+    fn choose_video_track(&mut self, index: usize) {
+        let Some(audio) = self.graphical.as_ref().unwrap().video_picker else {
+            return;
+        };
+        let entries = self.video_choices(audio);
+        if !audio && index + 1 == entries.len() {
+            self.graphical.as_mut().unwrap().video_subtitle_input = Some(String::new());
+            self.repaint = true;
+            return;
+        }
+        let Some((_, selection)) = entries.get(index) else {
+            return;
+        };
+        if let Some(video) = self.graphical.as_mut().unwrap().video.as_mut() {
+            if let Err(error) = video.select(audio, selection.clone()) {
+                video.warning = Some(error.to_string());
+            }
+        }
+        let state = self.graphical.as_mut().unwrap();
+        state.video_picker = None;
+        state.video_picker_rect = None;
+        self.repaint = true;
+    }
+    fn video_picker_key(&mut self, code: &str, modifiers: u8) -> bool {
+        if self.graphical.as_ref().unwrap().video_picker.is_none() {
+            return false;
+        }
+        let code = code.strip_prefix("char:").unwrap_or(code);
+        if self
+            .graphical
+            .as_ref()
+            .unwrap()
+            .video_subtitle_input
+            .is_some()
+        {
+            match code {
+                "escape" => self.graphical.as_mut().unwrap().video_subtitle_input = None,
+                "backspace" => {
+                    self.graphical
+                        .as_mut()
+                        .unwrap()
+                        .video_subtitle_input
+                        .as_mut()
+                        .unwrap()
+                        .pop();
+                }
+                "enter" => {
+                    let text = self
+                        .graphical
+                        .as_mut()
+                        .unwrap()
+                        .video_subtitle_input
+                        .take()
+                        .unwrap();
+                    let path = if let Some(rest) = text.strip_prefix("~/") {
+                        self.view.home.join(rest)
+                    } else {
+                        PathBuf::from(text)
+                    };
+                    if let Some(video) = self.graphical.as_mut().unwrap().video.as_mut() {
+                        if let Err(error) = video.load_subtitle(path) {
+                            video.warning = Some(error.to_string());
+                        }
+                    }
+                    self.graphical.as_mut().unwrap().video_picker = None;
+                }
+                value
+                    if modifiers & !starkit::crossterm::event::KeyModifiers::SHIFT.bits() == 0
+                        && value.chars().count() == 1 =>
+                {
+                    let input = self
+                        .graphical
+                        .as_mut()
+                        .unwrap()
+                        .video_subtitle_input
+                        .as_mut()
+                        .unwrap();
+                    if input.len() < 4096 {
+                        input.push_str(value);
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            let len = self
+                .video_choices(self.graphical.as_ref().unwrap().video_picker.unwrap())
+                .len();
+            let index = self.graphical.as_ref().unwrap().video_picker_index;
+            match code {
+                "escape" => {
+                    self.graphical.as_mut().unwrap().video_picker = None;
+                }
+                "down" | "j" => {
+                    self.graphical.as_mut().unwrap().video_picker_index =
+                        (index + 1).min(len.saturating_sub(1))
+                }
+                "up" | "k" => {
+                    self.graphical.as_mut().unwrap().video_picker_index = index.saturating_sub(1)
+                }
+                "enter" | "space" | " " => self.choose_video_track(index),
+                _ => {}
+            }
+        }
+        self.repaint = true;
+        true
+    }
+    fn video_picker_pointer(&mut self, action: &str, button: u8, x: u16, y: u16) -> bool {
+        let state = self.graphical.as_ref().unwrap();
+        if state.video_picker.is_none() {
+            return false;
+        }
+        if action == "down" && button == 0 {
+            if let (Some(rect), Some(request), Some(controls)) = (
+                state.video_picker_rect,
+                state.video_picker_request.as_ref(),
+                state.video_picker_controls.as_ref(),
+            ) {
+                if rect.contains(starkit::ratatui::layout::Position::new(x, y)) {
+                    let cw = request.width / rect.width.max(1);
+                    let ch = request.height / rect.height.max(1);
+                    controls.pointer(
+                        request.clone(),
+                        (x - rect.x) * cw + cw / 2,
+                        (y - rect.y) * ch + ch / 2,
+                    );
+                }
+            }
+        }
+        true
+    }
+    fn video_picker_scene(&mut self, scene: &mut Scene) {
+        let Some(audio) = self.graphical.as_ref().unwrap().video_picker else {
+            return;
+        };
+        let entries = self
+            .video_choices(audio)
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect::<Vec<_>>();
+        let cw = (scene.viewport.width / u32::from(scene.viewport.columns)).max(1) as u16;
+        let ch = (scene.viewport.height / u32::from(scene.viewport.rows)).max(1) as u16;
+        let font = (ch * 84 / 100).max(10);
+        let width = scene.viewport.columns.saturating_sub(4).clamp(1, 80);
+        let desired = ((entries.len() + 1) as u16).saturating_mul(font + 12) / ch + 2;
+        let height = desired.min(scene.viewport.rows.saturating_sub(2)).max(1);
+        let rect = Rect::new(
+            (scene.viewport.columns - width) / 2,
+            (scene.viewport.rows - height) / 2,
+            width,
+            height,
+        );
+        let state = self.graphical.as_mut().unwrap();
+        let title = if let Some(input) = &state.video_subtitle_input {
+            format!("Subtitle path: {input} · Enter to load")
+        } else if audio {
+            "Audio tracks".into()
+        } else {
+            "Subtitles".into()
+        };
+        let request = crate::video_transport::Request {
+            width: width.saturating_mul(cw),
+            height: height.saturating_mul(ch),
+            theme: crate::audio_embed::Palette {
+                bg: [
+                    self.theme.panel_bg.r,
+                    self.theme.panel_bg.g,
+                    self.theme.panel_bg.b,
+                ],
+                fg: [self.theme.fg.r, self.theme.fg.g, self.theme.fg.b],
+                muted: [self.theme.dim.r, self.theme.dim.g, self.theme.dim.b],
+                accent: [
+                    self.theme.accent.r,
+                    self.theme.accent.g,
+                    self.theme.accent.b,
+                ],
+                selected: [
+                    self.theme.row_selected_bg.r,
+                    self.theme.row_selected_bg.g,
+                    self.theme.row_selected_bg.b,
+                ],
+                border: [
+                    self.theme.border.r,
+                    self.theme.border.g,
+                    self.theme.border.b,
+                ],
+                error: [self.theme.error.r, self.theme.error.g, self.theme.error.b],
+            },
+            playing: false,
+            paused: false,
+            volume: 0.0,
+            pointer: None,
+            movie: true,
+            picker: true,
+            entries: if state.video_subtitle_input.is_some() {
+                vec!["Type a path on the movie’s host; Enter loads it; Esc returns".into()]
+            } else {
+                entries
+            },
+            selected: state.video_picker_index,
+            title,
+            font,
+        };
+        let helper = state
+            .video_picker_controls
+            .get_or_insert_with(crate::video_transport::Client::new);
+        if let Some(surface) = helper.render(request.clone()) {
+            // Menu marker creates a dedicated overlay placement in ordinary Preview.
+            if state.video_fullscreen.is_none() {
+                scene.components.push(Component::Menu { rect: rect.into() });
+            }
+            scene.components.push(Component::Surface {
+                rect: rect.into(),
+                surface,
+            });
+        }
+        state.video_picker_request = Some(request);
+        state.video_picker_rect = Some(rect);
+        scene.pointer_regions.push(rect.into());
+    }
+
     fn video_scene(&mut self, scene: &mut Scene, regions: &Regions) {
         if self.video_words().is_none() {
             return;
@@ -2597,7 +3146,23 @@ impl App {
         let Some(Preview::Video { poster, .. }) = self.view.preview.as_deref() else {
             return;
         };
-        let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
+        let full = self.graphical.as_ref().unwrap().video_fullscreen.is_some();
+        if full && !self.graphical.as_ref().unwrap().video_overlay_visible {
+            let state = self.graphical.as_mut().unwrap();
+            state.video_control_rect = None;
+            state.video_timeline = None;
+            return;
+        }
+        let mut rect = if full {
+            Rect::new(
+                1,
+                0,
+                scene.viewport.columns.saturating_sub(2),
+                scene.viewport.rows,
+            )
+        } else {
+            panels::preview::content_rect(regions.rect_of(ModuleId::Preview))
+        };
         if rect.height < 3 {
             return;
         }
@@ -2697,6 +3262,12 @@ impl App {
                     .is_some_and(|v| v.paused && !v.finished),
                 volume: f32::from(state.video.as_ref().map_or(80, |v| v.volume)) / 100.0,
                 pointer: None,
+                movie: state.video_player,
+                picker: false,
+                entries: vec![],
+                selected: 0,
+                title: String::new(),
+                font: (ch * 84 / 100).max(10),
             };
             let controls = state
                 .video_controls
@@ -2781,6 +3352,81 @@ mod tests {
         );
         app.graphical.as_mut().unwrap().cell_mode = true;
         assert!(app.audio_output_word().is_none());
+    }
+
+    #[test]
+    fn fullscreen_track_selection_and_escape_preserve_playback_and_layout() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        let state = app.graphical.as_mut().unwrap();
+        state.video_capable = true;
+        state.video_player = true;
+        state.local_media = true;
+        app.view.preview = Some(Arc::new(Preview::Video {
+            path: fake.home().join("movie.mkv"),
+            poster: starkit::media::Poster {
+                pixels: Arc::new(RgbaImage::new(32, 24)),
+                duration: 60.0,
+                width: 32,
+                height: 24,
+                audio: true,
+            },
+        }));
+        app.layout.preview_open = true;
+        app.layout.focus_set(ModuleId::Preview);
+        let viewport = Viewport::default();
+        Controller::scene(&mut app, viewport);
+        let rows = app.layout.native_preview_rows;
+        assert!(app.video_key("char:f", 0));
+        assert_eq!(app.graphical.as_ref().unwrap().video_fullscreen, Some(true));
+        let scene = Controller::scene(&mut app, viewport);
+        assert!(scene.components.iter().any(|c|matches!(c,Component::Image {rect,..}if rect.width==viewport.columns&&rect.height==viewport.rows)));
+        assert!(!scene
+            .components
+            .iter()
+            .any(|c| matches!(c, Component::ListRow { .. } | Component::Tab { .. })));
+        assert_eq!(rows, app.layout.native_preview_rows);
+        assert!(app.video_key("char:a", 0));
+        let generation = app
+            .graphical
+            .as_ref()
+            .unwrap()
+            .video
+            .as_ref()
+            .unwrap()
+            .generation;
+        assert!(app.video_picker_key("down", 0));
+        assert!(app.video_picker_key("enter", 0));
+        let video = app.graphical.as_ref().unwrap().video.as_ref().unwrap();
+        assert_eq!(video.options.audio, starkit::media::tracks::Selection::Off);
+        assert!(video.generation > generation);
+        assert!(app.video_key("escape", 0));
+        assert!(app.graphical.as_ref().unwrap().video_fullscreen.is_none());
+        assert!(app.graphical.as_ref().unwrap().video.is_some());
+        assert_eq!(rows, app.layout.native_preview_rows);
+        // Legacy terminal input expresses Shift+F as an uppercase character.
+        assert!(app.video_key("char:F", 0));
+        assert_eq!(
+            app.graphical.as_ref().unwrap().video_fullscreen,
+            Some(false)
+        );
+        assert!(app.video_key("escape", 0));
+        assert!(app.video_key(
+            "char:f",
+            starkit::crossterm::event::KeyModifiers::SHIFT.bits()
+        ));
+        assert_eq!(
+            app.graphical.as_ref().unwrap().video_fullscreen,
+            Some(false)
+        );
     }
 
     #[test]

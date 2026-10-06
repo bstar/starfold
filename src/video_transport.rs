@@ -21,6 +21,12 @@ pub struct Request {
     pub paused: bool,
     pub volume: f32,
     pub pointer: Option<[u16; 2]>,
+    pub movie: bool,
+    pub picker: bool,
+    pub entries: Vec<String>,
+    pub selected: usize,
+    pub title: String,
+    pub font: u16,
 }
 #[derive(Deserialize)]
 struct Response {

@@ -18,6 +18,7 @@ parser.add_argument('--staramp', required=True)
 parser.add_argument('--starfold', required=True)
 parser.add_argument('--video', required=True, help='Generated silent video fixture')
 parser.add_argument('--pixel-layout', action='store_true')
+parser.add_argument('--movie-player', action='store_true')
 args = parser.parse_args()
 
 with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
@@ -63,8 +64,8 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
         send(dict(type='input', id=sequence, revision=scene['revision'], generation=1, input=value))
         assert wait(lambda m: m['type'] == 'ack' and m['id'] == sequence)['accepted']
     def click(action):
-        component = controls(scene)
-        assert component, 'Transport surface missing'
+        component = next((c for c in scene.get('components', []) if c['kind'] == 'surface' and any(h['action'] == action for h in c['surface']['hits'])), None)
+        assert component, f'Transport surface missing for {action}'
         hit = next(h['rect'] for h in component['surface']['hits'] if h['action'] == action)
         rect = component['rect']
         x = rect['x'] + int((hit['x'] + hit['width'] / 2) * rect['width'] / component['surface']['width'])
@@ -72,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
         pointer('down', x, y)
     def pointer(action, x, y):
         packet = dict(kind='pointer', action=action, button=0, x=x, y=y, modifiers=0)
-        if args.pixel_layout:
+        if args.pixel_layout and scene.get('placements'):
             placement = next(p for p in scene['placements'] if
                              p['source']['x'] <= x < p['source']['x'] + p['source']['width'] and
                              p['source']['y'] <= y < p['source']['y'] + p['source']['height'])
@@ -107,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
             viewport=dict(columns=100, rows=40, width=1000, height=800, generation=1),
             capabilities=dict(image_transport='kitty', pixel_geometry='measured', pointer_precision='cells',
                               keyboard=True, paste=True, native_surfaces=True, pixel_layout=args.pixel_layout,
-                              presentation_ack=True, video=True, local_media=False)))
+                              presentation_ack=True, video=True, video_player=args.movie_player, local_media=False)))
         hello = wait(lambda m: m['type'] == 'hello')
         server_pid = int(hello['epoch'].split('-')[0])
         wait(lambda m: m['type'] == 'scene')
@@ -134,6 +135,19 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
         pointer('up', timeline['x'] + (timeline['width'] + 1) // 2, timeline['y'])
         wait(lambda m: m['type'] == 'scene' and controls(m['scene']) and
              '00:10' in texts(m['scene']) and 'Pause' in texts(m['scene']))
+        if args.movie_player:
+            click('fullscreen')
+            wait(lambda m: m['type']=='scene' and not m['scene'].get('placements') and controls(m['scene']))
+            click('audio_tracks')
+            scene_with('Audio tracks')
+            click('track:1')
+            wait(lambda m: m['type']=='scene' and not any(c['kind']=='surface' and any(h['action'].startswith('track:') for h in c['surface']['hits']) for c in m['scene']['components']))
+            click('subtitle_tracks')
+            wait(lambda m: m['type']=='scene' and any(c['kind']=='surface' and any(h['action']=='track:1' for h in c['surface']['hits']) for c in m['scene']['components']))
+            click('track:1')
+            wait(lambda m: m['type']=='scene' and not any(c['kind']=='surface' and any(h['action'].startswith('track:') for h in c['surface']['hits']) for c in m['scene']['components']))
+            input(dict(kind='key', code='escape', modifiers=0))
+            wait(lambda m: m['type']=='scene' and m['scene'].get('placements') and controls(m['scene']))
         click('stop')
         scene_with('Play')
         input(dict(kind='key', code='char:q', modifiers=0))
