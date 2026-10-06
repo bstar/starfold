@@ -401,6 +401,9 @@ reply channel. A `kitten @` child using the shared TTY can leak its DCS response
 into crossterm as Escape/text input, leaving fullscreen and stopping playback.
 2026-10-06: An isolated Mac Kitty window verified enter/enter/leave/leave restores
 the original size and delivers no reply bytes to the raw application input.
+Kitty removes the temporary helper only after handling the final restore command;
+the frontend must not delete it immediately after a one-way send. The same Mac
+check verified final restore and helper removal.
 
 ### Original remote movies
 
