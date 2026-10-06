@@ -24,7 +24,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Install the native Arch toolchain
-        run: pacman -Syu --needed --noconfirm base-devel rust git
+        run: pacman -Syu --needed --noconfirm base-devel rust git ffmpeg alsa-lib clang pkgconf
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Prepare an unprivileged builder
         run: |

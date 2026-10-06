@@ -9,9 +9,9 @@
 # however deep in the tree they are: the fix is a version bump, and if there is
 # not one yet that is worth knowing today rather than at release.
 #
-# Less is at stake here than in a chat client -- nothing in this tree talks to
-# a network -- but everything in it reads directories and files somebody else
-# filled, and the image decoder reads bytes that may have been made to break it.
+# The updater uses HTTPS to read published GitHub releases. The rest of the
+# application reads directories and files somebody else filled, and the image
+# decoder reads bytes that may have been made to break it.
 yanked = "deny"
 
 # Unmaintained crates only when we depend on one directly. A crate we chose and
@@ -92,3 +92,18 @@ allow = ["WTFPL"]
 [[licenses.exceptions]]
 name = "libloading"
 allow = ["ISC"]
+
+# HTTPS updates use the same Rust TLS stack as KIT's existing HTTP consumers.
+[[licenses.exceptions]]
+name = "ring"
+allow = ["ISC"]
+[[licenses.exceptions]]
+name = "rustls-webpki"
+allow = ["ISC"]
+[[licenses.exceptions]]
+name = "untrusted"
+allow = ["ISC"]
+# Mozilla's trust-store data, redistributed by webpki-roots.
+[[licenses.exceptions]]
+name = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]

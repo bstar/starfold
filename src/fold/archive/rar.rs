@@ -79,7 +79,7 @@ impl Reader {
             .filename_w
             .iter()
             .take_while(|&&c| c != 0)
-            .map(|&c| char::from_u32(c as u32).unwrap_or('\u{fffd}'))
+            .map(|&c| unicode_scalar(c))
             .collect();
         Ok(Some(ArchiveEntry {
             name,
@@ -159,4 +159,14 @@ extern "C" fn stream(
     } else {
         0
     }
+}
+
+// wchar_t is signed on macOS and unsigned on Linux. Keep the conversion generic
+// so both representations reject invalid Unicode without platform-only casts.
+fn unicode_scalar<T: TryInto<u32>>(value: T) -> char {
+    value
+        .try_into()
+        .ok()
+        .and_then(char::from_u32)
+        .unwrap_or('\u{fffd}')
 }
