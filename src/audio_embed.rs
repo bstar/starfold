@@ -401,7 +401,9 @@ impl Client {
         while self.take_audio_block().is_some() {}
     }
     pub fn new() -> Self {
-        Self::with_executable(PathBuf::from("staramp"))
+        let mut command = crate::bundled_amp::command();
+        command.args(["embed", "--stdio"]);
+        Self::with_command(command)
     }
 
     /// Also useful for a packaged player path.

@@ -40,7 +40,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Build the Apple Silicon package
-        run: ./scripts/dist/macos.sh
+        run: |
+          ./scripts/dist/macos.sh
+          STARFOLD_GRAPHICAL=1 ./scripts/dist/macos.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: starfold-macos
@@ -68,7 +70,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build the AppImage
         shell: bash
-        run: ./scripts/dist/appimage.sh
+        run: |
+          ./scripts/dist/appimage.sh
+          STARFOLD_GRAPHICAL=1 ./scripts/dist/appimage.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: starfold-appimage-${{ matrix.arch }}
@@ -114,11 +118,13 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
           chmod +x starfold-*.AppImage
-          app=$(ls starfold-*.AppImage)
-          ./"$app" --version
           mkdir -p /tmp/starfold-smoke
           printf 'AppImage smoke test\n' > /tmp/starfold-smoke/hello.txt
-          ./"$app" list /tmp/starfold-smoke | grep -F hello.txt
+          for app in starfold-*.AppImage; do
+            ./"$app" --version
+            ./"$app" list /tmp/starfold-smoke | grep -F hello.txt
+            case "$app" in *-graphical-*) ./"$app" --bundled-amp-version ;; esac
+          done
 
   # Separately, once, with real FUSE: extract-and-run masks the exact failure
   # most users hit on a distribution that no longer ships libfuse2.
@@ -140,8 +146,10 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libfuse2t64
       - run: |
           chmod +x starfold-*.AppImage
-          app=$(ls starfold-*.AppImage)
-          ./"$app" --version
+          for app in starfold-*.AppImage; do
+            ./"$app" --version
+            case "$app" in *-graphical-*) ./"$app" --bundled-amp-version ;; esac
+          done
 
   publish:
     # A branch dispatch builds artifacts for review; only tags create releases.

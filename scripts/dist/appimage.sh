@@ -22,14 +22,22 @@ mkdir -p "$out"
 
 # --locked, not --frozen: one dependency comes from a git tag rather than from
 # crates.io, and the container has no fetched copy of it yet.
-cargo build --release --locked
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+prefix=starfold
+build_args=()
+if [ "${STARFOLD_GRAPHICAL:-0}" = 1 ]; then
+  prefix=starfold-graphical
+  apt-get install -y -qq --no-install-recommends python3
+  . scripts/dist/build-amp-helper.sh
+  build_args+=(--features terminal-graphics)
+fi
+cargo build --release --locked "${build_args[@]}"
 # Not `target/`: the container is handed its own CARGO_TARGET_DIR so it cannot
 # leave a Debian binary where the host's next `cargo run` expects a native one.
 bin="${CARGO_TARGET_DIR:-target}/release/starfold"
 scripts/dist/glibc-floor.sh "$bin"
 
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
 appdir=$work/AppDir
 install -Dm755 "$bin"                         "$appdir/usr/bin/starfold"
 install -Dm644 packaging/starfold.desktop     "$appdir/starfold.desktop"
@@ -57,7 +65,18 @@ keep_out='^(ld-linux|libc\.so|libm\.so|libdl\.so|libpthread\.so|librt\.so|libres
 
 # Walk NEEDED transitively. ldd on the binary already reports the whole graph,
 # so one pass is enough; the loop is over what it found, not over levels.
-ldd "$appdir/usr/bin/starfold" | awk '{print $3}' | grep -E '^/' | sort -u | while read -r lib; do
+libraries=("$appdir/usr/bin/starfold")
+if [ "$prefix" = starfold-graphical ]; then
+  libraries+=("$STARFOLD_BUNDLE_STARAMP")
+  mkdir -p "$appdir/usr/share/starfold"
+  touch "$appdir/usr/share/starfold/graphical"
+  scripts/dist/glibc-floor.sh "$STARFOLD_BUNDLE_STARAMP"
+  mkdir -p "$appdir/usr/share/doc/starfold/LICENSES/STARAMP"
+  cp "$amp_source/LICENSE" "$appdir/usr/share/doc/starfold/LICENSES/STARAMP/"
+  [ ! -f "$amp_source/NOTICE" ] || cp "$amp_source/NOTICE" "$appdir/usr/share/doc/starfold/LICENSES/STARAMP/"
+  [ ! -d "$amp_source/LICENSES" ] || cp -R "$amp_source/LICENSES/". "$appdir/usr/share/doc/starfold/LICENSES/STARAMP/"
+fi
+ldd "${libraries[@]}" | awk '{print $3}' | grep -E '^/' | sort -u | while read -r lib; do
   base=$(basename "$lib")
   if echo "$base" | grep -qE "$keep_out"; then
     echo "host:   $base"
@@ -88,6 +107,12 @@ cat > "$appdir/AppRun" <<'EOF'
 # headless interface, and an AppImage that swallowed argv would be useless
 # for them.
 HERE=$(dirname "$(readlink -f "$0")")
+if [ -f "$HERE/usr/share/starfold/graphical" ]; then
+  case "${1-}" in
+    list|update|help|graphical|--graphical-*|--preview-worker|--archive-worker|--elevated-delete|--bundled-amp-version|--version|-V|--help|-h) ;;
+    *) set -- graphical "$@" ;;
+  esac
+fi
 exec "$HERE/usr/bin/starfold" "$@"
 EOF
 chmod +x "$appdir/AppRun"
@@ -121,7 +146,7 @@ chmod +x "$work/runtime"
 # this file is meant for the machines we have not thought of.
 mksquashfs "$appdir" "$work/fs.squashfs" -root-owned -noappend -comp gzip -no-progress
 
-target="$out/starfold-$ver-$appimage_arch.AppImage"
+target="$out/$prefix-$ver-$appimage_arch.AppImage"
 cat "$work/runtime" "$work/fs.squashfs" > "$target"
 chmod +x "$target"
 ls -la "$target"

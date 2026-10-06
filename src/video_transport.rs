@@ -1,6 +1,6 @@
 //! Bounded render-only STAR/AMP helper. AMP owns artwork, layout and hit testing.
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -126,7 +126,7 @@ fn serve(
             break request;
         }
     };
-    let mut child = Command::new("staramp")
+    let mut child = crate::bundled_amp::command()
         .args(["embed", "--stdio", "--transport"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

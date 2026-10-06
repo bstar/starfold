@@ -1,6 +1,7 @@
 //! STAR/FOLD — a stack-based terminal file manager.
 
 mod audio_embed;
+mod bundled_amp;
 mod cli;
 mod config;
 mod fold;
@@ -9,6 +10,7 @@ mod graphical;
 mod paths;
 mod session;
 mod ui;
+mod updates;
 #[cfg(feature = "terminal-graphics")]
 mod video_transport;
 
@@ -21,8 +23,21 @@ use clap::Parser as _;
 use paths::PATHS;
 
 fn main() -> Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--bundled-amp-version"))
+    {
+        anyhow::ensure!(
+            cfg!(bundled_staramp),
+            "This executable does not contain a bundled AMP helper"
+        );
+        anyhow::ensure!(
+            bundled_amp::command().arg("--version").status()?.success(),
+            "Bundled AMP helper failed its version check"
+        );
+        return Ok(());
+    }
     #[cfg(feature = "terminal-graphics")]
     if graphical::handles_args() {
+        updates::startup();
         return graphical::main();
     }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--preview-worker")) {
@@ -55,7 +70,11 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(cli::Command::List { dir, hidden, sort }) => run_list(dir, hidden, sort),
-        None => run_tui(cli.dir),
+        Some(cli::Command::Update { action }) => updates::command(action),
+        None => {
+            updates::startup();
+            run_tui(cli.dir)
+        }
     }
 }
 

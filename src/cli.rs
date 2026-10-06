@@ -35,6 +35,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Check, configure, or stage verified GitHub release updates.
+    Update {
+        #[command(subcommand)]
+        action: Option<UpdateAction>,
+    },
     /// List a directory and exit, with no terminal involved.
     List {
         /// The directory to list.
@@ -48,6 +53,24 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t)]
         sort: SortArg,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UpdateAction {
+    /// Check for a newer compatible stable GitHub release.
+    Check,
+    /// Verify and stage an update for the next launch.
+    Install,
+    /// Enable background downloads and next-launch installation.
+    Enable,
+    /// Check without downloading; report availability in update status.
+    Notify,
+    /// Disable checks and remove any staged update.
+    Disable,
+    /// Show policy, install support, pending updates, and errors.
+    Status,
+    /// Restore the previous executable and disable automatic updates.
+    Rollback,
 }
 
 /// [`SortKey`] as a command-line value. A separate type because `clap`'s

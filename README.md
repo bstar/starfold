@@ -27,6 +27,15 @@ nix run github:bstar/starfold        # Nix, on Linux or Apple Silicon macOS
 [Installing](docs/installing.md) covers every route, including building from
 source. There are no system libraries to install first.
 
+## Release updates
+
+Standalone macOS releases and Linux AppImages support background release checks,
+verified downloads, and installation on the next launch. Use `starfold update
+status` to inspect support and `starfold update disable` to turn it off. Source
+checkouts and package-managed installations use their existing update methods.
+See [release updates](docs/updates.md), including the graphical experiment's
+separate release requirements.
+
 ## Try it
 
 ```sh

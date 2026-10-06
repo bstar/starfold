@@ -100,7 +100,23 @@ fn ensure(name: &str, dir: Option<PathBuf>, attach_only: bool) -> Result<PathBuf
         .create(true)
         .append(true)
         .open(root.join(format!("{name}.log")))?;
-    let mut command = Command::new(std::env::current_exe()?);
+    // A persistent AppImage host needs its own runtime/mount. Launching the
+    // current payload would leave its helpers/workers under the client's
+    // disposable APPDIR after that client exits.
+    let appimage = if cfg!(target_os = "linux") {
+        std::env::var_os("APPIMAGE")
+    } else {
+        None
+    };
+    let mut command = Command::new(
+        appimage
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or(std::env::current_exe()?),
+    );
+    if appimage.is_some() {
+        command.env_remove("APPIMAGE").env_remove("APPDIR");
+    }
     command.args(["--graphical-server", name]);
     if let Some(dir) = dir {
         command.arg("--directory").arg(dir);
