@@ -12,7 +12,7 @@ starfold update check       # Check now; no executable is changed
 starfold update status      # Policy, installation support, staged version/errors
 starfold update install     # Download and verify now; activate next launch
 starfold update enable      # Automatic downloads and next-launch installation
-starfold update notify      # Check only; availability appears in update status
+starfold update notify      # Check only; show availability notices
 starfold update disable     # Stop checks and discard any pending update
 starfold update rollback    # Restore previous executable; disable updates
 ```
@@ -74,3 +74,19 @@ verification, extraction, process checks, staging, locking, activation and rollb
 Each app supplies `update::Application`, its cache path, a writable standalone
 target, its CLI/UI and the startup exec. Apps opt into the `update` Cargo feature;
 applications that do not use updates acquire none of its network/archive support.
+
+## Visible notices and release notes
+
+The browser shows a scrollable update dialog when a newer release is available,
+and another when the verified download is ready to apply on relaunch. After
+activation, the new version shows an “Updated to” dialog with the GitHub release
+notes. Applied notices are remembered after presentation and are not repeated on
+every launch. Escape dismisses the dialog; arrows, Page Up/Down and the wheel
+scroll the changelog. Notices wait for existing dialogs to close.
+
+In graphical SSH mode, the local client forwards its notices to the browser with
+“Presentation machine update” at the top, so a Mac update is distinguishable from
+a server update. Both ends need this notice-enabled build. Downloads still never
+restart the remote session. `starfold update status` retains the last applied
+version and its release notes. Release notes are plain text; terminal controls
+are removed and long notes are bounded.

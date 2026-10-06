@@ -133,6 +133,9 @@ pub fn command(action: Option<crate::cli::UpdateAction>) -> Result<()> {
                 Err(error) => println!("Self-update unavailable: {error:#}"),
             }
             if let Some(version) = updater.pending_version()? { println!("Staged for next launch: {version}"); }
+            if let Some(applied) = updater.applied()? {
+                println!("{}", notice_lines(&applied, "Last applied:", "").join("\n"));
+            }
             let status = updater.status()?;
             if let Some(candidate) = status.available { println!("Available: {} ({})", candidate.version, candidate.release_url); }
             if let Some(error) = status.error { println!("Last check failed: {error}"); }
@@ -148,4 +151,160 @@ pub fn command(action: Option<crate::cli::UpdateAction>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Filesystem polling stays off the UI thread. Notices wait for existing dialogs.
+pub struct Notices {
+    receiver: std::sync::mpsc::Receiver<Vec<String>>,
+    acknowledge: std::sync::mpsc::SyncSender<()>,
+}
+impl Notices {
+    pub fn start() -> Option<Self> {
+        target()
+            .and_then(|p| starkit::update::standalone_target(&p))
+            .ok()?;
+        let updater = updater().ok()?;
+        let marker = crate::PATHS
+            .cache_dir()
+            .ok()?
+            .join(if cfg!(feature = "terminal-graphics") {
+                "update-notice-seen-graphical.json"
+            } else {
+                "update-notice-seen-terminal.json"
+            });
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let (acknowledge, ack) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new().name("starfold-update-notices".into()).spawn(move || {
+            let mut applied_seen: String = std::fs::read_to_string(&marker).unwrap_or_default();
+            let mut seen = String::new();
+            loop {
+                let notice = (|| -> Result<Option<(String, Vec<String>)>> {
+                    if let Some(candidate) = updater.applied()? {
+                        let key = format!("applied:{}", candidate.version);
+                        if applied_seen != key && candidate.version == env!("CARGO_PKG_VERSION") {
+                            return Ok(Some((key, notice_lines(&candidate, "Updated to", "The update has been applied."))));
+                        }
+                    }
+                    if updater.policy()? == Policy::Off { return Ok(None); }
+                    if let Some(candidate) = updater.status()?.available {
+                        if candidate.version == env!("CARGO_PKG_VERSION") { return Ok(None); }
+                        let staged = updater.pending_version()?.as_deref() == Some(candidate.version.as_str());
+                        let key = format!("available:{}:{staged}", candidate.version);
+                        if seen != key {
+                            return Ok(Some((key, notice_lines(&candidate, "Update available:", if staged {
+                                "Downloaded and verified. Relaunch to apply this update."
+                            } else { "Run starfold update install to download this update." }))));
+                        }
+                    }
+                    Ok(None)
+                })();
+                if let Ok(Some((key, lines))) = notice {
+                    if sender.send(lines).is_err() || ack.recv().is_err() { break; }
+                    seen = key;
+                    // Only applied receipts persist; available notices recur per launch.
+                    if seen.starts_with("applied:") {
+                        applied_seen = seen.clone();
+                        if let Ok(mut file) = tempfile::NamedTempFile::new_in(marker.parent().unwrap()) {
+                            use std::io::Write;
+                            if file.write_all(seen.as_bytes()).is_ok() { let _ = file.persist(&marker); }
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }).ok()?;
+        Some(Self {
+            receiver,
+            acknowledge,
+        })
+    }
+    pub fn poll(&self) -> Option<Vec<String>> {
+        self.receiver.try_recv().ok()
+    }
+    pub fn shown(&self) {
+        let _ = self.acknowledge.try_send(());
+    }
+}
+
+fn notice_lines(
+    candidate: &starkit::update::Candidate,
+    heading: &str,
+    detail: &str,
+) -> Vec<String> {
+    let mut lines = vec![
+        format!("{heading} STAR/FOLD {}", candidate.version),
+        detail.into(),
+        String::new(),
+        "Changelog".into(),
+    ];
+    let notes = if candidate.release_notes.trim().is_empty() {
+        "No release notes were provided."
+    } else {
+        &candidate.release_notes
+    };
+    // Plain text only: release content cannot inject terminal controls.
+    let notes: String = notes.chars().take(24000).collect();
+    for line in notes.lines() {
+        let clean: String = line.chars().filter(|c| !c.is_control()).collect();
+        let chars: Vec<char> = clean.chars().collect();
+        for chunk in chars.chunks(64) {
+            lines.push(chunk.iter().collect());
+        }
+    }
+    lines.push(String::new());
+    lines.push(
+        candidate
+            .release_url
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect(),
+    );
+    lines
+}
+
+#[cfg(feature = "terminal-graphics")]
+pub fn frontend_notice() -> Option<String> {
+    static NOTICES: std::sync::OnceLock<std::sync::Mutex<Option<Notices>>> =
+        std::sync::OnceLock::new();
+    let guard = NOTICES
+        .get_or_init(|| std::sync::Mutex::new(Notices::start()))
+        .lock()
+        .ok()?;
+    let notices = guard.as_ref()?;
+    let mut lines = notices.poll()?;
+    lines.insert(0, "Presentation machine update".into());
+    notices.shown();
+    Some(format!("STARFOLD_UPDATE\n{}", lines.join("\n")))
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+    #[test]
+    fn changelog_is_plain_text_bounded_and_preserves_version_and_link() {
+        let candidate: starkit::update::Candidate = serde_json::from_value(serde_json::json!({
+            "tag":"v9.0.0", "version":"9.0.0", "asset":"test", "url":"", "size":0,
+            "sha256":"", "release_url":"https://github.com/bstar/starfold/releases/tag/v9.0.0",
+            "release_notes":format!("Playback fixed\n\u{1b}]2;bad\u{7}{}", "x".repeat(50000))
+        }))
+        .unwrap();
+        let lines = notice_lines(&candidate, "Updated to", "Applied on this launch.");
+        assert!(lines[0].contains("9.0.0"));
+        assert!(lines.iter().any(|line| line == "Playback fixed"));
+        assert!(!lines.iter().any(|line| line.chars().any(char::is_control)));
+        assert!(lines.join("\n").len() < 26000);
+        assert_eq!(lines.last().unwrap(), &candidate.release_url);
+    }
+    proptest::proptest! {
+        #[test]
+        fn foreign_release_notes_cannot_emit_terminal_controls(notes in ".{0,1024}") {
+            let candidate: starkit::update::Candidate = serde_json::from_value(serde_json::json!({
+                "tag":"v9.0.0", "version":"9.0.0", "asset":"test", "url":"", "size":0,
+                "sha256":"", "release_url":"https://github.com/bstar/starfold/releases/tag/v9.0.0",
+                "release_notes":notes
+            })).unwrap();
+            let lines = notice_lines(&candidate, "Updated to", "Applied.");
+            proptest::prop_assert!(lines.iter().all(|line| !line.chars().any(char::is_control)));
+        }
+    }
 }

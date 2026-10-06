@@ -70,6 +70,7 @@ pub enum Overlay {
     Destination(context::Destination),
     Help { scroll: u16 },
     Failure(failure::Failure),
+    Update(failure::Failure),
     Confirm(confirm::Confirm),
     TrashWarning(trash_warning::Prompt),
     Create(create::Create),
@@ -104,7 +105,7 @@ impl Overlays {
             Overlay::Rename(_) | Overlay::ConflictRename(_) => Some(rename::FOOTER),
             Overlay::Create(_) => Some(create::FOOTER),
             Overlay::Search(_) => Some(search::FOOTER),
-            Overlay::Failure(f) => Some(failure::footer(f)),
+            Overlay::Failure(f) | Overlay::Update(f) => Some(failure::footer(f)),
             _ => None,
         };
         let mut result = Vec::new();
@@ -151,7 +152,7 @@ impl Overlays {
             Overlay::Context(menu) | Overlay::Drop(menu) => menu.popup.root_rect(area),
             Overlay::Destination(_) => context::Destination::rect(area),
             Overlay::Help { .. } => help_rect(area),
-            Overlay::Failure(_) => failure::rect(area),
+            Overlay::Failure(_) | Overlay::Update(_) => failure::rect(area),
             Overlay::Confirm(prompt) => confirm::layout(area, prompt)?.rect,
             Overlay::TrashWarning(_) => trash_warning::layout(area)?,
             Overlay::Create(_) => create::rect(area),
@@ -234,6 +235,15 @@ impl Overlays {
 
     /// Opening any overlay replaces whatever was open; see the module doc
     /// for why there is never more than one.
+    pub fn open_update(&mut self, lines: Vec<String>) {
+        self.current = Some(Overlay::Update(failure::Failure {
+            lines,
+            scroll: 0,
+            retry: None,
+            sudo_retry: None,
+        }));
+    }
+
     pub fn open_help(&mut self) {
         self.current = Some(Overlay::Help { scroll: 0 });
     }
@@ -382,7 +392,7 @@ impl Overlays {
                 // overlay has no other use for a key.
                 _ => (true, Answer::Closed),
             },
-            Overlay::Failure(failure) => match k.code {
+            Overlay::Failure(failure) | Overlay::Update(failure) => match k.code {
                 KeyCode::Char('j') | KeyCode::Down => {
                     failure.scroll = failure
                         .scroll
@@ -541,7 +551,9 @@ impl Overlays {
             }
             Overlay::Create(_) => Some((create::rect(area), create::FOOTER)),
             Overlay::Search(_) => Some((search::rect(area), search::FOOTER)),
-            Overlay::Failure(f) => Some((failure::rect(area), failure::footer(f))),
+            Overlay::Failure(f) | Overlay::Update(f) => {
+                Some((failure::rect(area), failure::footer(f)))
+            }
             _ => None,
         };
         if let Some((rect, footer)) = footer {
@@ -582,7 +594,7 @@ impl Overlays {
                     (true, Answer::Closed)
                 }
             }
-            Overlay::Failure(_) => {
+            Overlay::Failure(_) | Overlay::Update(_) => {
                 if inside(failure::rect(area), x, y) {
                     (false, Answer::Consumed)
                 } else {
@@ -702,7 +714,7 @@ impl Overlays {
                     scroll.saturating_add(3)
                 };
             }
-            Some(Overlay::Failure(failure)) => {
+            Some(Overlay::Failure(failure) | Overlay::Update(failure)) => {
                 failure.scroll = if up {
                     failure.scroll.saturating_sub(3)
                 } else {
@@ -757,6 +769,10 @@ impl Overlays {
                     title: "keys",
                 }
                 .render(area, buf);
+                None
+            }
+            Overlay::Update(notice) => {
+                failure::render_titled(area, buf, theme, notice, "STAR/FOLD update");
                 None
             }
             Overlay::Failure(failure) => {

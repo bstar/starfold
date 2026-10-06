@@ -87,6 +87,10 @@ pub fn footer(failure: &Failure) -> &'static str {
 }
 
 pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, failure: &Failure) {
+    render_titled(area, buf, theme, failure, "operation failed");
+}
+
+pub fn render_titled(area: Rect, buf: &mut Buffer, theme: &Theme, failure: &Failure, title: &str) {
     let rr = rect(area);
     let footer = footer(failure);
     let inner = overlay::render(
@@ -94,7 +98,7 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, failure: &Failure) {
         buf,
         &overlay::Overlay {
             theme,
-            title: "operation failed",
+            title,
             detail: None,
             footer: Some(footer),
         },

@@ -261,6 +261,8 @@ fn place_items(state: &crate::fold::State) -> Vec<super::places::PlaceItem> {
 }
 
 pub struct App {
+    update_notices: Option<crate::updates::Notices>,
+    pending_update_notices: std::collections::VecDeque<Vec<String>>,
     row_stamps: [Option<rows::Stamp>; 3],
     #[cfg(feature = "terminal-graphics")]
     graphical: Option<graphical::State>,
@@ -915,6 +917,8 @@ impl App {
             g_pending: false,
             d_pending: false,
             note: None,
+            update_notices: crate::updates::Notices::start(),
+            pending_update_notices: std::collections::VecDeque::new(),
             view: ViewData::empty(),
             // Never equal to a fresh `State`'s starting version, so the
             // first `refresh` always copies a `ViewData` out rather than
@@ -1119,6 +1123,21 @@ impl App {
     /// Everything a frame does before it draws.
     pub fn tick(&mut self) {
         let now = Instant::now();
+        if !self.overlays.is_open() {
+            if let Some(lines) = self.pending_update_notices.pop_front() {
+                self.overlays.open_update(lines);
+                self.repaint = true;
+            }
+        }
+        if !self.overlays.is_open() {
+            if let Some(notices) = &self.update_notices {
+                if let Some(lines) = notices.poll() {
+                    self.overlays.open_update(lines);
+                    notices.shown();
+                    self.repaint = true;
+                }
+            }
+        }
         self.overlays.tick(now);
         if let Some(picker) = &mut self.tab_picker {
             picker.tick(now);

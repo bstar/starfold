@@ -1950,6 +1950,17 @@ impl Controller for App {
         }
         match input {
             Input::Notice { message } => {
+                if let Some(body) = message.strip_prefix("STARFOLD_UPDATE\n") {
+                    if body.len() <= 128 * 1024 && self.pending_update_notices.len() < 4 {
+                        self.pending_update_notices.push_back(
+                            body.lines()
+                                .map(|s| s.chars().filter(|c| !c.is_control()).collect())
+                                .collect(),
+                        );
+                        self.repaint = true;
+                    }
+                    return;
+                }
                 self.note = Some((message.clone(), NoteLevel::Warning, Instant::now()));
                 let state = self.graphical.as_mut().unwrap();
                 if let Some(video) = &mut state.video {
@@ -3401,6 +3412,35 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn frontend_update_notice_waits_for_dialog_and_does_not_set_video_warning() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.graphical = Some(State::default());
+        app.overlays.open_help();
+        Controller::input(&mut app, Input::Notice { message: "STARFOLD_UPDATE\nPresentation machine update\nUpdated to STAR/FOLD 9.0.0\nPlayback improved".into() });
+        app.tick();
+        assert!(matches!(
+            app.overlays.current(),
+            Some(super::super::super::overlays::Overlay::Help { .. })
+        ));
+        assert!(app.graphical.as_ref().unwrap().video_status.is_none());
+        app.overlays.close();
+        app.tick();
+        let Some(super::super::super::overlays::Overlay::Update(notice)) = app.overlays.current()
+        else {
+            panic!("expected update dialog")
+        };
+        assert!(notice.lines.iter().any(|s| s.contains("9.0.0")));
+        assert!(notice.lines.iter().any(|s| s == "Playback improved"));
+    }
     #[test]
     fn failed_local_audio_does_not_switch_on_host_output() {
         let cfg = Config::default();

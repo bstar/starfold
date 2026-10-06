@@ -211,7 +211,7 @@ pub fn main() -> Result<()> {
         }
         crate::PATHS.init_private_dirs();
         let _log = starkit::logging::init(&crate::PATHS, true)?;
-        return client::run_with_events(
+        return client::run_with_notices(
             Launch {
                 executable: if options.ssh.is_some() {
                     options.remote_executable
@@ -226,6 +226,7 @@ pub fn main() -> Result<()> {
                 play,
             },
             terminal_event,
+            crate::updates::frontend_notice,
         );
     }
     let options = Relay::parse();
