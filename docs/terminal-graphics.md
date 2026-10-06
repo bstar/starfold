@@ -417,7 +417,10 @@ and sends the selected audio through its existing adaptive H.264/AAC proxy.
 
 Desktop fullscreen uses a fixed local Kitty kitten and restores the prior window
 state and tab layout. Kitty remote control must allow the operation; if unavailable,
-terminal fullscreen still works and a notice asks you to use Kitty's fullscreen key.
+terminal fullscreen still works and you can use Kitty's fullscreen key.
+Controls sent through the terminal request no reply, so desktop fullscreen cannot
+inject control-response bytes into STAR/FOLD's keyboard input. Socket controls use
+their separate reply channel.
 Controls hide after three seconds while playing and reappear on pointer/key input.
 
 Bounded six-second decoder/conversion measurements on an AMD Radeon 8060S with

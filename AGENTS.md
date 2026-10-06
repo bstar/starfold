@@ -393,6 +393,15 @@ Keep ordinary cell clients and older graphical clients on their negotiated
 geometry. Terminal pointer precision remains cells. Physical macOS Kitty
 interaction remains separately unverified; green headless CI is not that proof.
 
+### Kitty desktop fullscreen
+
+Kitty desktop fullscreen must not create another reader on the frontend's TTY.
+KIT sends terminal controls with `no_response`; socket controls retain their own
+reply channel. A `kitten @` child using the shared TTY can leak its DCS response
+into crossterm as Escape/text input, leaving fullscreen and stopping playback.
+2026-10-06: An isolated Mac Kitty window verified enter/enter/leave/leave restores
+the original size and delivers no reply bytes to the raw application input.
+
 ### Original remote movies
 
 KIT's negotiated `original_media` capability streams opaque, generation-scoped
