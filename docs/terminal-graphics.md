@@ -425,6 +425,10 @@ Controls sent through the terminal request no reply, so desktop fullscreen canno
 inject control-response bytes into STAR/FOLD's keyboard input. Socket controls use
 their separate reply channel.
 Controls hide after three seconds while playing and reappear on pointer/key input.
+On macOS, the mouse cursor also hides after three idle seconds during fullscreen
+playback. Movement reveals it immediately; input, pause, focus loss and leaving
+the player restore it. Browsing does not trigger this hide policy. Linux retains
+Kitty's own cursor-hiding preference.
 
 Bounded six-second decoder/conversion measurements on an AMD Radeon 8060S with
 VAAPI: two actual 3840×2160 movies sustained approximately 24 fps. Generated 4K

@@ -409,6 +409,11 @@ zeros the playback window's padding/margins and uses a black terminal background
 Restore all captured values on exit; do not rewrite Kitty configuration or affect
 other OS windows. A Mac check with visible tabs and large spacing verified the
 full terminal grid while playing and restoration afterward.
+Mac fullscreen playback hides the mouse cursor after three idle seconds through
+the same fixed local helper. Use NSCursor's hidden-until-movement control, not
+unbalanced hide/unhide calls. Input, pause, focus loss, disconnect and exit restore
+it; do not hide while a mouse button is held or while browsing. Linux retains
+Kitty's cursor policy. A real Mac Kitty check verified hide/show visibility.
 
 ### Original remote movies
 
