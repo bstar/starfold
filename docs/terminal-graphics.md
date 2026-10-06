@@ -80,6 +80,15 @@ that truncation. Native transport thumbnails never enlarge small pixel art.
 
 ## SSH
 
+Local launches default to session `local`; SSH launches (including launches
+inside an SSH shell) default to `default`. This keeps a local window and an SSH
+window from repeatedly replacing each other's frontend and cancelling playback.
+Each session has one attached frontend. Use distinct `--session` names for
+additional simultaneous windows; explicit names and `--attach` retain their
+normal behavior. To open a previously saved local `default` workspace, use
+`starfold-graphical --session default` after detaching its SSH view.
+
+
 ```sh
 nix build .#graphical-host
 starfold-graphical --ssh HOST --session work /remote/path

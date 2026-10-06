@@ -20,8 +20,9 @@ struct Options {
     ssh: Option<String>,
     #[arg(long)]
     ssh_config: Option<PathBuf>,
-    #[arg(long, default_value = "default")]
-    session: String,
+    /// Session name. Defaults to local on this machine, default over SSH.
+    #[arg(long)]
+    session: Option<String>,
     #[arg(long)]
     attach: bool,
     #[arg(long)]
@@ -32,6 +33,17 @@ struct Options {
     #[arg(long, default_value = "starfold")]
     remote_executable: String,
     directory: Option<PathBuf>,
+}
+impl Options {
+    fn session_name(&self, ssh_shell: bool) -> &str {
+        self.session
+            .as_deref()
+            .unwrap_or(if self.ssh.is_some() || ssh_shell {
+                "default"
+            } else {
+                "local"
+            })
+    }
 }
 #[derive(Parser)]
 struct Relay {
@@ -119,6 +131,9 @@ pub fn main() -> Result<()> {
         let args =
             std::iter::once("starfold-graphical".to_string()).chain(std::env::args().skip(2));
         let options = Options::parse_from(args);
+        let session = options
+            .session_name(std::env::var_os("SSH_CONNECTION").is_some())
+            .to_owned();
         if options.capabilities {
             let graphics = starkit::graphics::Graphics::probe_if_tty(starkit::graphics::Mode::Auto);
             println!(
@@ -129,7 +144,7 @@ pub fn main() -> Result<()> {
             );
             return Ok(());
         }
-        session::socket_path(&root()?, &options.session)?;
+        session::socket_path(&root()?, &session)?;
         if options.sessions {
             if let Some(host) = options.ssh {
                 if host.starts_with('-') {
@@ -159,7 +174,7 @@ pub fn main() -> Result<()> {
         // authentication, inferred hostname, or new connection is needed.
         if options.ssh.is_none() {
             if let Some(terminal) = starkit::terminal_graphics::terminal_bridge::probe()? {
-                let socket = ensure(&options.session, options.directory, options.attach)?;
+                let socket = ensure(&session, options.directory, options.attach)?;
                 return terminal.relay(&socket);
             }
         }
@@ -174,7 +189,7 @@ pub fn main() -> Result<()> {
                 },
                 host: options.ssh,
                 ssh_config: options.ssh_config,
-                session: options.session,
+                session,
                 directory: options.directory.map(|p| p.to_string_lossy().into_owned()),
                 attach_only: options.attach,
             },
@@ -222,4 +237,22 @@ pub fn main() -> Result<()> {
     );
     app.enable_graphical();
     session::serve(&root, &name, app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn local_and_remote_default_sessions_do_not_collide() {
+        let local = Options::parse_from(["starfold-graphical"]);
+        assert_eq!(local.session_name(false), "local");
+        assert_eq!(local.session_name(true), "default");
+        let remote = Options::parse_from(["starfold-graphical", "--ssh", "host"]);
+        assert_eq!(remote.session_name(false), "default");
+        let shared = Options::parse_from(["starfold-graphical", "--session", "default"]);
+        assert_eq!(shared.session_name(false), "default");
+        let named = Options::parse_from(["starfold-graphical", "--session", "work", "--attach"]);
+        assert_eq!(named.session_name(false), "work");
+        assert_eq!(named.session_name(true), "work");
+    }
 }
