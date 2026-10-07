@@ -9,6 +9,7 @@ pub(super) struct UiContext {
     filter: Option<TextInput>,
     preview_scroll: usize,
     preview_page: Option<u32>,
+    video: Option<session::VideoSession>,
     editor: Option<Editor>,
     editor_return_focus: Option<ModuleId>,
 }
@@ -25,6 +26,7 @@ impl App {
             filter: None,
             preview_scroll: 0,
             preview_page: None,
+            video: None,
             editor: None,
             editor_return_focus: None,
         }
@@ -46,6 +48,8 @@ impl App {
                     _ => ModuleId::Stack,
                 });
                 context.layout.preview_open = tab.preview_open;
+                context.layout.native_preview_rows = tab.native_preview_rows;
+                context.video = tab.video.clone().filter(|_| tab.preview_open);
                 let actual = &restored[index];
                 let same_location = tab
                     .stacks
@@ -132,6 +136,17 @@ impl App {
         (None, self.preview_scroll)
     }
     fn take_tab_ui(&mut self) -> UiContext {
+        let video = if self.layout.preview_open {
+            self.video_resume_snapshot()
+        } else {
+            None
+        };
+        #[cfg(feature = "terminal-graphics")]
+        {
+            let rows = self.layout.native_preview_rows;
+            self.stop_video();
+            self.layout.native_preview_rows = rows;
+        }
         let fresh = self.fresh_tab_ui();
         let (preview_page, preview_scroll) = self.preview_position();
         UiContext {
@@ -140,6 +155,7 @@ impl App {
             filter: self.filter.take(),
             preview_scroll,
             preview_page,
+            video,
             editor: self.editor.take(),
             editor_return_focus: self.editor_return_focus.take(),
         }
@@ -156,6 +172,7 @@ impl App {
         self.filter = context.filter;
         self.preview_scroll = context.preview_scroll;
         self.pending_preview_page = context.preview_page;
+        self.resume_video = context.video;
         self.view.preview = None;
         self.editor = context.editor;
         self.editor_return_focus = context.editor_return_focus;
@@ -469,6 +486,14 @@ impl App {
             }
             .into();
             tab.preview_open = layout.preview_open;
+            tab.native_preview_rows = layout.native_preview_rows;
+            tab.video = if !layout.preview_open {
+                None
+            } else if id == state.tabs.active().id {
+                self.video_resume_snapshot()
+            } else {
+                self.tab_ui.get(&id).and_then(|c| c.video.clone())
+            };
             tab.preview_scroll = preview_scroll;
             tab.preview_page = if id == state.tabs.active().id {
                 let (page, offset) = self.preview_position();
@@ -540,6 +565,14 @@ impl App {
             self.session_saved = Some(session);
         }
     }
+
+    pub(super) fn video_resume_snapshot(&self) -> Option<session::VideoSession> {
+        #[cfg(feature = "terminal-graphics")]
+        if let Some(saved) = self.graphical_video_snapshot() {
+            return Some(saved);
+        }
+        self.resume_video.clone()
+    }
 }
 
 pub(super) fn operation_row(op: &Op, state: &crate::fold::State) -> panels::operations::OpRow {
@@ -581,15 +614,19 @@ mod tests {
         let (mut app, _, _) = app();
         let first = app.core.state().tabs.active().id;
         app.preview_scroll = 37;
+        app.layout.native_preview_rows = Some(17);
         app.layout.preview_open = false;
         app.layout.focus_set(ModuleId::Operations);
         app.key(ctrl(KeyCode::Char('t')));
         let second = app.core.state().tabs.active().id;
         assert_ne!(first, second);
         assert_eq!(app.preview_scroll, 0);
+        assert_eq!(app.layout.native_preview_rows, None);
         app.preview_scroll = 5;
+        app.layout.native_preview_rows = Some(9);
         app.key(ctrl(KeyCode::PageUp));
         assert_eq!(app.preview_scroll, 37);
+        assert_eq!(app.layout.native_preview_rows, Some(17));
         assert!(!app.layout.preview_open);
         assert_eq!(app.layout.focus(), ModuleId::Operations);
         let area = Rect::new(0, 0, 60, 21);
@@ -750,6 +787,17 @@ mod tests {
         app.layout.focus_set(ModuleId::Preview);
         app.preview_scroll = 31;
         app.pending_preview_page = Some(8);
+        app.layout.native_preview_rows = Some(17);
+        let video = session::VideoSession {
+            path: PathBuf::from("/movies/film.mkv"),
+            position: 42.125,
+            paused: true,
+            volume: 65,
+            audio: session::TrackSelection::Stream(1),
+            subtitle: session::TrackSelection::Off,
+            ..Default::default()
+        };
+        app.resume_video = Some(video.clone());
         let id = app.core.state().tabs.active().id;
         app.core.send(Command::RenameTab(id, "project two".into()));
         let saved = app.workspace_snapshot();
@@ -773,6 +821,8 @@ mod tests {
         assert_eq!(restored.layout.focus(), ModuleId::Preview);
         assert!(restored.audio_path.is_none());
         assert!(restored.editor.is_none());
+        assert_eq!(restored.layout.native_preview_rows, Some(17));
+        assert_eq!(restored.resume_video, Some(video));
     }
     #[test]
     fn pdf_position_restores_by_visible_page_within_a_larger_cache() {

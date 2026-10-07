@@ -967,7 +967,7 @@ impl Controller for App {
     }
     fn attached(&mut self) {
         self.dnd.enabled = false;
-        self.stop_video();
+        self.suspend_video();
         self.graphical.as_mut().unwrap().video_capable = false;
         self.graphical.as_mut().unwrap().cell_mode = false;
         self.graphical.as_mut().unwrap().animated_images = false;
@@ -1013,7 +1013,9 @@ impl Controller for App {
             .set_mode(if cells { Mode::Blocks } else { Mode::Off });
     }
     fn detached(&mut self) {
-        self.stop_video();
+        self.suspend_video();
+        self.graphical.as_mut().unwrap().video_capable = false;
+        self.save_workspace(true);
         self.graphical.as_mut().unwrap().authorization = None;
         if let Some(op) = self.dnd.import_op {
             self.core.send(Command::Cancel(op));
@@ -2254,8 +2256,8 @@ impl Controller for App {
         self.quit
     }
     fn shutdown(&mut self) {
-        self.stop_video();
         self.save_workspace(true);
+        self.stop_video();
         self.editor = None;
         self.stop_audio();
         self.session_writer = None;
@@ -2264,6 +2266,40 @@ impl Controller for App {
 }
 
 impl App {
+    pub(super) fn graphical_video_snapshot(&self) -> Option<session::VideoSession> {
+        let state = self.graphical.as_ref()?;
+        let video = state.video.as_ref()?;
+        let remember = |selection: &starkit::media::tracks::Selection| {
+            use starkit::media::tracks::Selection;
+            match selection {
+                Selection::Auto => session::TrackSelection::Auto,
+                Selection::Off => session::TrackSelection::Off,
+                Selection::Stream(index) => session::TrackSelection::Stream(*index),
+                Selection::External(path) => session::TrackSelection::External(path.clone()),
+            }
+        };
+        Some(session::VideoSession {
+            path: state.video_path.clone()?,
+            position: state
+                .video_scrub
+                .as_ref()
+                .map_or(video.position, |scrub| scrub.position),
+            paused: video.paused || video.finished,
+            volume: video.volume,
+            mode: state.video_mode,
+            audio: remember(&video.options.audio),
+            subtitle: remember(&video.options.subtitle),
+        })
+    }
+
+    fn suspend_video(&mut self) {
+        let saved = self.video_resume_snapshot();
+        let rows = self.layout.native_preview_rows;
+        self.stop_video();
+        self.layout.native_preview_rows = rows;
+        self.resume_video = saved;
+    }
+
     pub(super) fn audio_output_word(&self) -> Option<panels::Word> {
         let state = self.graphical.as_ref()?;
         (self.audio_here() && state.audio_relay_capable && !state.cell_mode)
@@ -2328,7 +2364,8 @@ impl App {
         }
         Some(words)
     }
-    fn stop_video(&mut self) {
+    pub(super) fn stop_video(&mut self) {
+        self.resume_video = None;
         let Some(state) = self.graphical.as_mut() else {
             return;
         };
@@ -2345,6 +2382,9 @@ impl App {
         state.video_subtitle_input = None;
         state.video_scrub = None;
         state.video_path = None;
+        state.video_pending = None;
+        state.direct_play = None;
+        state.direct_fullscreen = false;
         state.video_status = None;
         state.video_timeline = None;
         state.video_controls = None;
@@ -2355,6 +2395,13 @@ impl App {
         }
     }
     pub(super) fn activate_video_entry(&mut self, path: PathBuf) {
+        if self
+            .resume_video
+            .as_ref()
+            .is_some_and(|saved| saved.path != path)
+        {
+            self.resume_video = None;
+        }
         if self.audio_path.is_some() {
             self.stop_audio();
         }
@@ -2368,6 +2415,24 @@ impl App {
         self.repaint = true;
     }
     fn tick_video(&mut self) {
+        if let Some(saved) = &self.resume_video {
+            let state = self.graphical.as_mut().unwrap();
+            if state.can_play_video()
+                && self.layout.preview_open
+                && state.video.is_none()
+                && state.direct_play.is_none()
+                && state.video_pending.is_none()
+            {
+                state.video_mode = saved.mode.min(2);
+                state.direct_play = Some(saved.path.clone());
+                state.direct_fullscreen = false;
+                if let Some(parent) = saved.path.parent() {
+                    if parent != self.core.state().active_frame().dir {
+                        self.core.send(Command::Push(parent.into()));
+                    }
+                }
+            }
+        }
         if let Some(path) = self.graphical.as_ref().unwrap().direct_play.clone() {
             let found = {
                 let state = self.core.state();
@@ -2386,10 +2451,12 @@ impl App {
             } else {
                 let ready = {
                     let state = self.core.state();
-                    state.active_listing().is_some()
+                    !state.loading
+                        && state.active_listing().is_some()
                         && path.parent() == Some(state.active_frame().dir.as_path())
                 };
                 if ready {
+                    self.resume_video = None;
                     let state = self.graphical.as_mut().unwrap();
                     state.direct_play = None;
                     state.direct_fullscreen = false;
@@ -2440,10 +2507,50 @@ impl App {
             {
                 self.graphical.as_mut().unwrap().video_pending = None;
                 self.video_action(panels::Word::VideoPlay(true));
+                if let Some(saved) = self.resume_video.take() {
+                    if let Some(video) = self.graphical.as_mut().unwrap().video.as_mut() {
+                        let restore = |selection: session::TrackSelection| {
+                            use starkit::media::tracks::Selection;
+                            match selection {
+                                session::TrackSelection::Auto => Selection::Auto,
+                                session::TrackSelection::Off => Selection::Off,
+                                session::TrackSelection::Stream(index) => Selection::Stream(index),
+                                session::TrackSelection::External(path) => {
+                                    Selection::External(path)
+                                }
+                            }
+                        };
+                        let position = if saved.position.is_finite() {
+                            saved.position.max(0.)
+                        } else {
+                            0.
+                        };
+                        let duration = match self.view.preview.as_deref() {
+                            Some(Preview::Video { poster, .. }) => poster.duration,
+                            _ => 0.,
+                        };
+                        video.restore_playback(
+                            if duration > 0. {
+                                position.min(duration)
+                            } else {
+                                position
+                            },
+                            starkit::media::tracks::PlaybackOptions {
+                                audio: restore(saved.audio),
+                                subtitle: restore(saved.subtitle),
+                            },
+                            saved.paused,
+                            saved.volume,
+                        );
+                    }
+                }
                 if self.graphical.as_mut().unwrap().direct_fullscreen {
                     self.graphical.as_mut().unwrap().direct_fullscreen = false;
                     self.toggle_video_fullscreen(true);
                 }
+            } else if matches!(self.view.preview.as_deref(), Some(Preview::Error(_))) {
+                self.graphical.as_mut().unwrap().video_pending = None;
+                self.resume_video = None;
             }
         }
         let path = match self.view.preview.as_deref() {
@@ -3423,6 +3530,100 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_saved_video_is_reported_and_does_not_retry_forever() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        fake.pump();
+        app.refresh();
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().video_capable = true;
+        app.layout.preview_open = true;
+        app.resume_video = Some(session::VideoSession {
+            path: fake.home().join("missing-movie.mkv"),
+            position: 37.,
+            ..Default::default()
+        });
+        app.tick_video();
+        assert!(app.resume_video.is_none());
+        assert!(app.graphical.as_ref().unwrap().direct_play.is_none());
+        assert!(app.note.as_ref().unwrap().0.contains("Movie not found"));
+    }
+
+    #[test]
+    fn video_resume_survives_detach_and_shutdown_at_saved_position() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let dir = tempfile::tempdir().unwrap();
+        let saved_path = dir.path().join("session.toml");
+        let mut app = App::new(
+            core,
+            cfg,
+            dir.path().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.session_writer = session::Writer::acquire(saved_path.clone()).unwrap();
+        app.enable_graphical();
+        let path = fake.home().join("movie.mkv");
+        app.view.cursor_path = Some(path.clone());
+        app.view.preview = Some(Arc::new(Preview::Video {
+            path: path.clone(),
+            poster: starkit::media::Poster {
+                pixels: Arc::new(RgbaImage::new(32, 24)),
+                duration: 60.,
+                width: 32,
+                height: 24,
+                audio: true,
+            },
+        }));
+        app.layout.preview_open = true;
+        app.layout.native_preview_rows = Some(17);
+        let state = app.graphical.as_mut().unwrap();
+        state.video_capable = true;
+        state.video_player = true;
+        state.local_media = true;
+        app.video_action(panels::Word::VideoPlay(true));
+        let options = starkit::media::tracks::PlaybackOptions {
+            audio: starkit::media::tracks::Selection::Stream(2),
+            subtitle: starkit::media::tracks::Selection::Off,
+        };
+        app.graphical
+            .as_mut()
+            .unwrap()
+            .video
+            .as_mut()
+            .unwrap()
+            .restore_playback(37.125, options.clone(), true, 65);
+        let remembered = app.graphical_video_snapshot().unwrap();
+        Controller::detached(&mut app);
+        assert_eq!(app.resume_video, Some(remembered.clone()));
+        assert_eq!(app.layout.native_preview_rows, Some(17));
+        app.tick_video();
+        assert!(app.graphical.as_ref().unwrap().video.is_none());
+        assert_eq!(app.resume_video, Some(remembered.clone()));
+        Controller::attached(&mut app);
+        app.graphical.as_mut().unwrap().video_capable = true;
+        app.activate_video_entry(path);
+        app.tick_video();
+        let video = app.graphical.as_ref().unwrap().video.as_ref().unwrap();
+        assert_eq!(video.position, 37.125);
+        assert!(video.paused);
+        assert_eq!(video.volume, 65);
+        assert_eq!(video.options, options);
+        Controller::shutdown(&mut app);
+        let saved = session::load(&saved_path);
+        assert_eq!(saved.tabs[saved.active_tab].video, Some(remembered));
+        assert_eq!(saved.tabs[saved.active_tab].native_preview_rows, Some(17));
+    }
+
     use super::*;
     #[test]
     fn frontend_update_notice_waits_for_dialog_and_does_not_set_video_warning() {

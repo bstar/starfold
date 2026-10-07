@@ -59,6 +59,33 @@ pub struct TabSession {
     pub preview_open: bool,
     pub preview_scroll: usize,
     pub preview_page: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_preview_rows: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video: Option<VideoSession>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VideoSession {
+    pub path: PathBuf,
+    pub position: f64,
+    pub paused: bool,
+    pub volume: u8,
+    pub mode: u8,
+    pub audio: TrackSelection,
+    pub subtitle: TrackSelection,
+}
+
+/// Retained even by builds without video support.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum TrackSelection {
+    #[default]
+    Auto,
+    Off,
+    Stream(usize),
+    External(PathBuf),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

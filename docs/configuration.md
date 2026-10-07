@@ -165,6 +165,17 @@ have browsed, and the log can too at debug level.
   atomically. An older session with only `last_dir` still opens in Fold.
 - The log never carries more than a path at any level above `debug`.
 
+Graphical sessions also remember the resized preview pane height and the loaded
+video for each tab: playback position, play/pause state, volume, quality mode,
+audio track and subtitles. Reopening resumes the selected tab's video at that
+position; other tabs restore when selected. Heights adapt to the available
+terminal size. Closing the preview clears its saved video.
+
+Each named graphical session keeps its workspace in
+`~/.local/starfold/graphical/<session>.toml` on the application host. This also
+restores videos when reconnecting through SSH. Detaching stops playback while
+retaining its position. A missing movie is reported without blocking startup.
+
 Bookmarks are managed with `B` and the Places picker (`b`). Their file is
 also readable TOML:
 
