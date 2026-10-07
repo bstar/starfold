@@ -192,7 +192,13 @@ fn pixel_placements(
             && p.source != regions.status.into()
         {
             p.padding = Some(placement::PanelPadding {
-                inset: metrics.inset,
+                inset: metrics.inset.saturating_add(
+                    if p.source == regions.rect_of(ModuleId::Preview).into() {
+                        4
+                    } else {
+                        0
+                    },
+                ),
                 gap: metrics.gap,
             });
         }
@@ -851,6 +857,7 @@ fn native_header(
     theme: &Theme,
     cell: (u16, u16),
     hotkeys: bool,
+    title_padding: u16,
 ) -> Component {
     let (cw, ch) = cell;
     use starkit::chrome::header::{self, Word as _};
@@ -869,7 +876,10 @@ fn native_header(
     let font = Metrics::from_cell(cw, ch).font;
     let slots = header::slots(rect, words);
     let end = slots.iter().map(|(_, r)| r.x).min().unwrap_or(area.right());
-    let inset = 12u16.saturating_sub(cw).max(4);
+    let inset = 12u16
+        .saturating_sub(cw)
+        .max(4)
+        .saturating_add(title_padding);
     let title_width = (end - area.x).saturating_mul(cw).saturating_sub(inset + 8);
     surface.text(
         R::new(inset, 0, title_width, ch),
@@ -1243,6 +1253,7 @@ impl Controller for App {
                         &self.theme,
                         (cw, ch),
                         self.native_header_hotkeys(module),
+                        if module == ModuleId::Preview { 4 } else { 0 },
                     ));
                 }
             }
@@ -1305,6 +1316,7 @@ impl Controller for App {
                         &self.theme,
                         (cw, ch),
                         self.native_header_hotkeys(ModuleId::Stack),
+                        0,
                     ));
                     if self.graphical.as_ref().unwrap().uses_pixel_layout() {
                         use starkit::native_surface::{Metrics, PixelRect as R, Surface};
@@ -4588,7 +4600,7 @@ mod tests {
                 .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]));
             for enabled in [false, true] {
                 let Component::Surface { surface, .. } =
-                    native_header(rect, "Files", &words, &theme, (8, 18), enabled)
+                    native_header(rect, "Files", &words, &theme, (8, 18), enabled, 0)
                 else {
                     unreachable!()
                 };
