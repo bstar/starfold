@@ -2885,18 +2885,7 @@ impl App {
                     self.repaint = true;
                 }
                 status::Hit::Progress => {
-                    #[allow(unused_mut)]
-                    let mut module = ModuleId::Operations;
-                    #[cfg(feature = "terminal-graphics")]
-                    if self.view.running_bar.is_none()
-                        && self
-                            .graphical
-                            .as_ref()
-                            .is_some_and(|g| g.video_status.is_some())
-                    {
-                        module = ModuleId::Preview;
-                    }
-                    self.layout.focus_set(module);
+                    self.layout.focus_set(ModuleId::Operations);
                 }
                 status::Hit::Location => {}
             }
@@ -3258,20 +3247,7 @@ impl App {
             theme: &self.theme,
             note: self.note.as_ref(),
             now,
-            progress: {
-                #[cfg(feature = "terminal-graphics")]
-                {
-                    self.view.running_bar.as_deref().or_else(|| {
-                        self.graphical
-                            .as_ref()
-                            .and_then(|g| g.video_status.as_deref())
-                    })
-                }
-                #[cfg(not(feature = "terminal-graphics"))]
-                {
-                    self.view.running_bar.as_deref()
-                }
-            },
+            progress: self.view.running_bar.as_deref(),
             hints,
             marked: &self.view.marked,
             location: &self.view.location,

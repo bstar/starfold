@@ -45,7 +45,6 @@ pub(super) struct State {
     video_path: Option<PathBuf>,
     video_pending: Option<PathBuf>,
     video_expanded: Option<Option<u16>>,
-    pub(super) video_status: Option<String>,
     video_timeline: Option<Rect>,
     video_controls: Option<crate::video_transport::Client>,
     video_control_rect: Option<Rect>,
@@ -2048,7 +2047,6 @@ impl Controller for App {
                 if let Some(video) = &mut state.video {
                     video.warning = Some(message.clone());
                 }
-                state.video_status = Some(message);
                 self.repaint = true;
             }
             Input::Play { path } => self.launch_movie(path),
@@ -2453,7 +2451,6 @@ impl App {
         state.video_pending = None;
         state.direct_play = None;
         state.direct_fullscreen = false;
-        state.video_status = None;
         state.video_timeline = None;
         state.video_controls = None;
         state.video_control_rect = None;
@@ -2667,26 +2664,8 @@ impl App {
             state.video_overlay_visible = visible;
             self.repaint = true;
         }
-        if let Some(v) = &state.video {
-            let seconds = v.position as u64;
-            state.video_status = Some(format!(
-                "Video · {}:{:02} · {} · {} · {}",
-                seconds / 60,
-                seconds % 60,
-                if v.finished {
-                    "finished"
-                } else if v.paused {
-                    "paused"
-                } else if v.buffering {
-                    "buffering"
-                } else {
-                    "playing"
-                },
-                if v.volume == 0 { "muted" } else { "audio" },
-                Self::video_stream_label(v)
-            ));
-        }
     }
+
     pub(super) fn video_action(&mut self, word: panels::Word) {
         if self.video_words().is_none() {
             return;
@@ -3746,6 +3725,14 @@ mod tests {
             .as_mut()
             .unwrap()
             .restore_playback(37.125, options.clone(), true, 65);
+        app.tick_video();
+        assert!(app.status_view(Instant::now()).progress.is_none());
+        app.view.running_bar = Some("Copying files · 50%".into());
+        assert_eq!(
+            app.status_view(Instant::now()).progress,
+            Some("Copying files · 50%")
+        );
+        app.view.running_bar = None;
         let remembered = app.graphical_video_snapshot().unwrap();
         Controller::detached(&mut app);
         assert_eq!(app.resume_video, Some(remembered.clone()));
@@ -3788,7 +3775,7 @@ mod tests {
             app.overlays.current(),
             Some(super::super::super::overlays::Overlay::Help { .. })
         ));
-        assert!(app.graphical.as_ref().unwrap().video_status.is_none());
+        assert!(app.note.is_none());
         app.overlays.close();
         app.tick();
         let Some(super::super::super::overlays::Overlay::Update(notice)) = app.overlays.current()
