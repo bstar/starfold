@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use starkit::terminal_graphics::{
-    client::{self, Launch},
+    client::{self, Launch, PresentationOptions},
     session,
 };
 
@@ -145,6 +145,13 @@ fn ensure(name: &str, dir: Option<PathBuf>, attach_only: bool) -> Result<PathBuf
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+fn presentation_options() -> Result<PresentationOptions> {
+    let config = crate::config::Config::load(&crate::PATHS.config_file()?)?;
+    Ok(PresentationOptions {
+        video_corner_radius: config.preview.video_radius(),
+    })
+}
+
 pub fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("graphical") {
         let args =
@@ -211,7 +218,7 @@ pub fn main() -> Result<()> {
         }
         crate::PATHS.init_private_dirs();
         let _log = starkit::logging::init(&crate::PATHS, true)?;
-        return client::run_with_notices(
+        return client::run_with_options(
             Launch {
                 executable: if options.ssh.is_some() {
                     options.remote_executable
@@ -227,13 +234,18 @@ pub fn main() -> Result<()> {
             },
             terminal_event,
             crate::updates::frontend_notice,
+            presentation_options()?,
         );
     }
     let options = Relay::parse();
     if let Some(socket) = options.graphical_terminal_client {
         crate::PATHS.init_private_dirs();
         let _log = starkit::logging::init(&crate::PATHS, true)?;
-        return client::run_terminal_socket_with_events(&socket, terminal_event);
+        return client::run_terminal_socket_with_options(
+            &socket,
+            terminal_event,
+            presentation_options()?,
+        );
     }
     if options.graphical_sessions {
         for name in session::list(&root()?)? {

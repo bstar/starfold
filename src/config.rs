@@ -120,6 +120,10 @@ pub struct Preview {
     /// How a picture smaller than the panel is grown to fill it. `z` cycles
     /// through the three while it is running.
     pub image_scale: Scale,
+    /// Graphical video corners, applied by the local frontend even over SSH.
+    pub video_corners: VideoCorners,
+    /// Rounded video radius in display pixels; square corners ignore it.
+    pub video_corner_radius: u16,
 }
 
 impl Default for Preview {
@@ -135,6 +139,26 @@ impl Default for Preview {
             max_image_dimension: 4096,
             dir_budget: 20_000,
             image_scale: Scale::default(),
+            video_corners: VideoCorners::default(),
+            video_corner_radius: 24,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoCorners {
+    #[default]
+    Rounded,
+    #[serde(alias = "rigid")]
+    Square,
+}
+
+impl Preview {
+    pub fn video_radius(&self) -> u16 {
+        match self.video_corners {
+            VideoCorners::Rounded => self.video_corner_radius,
+            VideoCorners::Square => 0,
         }
     }
 }
@@ -381,6 +405,11 @@ dir_budget = 20000
 # How a picture smaller than the panel is grown: 1x (natural size, centred),
 # pixels (whole-number steps, hard edges), or smooth. `z` cycles them.
 image_scale = "1x"
+# Graphical video corners: rounded or square (rigid is also accepted).
+# Read from the client machine's config for SSH playback. Restart to apply.
+video_corners = "rounded"
+# Rounded radius in display pixels; ignored with square corners.
+video_corner_radius = 24
 
 [open]
 # argv, whitespace-split, never a shell line. Empty is the desktop's own
@@ -433,6 +462,21 @@ mod tests {
     fn an_empty_file_is_the_defaults() {
         let c: Config = toml::from_str("").unwrap();
         assert_eq!(c, Config::default());
+    }
+
+    #[test]
+    fn video_corner_settings_round_trip_and_square_ignores_radius() {
+        assert_eq!(Config::default().preview.video_radius(), 24);
+        for (style, radius) in [("rounded", 36), ("square", 0), ("rigid", 0)] {
+            let config: Config = toml::from_str(&format!(
+                "[preview]\nvideo_corners = '{style}'\nvideo_corner_radius = 36\n"
+            ))
+            .unwrap();
+            assert_eq!(config.preview.video_radius(), radius);
+            let saved = toml::to_string(&config).unwrap();
+            assert_eq!(toml::from_str::<Config>(&saved).unwrap(), config);
+        }
+        assert!(toml::from_str::<Config>("[preview]\nvideo_corners = 'unknown'").is_err());
     }
 
     #[test]

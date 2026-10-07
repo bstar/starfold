@@ -53,6 +53,8 @@ than drawing something it cannot draw honestly.
 | `[preview] max_image_dimension` | maximum width or height of the decoded preview, in pixels. Larger originals are downscaled. Default `4096` |
 | `[preview] dir_budget` | the most entries inspected for a directory tree or marked-directory size. Trees also stop at 400 displayed entries, four levels and 200 ms. Default `20000` |
 | `[preview] image_scale` | how a picture smaller than the panel is grown: `1x`, `pixels` or `smooth`. Default `1x` |
+| `[preview] video_corners` | graphical video corners: `"rounded"` (default) or `"square"`. `"rigid"` also means square. Read from the client machine's config, including SSH playback. Restart the graphical frontend after editing |
+| `[preview] video_corner_radius` | rounded video radius in display pixels. Default `24`; `0` is square. Ignored when `video_corners` is `"square"` |
 
 `image_scale` is the one of those `z` changes while STAR/FOLD is running, and
 what `z` chooses is written back here. `1x` draws a small picture at its own
