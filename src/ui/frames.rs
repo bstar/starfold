@@ -209,7 +209,7 @@ fn commander_frames() {
         .contains("S T A R / F O L D"));
     assert_eq!(preview_floor.lines().count(), 21);
     app.key(alt('1'));
-    app.key(code(KeyCode::Tab));
+    app.key(code(KeyCode::BackTab));
     settle(&mut app, &fk);
     app.key(key('y'));
     settle(&mut app, &fk);

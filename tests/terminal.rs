@@ -206,6 +206,20 @@ fn graphical_session_falls_back_to_cells_and_copies_without_electron() {
     let mut output = frame(&mut child);
     output.extend(collect_for(&mut child, Duration::from_millis(200)));
     assert!(String::from_utf8_lossy(&output).contains("a.txt"));
+    // Real terminal bytes must reach the shared theme action through the relay.
+    let before: toml::Value =
+        toml::from_str(&std::fs::read_to_string(config.join("config.toml")).unwrap()).unwrap();
+    child
+        .master
+        .as_mut()
+        .unwrap()
+        .write_all(b"\x1b[19~")
+        .unwrap();
+    output.extend(collect_for(&mut child, Duration::from_millis(200)));
+    let after: toml::Value =
+        toml::from_str(&std::fs::read_to_string(config.join("config.toml")).unwrap()).unwrap();
+    assert_ne!(before["ui"]["theme"], after["ui"]["theme"]);
+
     // Directory first: select the file, yank it, enter the destination, paste.
     for input in [b"j".as_slice(), b"y", b"k", b"\r", b"p"] {
         child.master.as_mut().unwrap().write_all(input).unwrap();
@@ -454,6 +468,13 @@ fn osc72_capability_reply_and_internal_drop_copy() {
             .write_all(offer.as_bytes())
             .unwrap();
         let response = collect_for(&mut child, Duration::from_millis(50));
+        child
+            .master
+            .as_mut()
+            .unwrap()
+            .write_all(b"\x1b]72;t=e:x=4:y=0:i=1;\x1b\\")
+            .unwrap();
+        collect_for(&mut child, Duration::from_millis(20));
         if response
             .windows(source_uri.len())
             .any(|w| w == source_uri.as_bytes())
@@ -799,6 +820,13 @@ fn osc72_commander_drag_between_panes() {
             .write_all(offer.as_bytes())
             .unwrap();
         let response = collect_for(&mut child, Duration::from_millis(40));
+        child
+            .master
+            .as_mut()
+            .unwrap()
+            .write_all(b"\x1b]72;t=e:x=4:y=0:i=1;\x1b\\")
+            .unwrap();
+        collect_for(&mut child, Duration::from_millis(20));
         if response
             .windows(source_uri.len())
             .any(|w| w == source_uri.as_bytes())
@@ -1000,7 +1028,11 @@ fn workspace_tabs_shortcuts_restart_and_cli_override() {
         .unwrap();
     collect_for(&mut child, Duration::from_millis(100));
     quit_workspace(&mut child);
-    let path = config.join("session.toml");
+    let path = if cfg!(feature = "terminal-graphics") {
+        config.join("graphical/local.toml")
+    } else {
+        config.join("session.toml")
+    };
     let saved: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(saved["tabs"].as_array().unwrap().len(), 2);
     assert_eq!(saved["active_tab"].as_integer(), Some(0));

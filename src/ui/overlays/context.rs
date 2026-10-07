@@ -29,6 +29,9 @@ pub struct Target {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
+    NextTheme,
+    PrevTheme,
+    TogglePresentation,
     Tabs,
     Open,
     Preview,
@@ -47,6 +50,9 @@ pub enum Action {
 impl Action {
     fn label(self) -> &'static str {
         match self {
+            Self::NextTheme => "Next theme",
+            Self::PrevTheme => "Previous theme",
+            Self::TogglePresentation => "Graphical / cells",
             Self::Tabs => "Tabs…",
             Self::Open => "Open",
             Self::Preview => "Preview",
@@ -146,6 +152,14 @@ impl Menu {
         }
         entries.push(Entry::Separator);
         entries.push(action(Action::Tabs));
+        entries.push(Entry::submenu(
+            "Appearance",
+            vec![
+                action(Action::NextTheme),
+                action(Action::PrevTheme),
+                action(Action::TogglePresentation),
+            ],
+        ));
         Self {
             target,
             #[cfg(test)]

@@ -1,5 +1,6 @@
 ---
 source: src/ui/frames.rs
+assertion_line: 203
 expression: preview_focused
 ---
 ╔═ S T A R / F O L D — LEFT ═════════ commander ═╗╔═ › RIGHT ══════════════════════════ commander ═╗
@@ -9,7 +10,12 @@ expression: preview_focused
 ║                                                ║║                                                ║
 ║                                                ║║                                                ║
 ║                                                ║║                                                ║
+║                                                ║║                                                ║
+║                                                ║║                                                ║
 ║                                                ║║                     empty                      ║
+║                                                ║║                                                ║
+║                                                ║║                                                ║
+║                                                ║║                                                ║
 ║                                                ║║                                                ║
 ║                                                ║║                                                ║
 ║                                                ║║                                                ║
@@ -18,12 +24,7 @@ expression: preview_focused
 ║                                                                                            close ║
 ║                                                                                                  ║
 ║                                                                                                  ║
-║                                                                                                  ║
-║                                                                                                  ║
-║                                                                                                  ║
 ║                                        nothing to preview                                        ║
-║                                                                                                  ║
-║                                                                                                  ║
 ║                                                                                                  ║
 ║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝

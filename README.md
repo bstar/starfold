@@ -195,12 +195,14 @@ most people want first:
 MIT. See [LICENSE](LICENSE).
 
 
-## Experimental graphics inside Kitty
+## Graphical and cell presentations
 
-The `experiment/terminal-graphics` branch adds an optional shared native Rust
-renderer and persistent SSH scene relay. Neither the local renderer nor remote application needs a browser or display server. See [terminal graphics](docs/terminal-graphics.md) for build,
-launch, verification and compatibility details. The ordinary TUI remains the
-standard build.
+The default build uses a persistent controller with graphical presentation in
+supported Kitty terminals and cells elsewhere. F9 switches presentations live;
+F8 and Shift+F8 change themes. Alt+T and Alt+Shift+T remain aliases. Use
+`starfold --cells` or `starfold --graphical` for a launch override. See
+[presentation and shortcuts](documentation/presentation.html) and
+[terminal graphics](docs/terminal-graphics.md) for configuration and SSH use.
 
 PDF and video previews use bundled executable extensions. PDF pages are rendered
 with Hayro; independent providers can implement the same versioned protocol.

@@ -28,10 +28,9 @@ prefix=starfold
 build_args=()
 if [ "${STARFOLD_GRAPHICAL:-0}" = 1 ]; then
   prefix=starfold-graphical
-  apt-get install -y -qq --no-install-recommends python3
-  . scripts/dist/build-amp-helper.sh
-  build_args+=(--features terminal-graphics)
 fi
+apt-get install -y -qq --no-install-recommends python3
+. scripts/dist/build-amp-helper.sh
 cargo build --workspace --release --locked "${build_args[@]}"
 # Not `target/`: the container is handed its own CARGO_TARGET_DIR so it cannot
 # leave a Debian binary where the host's next `cargo run` expects a native one.
@@ -40,7 +39,7 @@ scripts/dist/glibc-floor.sh "$bin"
 
 appdir=$work/AppDir
 install -Dm755 "$bin"                         "$appdir/usr/bin/starfold"
-for helper in starfold-preview-pdf starfold-preview-video; do
+for helper in starfold-preview-pdf starfold-preview-video starfold-preview-nvim; do
   install -Dm755 "$(dirname "$bin")/$helper" "$appdir/usr/bin/$helper"
 done
 install -Dm644 packaging/starfold.desktop     "$appdir/starfold.desktop"
@@ -49,6 +48,7 @@ install -Dm644 packaging/starfold.desktop     "$appdir/usr/share/applications/st
 install -Dm644 packaging/starfold.png         "$appdir/usr/share/icons/hicolor/256x256/apps/starfold.png"
 install -Dm644 packaging/starfold.svg         "$appdir/usr/share/icons/hicolor/scalable/apps/starfold.svg"
 install -Dm644 README.md LICENSE NOTICE -t           "$appdir/usr/share/doc/starfold/"
+cp -R documentation "$appdir/usr/share/doc/starfold/"
 install -Dm644 LICENSES/UnRAR.txt "$appdir/usr/share/doc/starfold/LICENSES/UnRAR.txt"
 install -Dm644 LICENSES/OFL-Liberation.txt "$appdir/usr/share/doc/starfold/LICENSES/OFL-Liberation.txt"
 for media_license in LICENSES/ffmpeg-*.txt LICENSES/Hayro-*.txt; do
@@ -68,17 +68,16 @@ keep_out='^(ld-linux|libc\.so|libm\.so|libdl\.so|libpthread\.so|librt\.so|libres
 
 # Walk NEEDED transitively. ldd on the binary already reports the whole graph,
 # so one pass is enough; the loop is over what it found, not over levels.
-libraries=("$appdir/usr/bin/starfold")
+libraries=("$appdir/usr/bin/starfold" "$STARFOLD_BUNDLE_STARAMP")
 if [ "$prefix" = starfold-graphical ]; then
-  libraries+=("$STARFOLD_BUNDLE_STARAMP")
   mkdir -p "$appdir/usr/share/starfold"
   touch "$appdir/usr/share/starfold/graphical"
-  scripts/dist/glibc-floor.sh "$STARFOLD_BUNDLE_STARAMP"
-  mkdir -p "$appdir/usr/share/doc/starfold/LICENSES/STARAMP"
-  cp "$amp_source/LICENSE" "$appdir/usr/share/doc/starfold/LICENSES/STARAMP/"
-  [ ! -f "$amp_source/NOTICE" ] || cp "$amp_source/NOTICE" "$appdir/usr/share/doc/starfold/LICENSES/STARAMP/"
-  [ ! -d "$amp_source/LICENSES" ] || cp -R "$amp_source/LICENSES/". "$appdir/usr/share/doc/starfold/LICENSES/STARAMP/"
 fi
+scripts/dist/glibc-floor.sh "$STARFOLD_BUNDLE_STARAMP"
+mkdir -p "$appdir/usr/share/doc/starfold/LICENSES/STARAMP"
+cp "$amp_source/LICENSE" "$appdir/usr/share/doc/starfold/LICENSES/STARAMP/"
+[ ! -f "$amp_source/NOTICE" ] || cp "$amp_source/NOTICE" "$appdir/usr/share/doc/starfold/LICENSES/STARAMP/"
+[ ! -d "$amp_source/LICENSES" ] || cp -R "$amp_source/LICENSES/". "$appdir/usr/share/doc/starfold/LICENSES/STARAMP/"
 ldd "${libraries[@]}" | awk '{print $3}' | grep -E '^/' | sort -u | while read -r lib; do
   base=$(basename "$lib")
   if echo "$base" | grep -qE "$keep_out"; then
@@ -93,7 +92,7 @@ done
 # RUNPATH beats ld.so.cache, so a host library cannot shadow ours even when the
 # soname matches exactly. Harmless while usr/lib is empty, and correct the day
 # it is not.
-for executable in starfold starfold-preview-pdf starfold-preview-video; do
+for executable in starfold starfold-preview-pdf starfold-preview-video starfold-preview-nvim; do
   patchelf --set-rpath '$ORIGIN/../lib' "$appdir/usr/bin/$executable"
 done
 for so in "$appdir"/usr/lib/*.so*; do

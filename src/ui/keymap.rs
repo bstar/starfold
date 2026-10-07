@@ -162,6 +162,7 @@ pub enum Action {
     NextPictureScale,
 
     // -- appearance --
+    TogglePresentation,
     NextTheme,
     PrevTheme,
 
@@ -262,7 +263,7 @@ pub const BINDINGS: &[Binding] = &[
     },
     Binding {
         action: Action::FocusPreview,
-        keys: "alt+2",
+        keys: "F7/alt+2",
         label: "the preview",
         group: "navigation",
     },
@@ -559,14 +560,20 @@ pub const BINDINGS: &[Binding] = &[
     // -- appearance ------------------------------------------------------------
     Binding {
         action: Action::NextTheme,
-        keys: "alt+t",
+        keys: "F8",
         label: "next theme",
         group: "appearance",
     },
     Binding {
         action: Action::PrevTheme,
-        keys: "alt+shift+t",
+        keys: "shift+F8",
         label: "previous theme",
+        group: "appearance",
+    },
+    Binding {
+        action: Action::TogglePresentation,
+        keys: "F9",
+        label: "graphical / cells",
         group: "appearance",
     },
     // -- application -------------------------------------------------------
@@ -753,8 +760,42 @@ pub fn module(m: Module, k: KeyEvent) -> Option<Action> {
 }
 
 /// The global table, tried after the focused module has declined.
+/// The three application shortcuts can be overridden without affecting editor keys.
+pub fn resolve_configured(k: KeyEvent, shortcuts: &crate::config::Shortcuts) -> Option<Action> {
+    let k = starkit::keymap::normalise(k)?;
+    for (keys, action) in [
+        (&shortcuts.next_theme, Action::NextTheme),
+        (&shortcuts.previous_theme, Action::PrevTheme),
+        (&shortcuts.presentation, Action::TogglePresentation),
+    ] {
+        if starkit::keymap::alternatives(keys)
+            .filter_map(starkit::keymap::KeySpec::parse)
+            .any(|spec| spec.matches(k))
+        {
+            return Some(action);
+        }
+    }
+    resolve(k).filter(|a| {
+        !matches!(
+            a,
+            Action::NextTheme | Action::PrevTheme | Action::TogglePresentation
+        )
+    })
+}
+
 pub fn resolve(k: KeyEvent) -> Option<Action> {
-    GLOBAL.resolve(k)
+    let k = starkit::keymap::normalise(k)?;
+    GLOBAL.resolve(k).or_else(|| {
+        for (key, action) in [
+            ("alt+t", Action::NextTheme),
+            ("alt+shift+t", Action::PrevTheme),
+        ] {
+            if starkit::keymap::KeySpec::parse(key).is_some_and(|s| s.matches(k)) {
+                return Some(action);
+            }
+        }
+        None
+    })
 }
 
 /// What the key after a `g` means, if `g` was the one before it.
@@ -885,8 +926,10 @@ Low → High or High → Low for size, with corresponding labels for other keys;
 `S` toggles direction directly. The picker also toggles directories first.
 Timestamp sorts show newest first by default, with unavailable dates last.
 
-In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
-the active pane; `alt+2` and `alt+3` reach preview and operations. `y` (or
+In Commander view, `tab` cycles left pane, right pane and Preview;
+`shift+tab` reverses that cycle. Changing pane focus preserves the displayed
+preview; navigating or selecting a file updates it. `F7` jumps directly into
+Preview. `alt+1` focuses the active pane; `alt+2` and `alt+3` reach preview and operations. `y` (or
 `yy`) saves the marked entries or highlighted file; `p` queues a copy into
 the active pane's directory. `m` queues a move into the opposite pane's
 directory. `dd` asks for confirmation before queuing deletion. `v` switches views, `b`
@@ -1332,6 +1375,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn appearance_defaults_and_overrides_route_consistently() {
+        let mut shortcuts = crate::config::Shortcuts::default();
+        for (key, action) in [
+            (with(KeyCode::F(8), KeyModifiers::NONE), Action::NextTheme),
+            (with(KeyCode::F(8), KeyModifiers::SHIFT), Action::PrevTheme),
+            (
+                with(KeyCode::F(9), KeyModifiers::NONE),
+                Action::TogglePresentation,
+            ),
+        ] {
+            assert_eq!(resolve_configured(key, &shortcuts), Some(action));
+        }
+        shortcuts.next_theme = "ctrl+alt+n".into();
+        assert_eq!(
+            resolve_configured(with(KeyCode::F(8), KeyModifiers::NONE), &shortcuts),
+            None
+        );
+        assert_eq!(
+            resolve_configured(
+                with(
+                    KeyCode::Char('n'),
+                    KeyModifiers::CONTROL | KeyModifiers::ALT
+                ),
+                &shortcuts
+            ),
+            Some(Action::NextTheme)
+        );
     }
 
     #[test]

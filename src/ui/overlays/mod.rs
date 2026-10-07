@@ -32,6 +32,7 @@ pub mod rename;
 pub mod search;
 pub mod sort;
 pub mod trash_warning;
+pub mod unsaved;
 
 use std::path::PathBuf;
 
@@ -39,7 +40,6 @@ use starkit::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use starkit::keymap::{help_rect, HelpView};
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
-use starkit::ratatui::widgets::Widget;
 
 use crate::fold::create::Kind as CreateKind;
 use crate::fold::ops::{ConflictPolicy, OpId};
@@ -72,6 +72,7 @@ pub enum Overlay {
     Failure(failure::Failure),
     Update(failure::Failure),
     Confirm(confirm::Confirm),
+    Unsaved(String),
     TrashWarning(trash_warning::Prompt),
     Create(create::Create),
     Rename(rename::Rename),
@@ -86,6 +87,7 @@ pub enum Overlay {
 #[derive(Debug, Default)]
 pub struct Overlays {
     current: Option<Overlay>,
+    help_shortcuts: crate::config::Shortcuts,
 }
 
 #[cfg(feature = "terminal-graphics")]
@@ -118,6 +120,7 @@ impl Overlays {
                             Overlay::Confirm(c) => confirm::layout(area, c).is_some_and(|l| {
                                 in_word(l.yes, l.footer_y, x, y) || in_word(l.no, l.footer_y, x, y)
                             }),
+                            Overlay::Unsaved(_) => unsaved::click(rect, x, y).is_some(),
                             Overlay::TrashWarning(_) => trash_warning::click(rect, x, y).is_some(),
                             Overlay::Sort(p) => {
                                 y > rect.y && p.choose(usize::from(y - rect.y - 1)).is_some()
@@ -154,6 +157,7 @@ impl Overlays {
             Overlay::Help { .. } => help_rect(area),
             Overlay::Failure(_) | Overlay::Update(_) => failure::rect(area),
             Overlay::Confirm(prompt) => confirm::layout(area, prompt)?.rect,
+            Overlay::Unsaved(_) => unsaved::layout(area)?,
             Overlay::TrashWarning(_) => trash_warning::layout(area)?,
             Overlay::Create(_) => create::rect(area),
             Overlay::Rename(_) | Overlay::ConflictRename(_) => rename::rect(area),
@@ -176,6 +180,7 @@ pub enum Answer {
     /// outside the box.
     Closed,
     /// `y`/`enter` on a [`confirm::Confirm`].
+    EditorChanges(bool),
     Confirmed(Pending),
     RetryFailedDelete(Vec<PathBuf>),
     RetryFailedDeleteWithSudo(OpId),
@@ -213,7 +218,10 @@ pub enum Answer {
 
 impl Overlays {
     pub fn new() -> Self {
-        Self { current: None }
+        Self {
+            current: None,
+            help_shortcuts: crate::config::Shortcuts::default(),
+        }
     }
 
     /// Checked first by both the key and the mouse dispatch, so a key or a
@@ -244,6 +252,10 @@ impl Overlays {
         }));
     }
 
+    pub fn open_help_with_shortcuts(&mut self, shortcuts: &crate::config::Shortcuts) {
+        self.help_shortcuts = shortcuts.clone();
+        self.open_help();
+    }
     pub fn open_help(&mut self) {
         self.current = Some(Overlay::Help { scroll: 0 });
     }
@@ -256,6 +268,9 @@ impl Overlays {
         self.current = Some(Overlay::Sort(sort::Picker::new(order)));
     }
 
+    pub fn open_unsaved(&mut self, filename: String) {
+        self.current = Some(Overlay::Unsaved(filename));
+    }
     pub fn open_confirm(&mut self, c: confirm::Confirm) {
         self.current = Some(Overlay::Confirm(c));
     }
@@ -436,6 +451,11 @@ impl Overlays {
                 starkit::chrome::confirm::Answer::Quit => (true, Answer::Quit),
                 starkit::chrome::confirm::Answer::Waiting => (false, Answer::Consumed),
             },
+            Overlay::Unsaved(_) => match k.code {
+                KeyCode::Char('s') => (true, Answer::EditorChanges(true)),
+                KeyCode::Char('d') => (true, Answer::EditorChanges(false)),
+                _ => (false, Answer::Consumed),
+            },
             Overlay::TrashWarning(prompt) => match trash_warning::Prompt::key(k) {
                 Some(suppress_for_session) => (
                     true,
@@ -610,6 +630,15 @@ impl Overlays {
                 Some(_) => (false, Answer::Consumed),
                 None => (true, Answer::Closed),
             },
+            Overlay::Unsaved(_) => match unsaved::layout(area) {
+                Some(rect) if !inside(rect, x, y) => (true, Answer::Closed),
+                Some(rect) => match unsaved::click(rect, x, y) {
+                    Some(Some(save)) => (true, Answer::EditorChanges(save)),
+                    Some(None) => (true, Answer::Closed),
+                    None => (false, Answer::Consumed),
+                },
+                None => (true, Answer::Closed),
+            },
             Overlay::TrashWarning(prompt) => match trash_warning::layout(area) {
                 Some(rect) if !inside(rect, x, y) => (true, Answer::Closed),
                 Some(rect) => match trash_warning::click(rect, x, y) {
@@ -768,7 +797,16 @@ impl Overlays {
                     scroll: *scroll,
                     title: "keys",
                 }
-                .render(area, buf);
+                .render_with_keys(area, buf, |b| match b.action {
+                    crate::ui::keymap::Action::NextTheme => self.help_shortcuts.next_theme.clone(),
+                    crate::ui::keymap::Action::PrevTheme => {
+                        self.help_shortcuts.previous_theme.clone()
+                    }
+                    crate::ui::keymap::Action::TogglePresentation => {
+                        self.help_shortcuts.presentation.clone()
+                    }
+                    _ => b.keys.to_owned(),
+                });
                 None
             }
             Overlay::Update(notice) => {
@@ -781,6 +819,10 @@ impl Overlays {
             }
             Overlay::Confirm(c) => {
                 confirm::render(area, buf, theme, c);
+                None
+            }
+            Overlay::Unsaved(filename) => {
+                unsaved::render(area, buf, theme, filename);
                 None
             }
             Overlay::TrashWarning(prompt) => {
@@ -887,6 +929,7 @@ mod tests {
             |o: &mut Overlays| o.open_help(),
             |o: &mut Overlays| o.open_confirm(Confirm::clear_queue(2)),
             |o: &mut Overlays| o.open_trash_warning(trash_warning()),
+            |o: &mut Overlays| o.open_unsaved("notes.txt".into()),
             |o: &mut Overlays| o.open_rename(PathBuf::from("/tmp/a.txt")),
             |o: &mut Overlays| o.open_conflict(one_conflict()),
         ]

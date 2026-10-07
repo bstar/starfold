@@ -9,10 +9,11 @@ license=('MIT' 'LicenseRef-UnRAR')
 depends=('glibc' 'gcc-libs' 'ffmpeg' 'alsa-lib')
 makedepends=('rust>=1.92' 'git' 'clang' 'pkgconf')
 optdepends=('xdg-utils: open files with desktop applications'
-            'libvips: thumbnail very large images')
+            'libvips: thumbnail very large images'
+            'neovim: optional embedded text editor')
 options=('!lto' '!debug')
-source=("starfold-${pkgver}.tar.gz")
-sha256sums=('@SHA256@')
+source=("starfold-${pkgver}.tar.gz" "staramp-source::git+https://github.com/bstar/staramp.git#commit=@AMP_REV@")
+sha256sums=('@SHA256@' 'SKIP')
 
 _cargo_env() {
     export CARGO_HOME="${ARCH_CARGO_HOME:-$srcdir/cargo}"
@@ -24,11 +25,13 @@ prepare() {
     cd "$srcdir/starfold-$pkgver"
     _cargo_env
     cargo fetch --locked
+    CARGO_TARGET_DIR="$srcdir/target-amp" cargo fetch --manifest-path "$srcdir/staramp-source/Cargo.toml" --locked
 }
 
 build() {
     cd "$srcdir/starfold-$pkgver"
     _cargo_env
+    CARGO_TARGET_DIR="$srcdir/target-amp" cargo build --manifest-path "$srcdir/staramp-source/Cargo.toml" --release --frozen
     cargo build --workspace --release --frozen
 }
 
@@ -41,7 +44,8 @@ check() {
 package() {
     cd "$srcdir/starfold-$pkgver"
     install -Dm755 "$srcdir/target/release/starfold" "$pkgdir/usr/bin/starfold"
-    for helper in starfold-preview-pdf starfold-preview-video; do
+    install -Dm755 "$srcdir/target-amp/release/staramp" "$pkgdir/usr/bin/starfold-staramp"
+    for helper in starfold-preview-pdf starfold-preview-video starfold-preview-nvim; do
         install -Dm755 "$srcdir/target/release/$helper" "$pkgdir/usr/bin/$helper"
     done
     install -Dm644 packaging/starfold.desktop "$pkgdir/usr/share/applications/starfold.desktop"
@@ -55,4 +59,8 @@ package() {
     done
     install -Dm644 LICENSES/OFL-Liberation.txt "$pkgdir/usr/share/licenses/starfold/OFL-Liberation.txt"
     install -Dm644 README.md "$pkgdir/usr/share/doc/starfold/README.md"
+    cp -R documentation "$pkgdir/usr/share/doc/starfold/"
+    mkdir -p "$pkgdir/usr/share/licenses/starfold/STARAMP"
+    cp "$srcdir/staramp-source/LICENSE" "$pkgdir/usr/share/licenses/starfold/STARAMP/"
+    cp -R "$srcdir/staramp-source/LICENSES/". "$pkgdir/usr/share/licenses/starfold/STARAMP/"
 }

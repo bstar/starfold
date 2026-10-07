@@ -26,10 +26,8 @@
 //!
 //! The stack keeps at least [`STACK_MIN_ROWS`] and takes whatever is left
 //! over once the other two have what they want. PREVIEW is [`COLLAPSED_ROWS`]
-//! folded; open and unfocused it grows by `[ui] preview_rows`; open and
-//! focused it grows to as much as half the body. OPERATIONS is
-//! [`COLLAPSED_ROWS`] unless it is focused, in which case it grows to show up
-//! to `[ui] ops_rows` of the queue (one entry already shows in its folded
+//! folded; open it grows by `[ui] preview_rows`, independent of focus.
+//! OPERATIONS grows to show up to `[ui] ops_rows` of the queue (one entry already shows in its folded
 //! line, so the extra is `min(queued, ops_rows) - 1`). An op running in the
 //! background changes nothing here -- the module stays folded and its one
 //! line shows the bar instead of a queue count, which is the panel's business
@@ -226,11 +224,7 @@ impl LayoutState {
             STACK_MIN_ROWS + extra
         }
         .saturating_sub(tab_rows);
-        let ops_floor = if extra > 0 && self.focus != ModuleId::Operations {
-            2
-        } else {
-            collapsed_rows
-        };
+        let ops_floor = if extra > 0 { 2 } else { collapsed_rows };
         let room = body
             .height
             .saturating_sub(gutters + stack_min + collapsed_rows + ops_floor);
@@ -239,7 +233,7 @@ impl LayoutState {
         // focusing it is asking to see the queue, and a queue that could not
         // open because the preview had the room was the first thing a real
         // terminal showed to be wrong.
-        let ops_desired = if self.focus == ModuleId::Operations || (extra == 0 && self.ops_active) {
+        let ops_desired = if extra == 0 && (queued > 1 || self.ops_active) {
             // One entry of the queue already shows on the folded line.
             queued
                 .max(if self.ops_active { 2 } else { 1 })
@@ -268,12 +262,9 @@ impl LayoutState {
             9 // 13 outer rows: border + header + ten-row player body.
         } else if !self.preview_open {
             0
-        } else if self.focus == ModuleId::Preview {
-            // Up to half the body while focused, not capped by
-            // `preview_rows` -- the reader asked to look at it.
-            (body.height / 2).saturating_sub(collapsed_rows)
         } else {
-            self.preview_rows.min(room / 2)
+            self.native_preview_rows
+                .unwrap_or_else(|| self.preview_rows.min(room / 2))
         };
         let preview_extra = preview_desired.min(room - ops_extra);
 
@@ -321,13 +312,17 @@ impl LayoutState {
     }
 
     pub fn focus_next(&mut self) {
-        let i = (self.focus.index() + 1) % COLUMN.len();
-        self.focus_set(COLUMN[i]);
+        self.focus_set(match self.focus {
+            ModuleId::Stack => ModuleId::Preview,
+            ModuleId::Preview | ModuleId::Operations => ModuleId::Stack,
+        });
     }
 
     pub fn focus_prev(&mut self) {
-        let i = (self.focus.index() + COLUMN.len() - 1) % COLUMN.len();
-        self.focus_set(COLUMN[i]);
+        self.focus_set(match self.focus {
+            ModuleId::Stack | ModuleId::Operations => ModuleId::Preview,
+            ModuleId::Preview => ModuleId::Stack,
+        });
     }
 
     /// `i`: open PREVIEW if it was folded; fold it, landing focus on the
@@ -350,7 +345,14 @@ impl LayoutState {
         match m {
             ModuleId::Stack => true,
             ModuleId::Preview => self.preview_open,
-            ModuleId::Operations => self.focus == ModuleId::Operations || self.ops_active,
+            ModuleId::Operations => {
+                self.focus == ModuleId::Operations
+                    || self.ops_active
+                    || self.last.as_ref().is_some_and(|r| {
+                        r.rect_of(ModuleId::Operations).height
+                            > COLLAPSED_ROWS + starkit::chrome::frame::extra_rows()
+                    })
+            }
         }
     }
 }
@@ -412,14 +414,7 @@ mod tests {
             assert_eq!(layout.regions(area, (1, 0), count).unwrap(), &idle);
         }
         layout.focus_set(ModuleId::Operations);
-        assert!(
-            layout
-                .regions(area, (1, 0), 12)
-                .unwrap()
-                .rect_of(ModuleId::Operations)
-                .height
-                > idle.rect_of(ModuleId::Operations).height
-        );
+        assert_eq!(layout.regions(area, (1, 0), 12).unwrap(), &idle);
     }
 
     #[test]
@@ -567,42 +562,19 @@ mod tests {
         assert_eq!(STACK_MIN_ROWS, 12);
     }
 
-    /// OPERATIONS grows when focused, or when work is active.
     #[test]
-    fn operations_grows_only_while_focused() {
+    fn operations_allocation_is_independent_of_focus() {
         let mut s = state();
-        s.focus = ModuleId::Stack;
-        let r = s
-            .regions(Rect::new(0, 0, 100, 40), (0, 0), 9)
-            .cloned()
-            .unwrap();
-        assert_eq!(
-            r.rect_of(ModuleId::Operations).height,
-            COLLAPSED_ROWS,
-            "unfocused with nine queued still folded"
-        );
-        assert!(!s.is_open(ModuleId::Operations));
-
-        s.focus_set(ModuleId::Operations);
-        let r = s
-            .regions(Rect::new(0, 0, 100, 40), (0, 0), 9)
-            .cloned()
-            .unwrap();
-        assert_eq!(
-            r.rect_of(ModuleId::Operations).height,
-            COLLAPSED_ROWS + (9u16.min(s.ops_rows) - 1),
-            "focused, it opens up to ops_rows"
-        );
+        let area = Rect::new(0, 0, 100, 40);
+        let original = s.regions(area, (0, 0), 9).unwrap().clone();
         assert!(s.is_open(ModuleId::Operations));
-
-        // A queue of one is already shown on the folded line: no extra.
-        let mut s = state();
-        s.focus_set(ModuleId::Operations);
-        let r = s
-            .regions(Rect::new(0, 0, 100, 40), (0, 0), 1)
-            .cloned()
-            .unwrap();
-        assert_eq!(r.rect_of(ModuleId::Operations).height, COLLAPSED_ROWS);
+        for focus in COLUMN {
+            s.focus_set(focus);
+            let r = s.regions(area, (0, 0), 9).unwrap();
+            for pane in COLUMN {
+                assert_eq!(r.rect_of(pane), original.rect_of(pane));
+            }
+        }
     }
 
     #[test]
@@ -661,13 +633,16 @@ mod tests {
 
         s.focus_set(ModuleId::Preview);
         let r = s.regions(full, (0, 0), 0).cloned().unwrap();
-        let body_height = full.height - 1;
+        let body_height = COLLAPSED_ROWS + s.preview_rows;
         assert_eq!(
             r.rect_of(ModuleId::Preview).height,
-            body_height / 2,
-            "focused, it takes half the body"
+            body_height,
+            "focus preserves the allocated preview height"
         );
-        assert!(r.rect_of(ModuleId::Preview).height > COLLAPSED_ROWS + s.preview_rows);
+        assert_eq!(
+            r.rect_of(ModuleId::Preview).height,
+            COLLAPSED_ROWS + s.preview_rows
+        );
     }
 
     /// Focusing PREVIEW opens it; folding it while it has focus lands focus
@@ -692,17 +667,23 @@ mod tests {
     }
 
     #[test]
-    fn focus_next_and_prev_cycle_the_column() {
+    fn focus_next_and_prev_cycle_browser_and_preview() {
         let mut s = state();
         assert_eq!(s.focus(), ModuleId::Stack);
         s.focus_next();
         assert_eq!(s.focus(), ModuleId::Preview);
         s.focus_next();
-        assert_eq!(s.focus(), ModuleId::Operations);
-        s.focus_next();
         assert_eq!(s.focus(), ModuleId::Stack);
         s.focus_prev();
-        assert_eq!(s.focus(), ModuleId::Operations);
+        assert_eq!(s.focus(), ModuleId::Preview);
+        s.focus_prev();
+        assert_eq!(s.focus(), ModuleId::Stack);
+        s.focus_set(ModuleId::Operations);
+        s.focus_next();
+        assert_eq!(s.focus(), ModuleId::Stack);
+        s.focus_set(ModuleId::Operations);
+        s.focus_prev();
+        assert_eq!(s.focus(), ModuleId::Preview);
     }
 
     #[test]

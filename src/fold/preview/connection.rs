@@ -152,6 +152,11 @@ pub struct Connection {
         super::extensions::Provider,
         super::extensions::Session,
     )>,
+    parked_editor: Option<(
+        Identity,
+        super::extensions::Provider,
+        super::extensions::Session,
+    )>,
     viewport: starfold_preview_protocol::Viewport,
 }
 impl Connection {
@@ -163,7 +168,19 @@ impl Connection {
     }
     pub fn close(&mut self) {
         self.extension = None;
+        self.parked_editor = None;
         self.parser = None;
+    }
+    fn park_editor(&mut self) {
+        if self
+            .extension
+            .as_ref()
+            .is_some_and(|(_, _, s)| s.reusable && s.interactive && !s.modified)
+        {
+            self.parked_editor = self.extension.take();
+        } else {
+            self.extension = None;
+        }
     }
 
     pub fn build_scoped(
@@ -222,6 +239,24 @@ impl Connection {
         if let starfold_preview_protocol::Input::Viewport { viewport } = &input {
             self.viewport = viewport.clone();
         }
+        if let Some((identity, provider, _)) = self
+            .extension
+            .as_ref()
+            .filter(|(id, _, session)| id.path == path && session.interactive)
+        {
+            return self.extension_build(
+                path,
+                ExtensionRequest {
+                    identity: identity.clone(),
+                    provider: provider.clone(),
+                    page: 1,
+                    generation,
+                    input: Some(input),
+                },
+                cfg,
+                stale,
+            );
+        }
         let meta = match std::fs::symlink_metadata(path) {
             Ok(meta) => meta,
             Err(e) => {
@@ -267,14 +302,25 @@ impl Connection {
             input,
         } = request;
         self.parser = None;
+        let was_interactive = self
+            .extension
+            .as_ref()
+            .is_some_and(|(_, _, session)| session.interactive);
         let result = (|| -> anyhow::Result<Preview> {
-            let opened = if !self
-                .extension
-                .as_ref()
-                .is_some_and(|(id, p, _)| *id == identity && *p == provider)
-            {
-                self.extension = None;
-                let mut session = super::extensions::Session::spawn(&provider)?;
+            let opened = if !self.extension.as_ref().is_some_and(|(id, p, session)| {
+                (*id == identity || (id.path == identity.path && session.interactive))
+                    && *p == provider
+            }) {
+                self.park_editor();
+                let mut session = if self
+                    .parked_editor
+                    .as_ref()
+                    .is_some_and(|(_, p, _)| *p == provider)
+                {
+                    self.parked_editor.take().unwrap().2
+                } else {
+                    super::extensions::Session::spawn(&provider)?
+                };
                 let preview = session.open(path, generation, self.viewport.clone(), cfg, stale)?;
                 self.extension = Some((identity.clone(), provider, session));
                 Some(preview)
@@ -297,7 +343,15 @@ impl Connection {
                 }
             }
         })();
-        if stale() || Identity::read(path).ok().as_ref() != Some(&identity) {
+        let interactive = self
+            .extension
+            .as_ref()
+            .is_some_and(|(_, _, session)| session.interactive);
+        if stale()
+            || (!interactive
+                && !was_interactive
+                && Identity::read(path).ok().as_ref() != Some(&identity))
+        {
             self.extension = None;
             return None;
         }
@@ -336,14 +390,15 @@ impl Connection {
             .as_ref()
             .is_some_and(|(id, _, _)| id.path != path)
         {
-            self.extension = None;
+            self.park_editor();
         }
         let meta = match std::fs::symlink_metadata(path) {
             Ok(m) => m,
             Err(e) => return Some(Preview::Error(e.to_string())),
         };
         if meta.is_dir() {
-            self.close();
+            self.park_editor();
+            self.parser = None;
             let tree = super::directory::build(path, cfg, stale);
             return (!stale()).then_some(Preview::Dir(tree));
         }
@@ -401,7 +456,7 @@ impl Connection {
                 stale,
             );
         }
-        self.extension = None;
+        self.park_editor();
         if self.registry.disables_builtin(path, &head) {
             let mut d = providers::metadata(path);
             d.notice = Some("Preview extension disabled".into());

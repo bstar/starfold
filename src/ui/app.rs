@@ -322,6 +322,13 @@ pub struct App {
     preview_scroll: usize,
     pdf_requested: Option<(u64, u32)>,
     extension_response_seen: Option<(u64, u64)>,
+    extension_editor_inputs: std::collections::VecDeque<starfold_preview_protocol::Input>,
+    extension_editor_inflight: Option<(u64, u64)>,
+    extension_editor_polled: Option<Instant>,
+    extension_editor_closed_path: Option<PathBuf>,
+    extension_editor_transition: Option<preview_extensions::EditorTransition>,
+    extension_transition_wait: bool,
+    extension_resolving_changes: bool,
     extension_viewport_sent: Option<(u64, starfold_preview_protocol::Viewport)>,
     pending_preview_page: Option<u32>,
     ops_cursor: usize,
@@ -354,6 +361,8 @@ pub struct App {
     /// moving is what re-asks for one rather than every frame doing it.
     last_preview_for: Option<PathBuf>,
     last_preview_stamp: Option<(u64, Option<std::time::SystemTime>)>,
+    /// Keep Preview through focus changes until an explicit browser command.
+    preview_focus_navigation: Option<u64>,
     /// The one picture this application has scaled, and what it was scaled
     /// from -- see [`Scaled`].
     scaled: Option<Scaled>,
@@ -378,6 +387,9 @@ pub struct App {
 impl App {
     /// Capture the current filtered/sorted listing, never a filesystem rescan.
     fn activate_entry(&mut self) {
+        if self.editor_transition(preview_extensions::EditorTransition::Activate) {
+            return;
+        }
         let state = self.core.state();
         let Some(entry) = state.cursor_entry() else {
             return;
@@ -835,7 +847,9 @@ impl App {
         self.filter = None;
         self.core.send(Command::FocusPane(pane));
         self.layout.focus_set(ModuleId::Stack);
-        self.last_preview_for = None;
+        self.preview_focus_navigation = (self.last_preview_for.is_some()
+            || self.core.state().preview.is_some())
+        .then(|| self.core.state().navigation_generation());
         self.refresh();
     }
 
@@ -934,6 +948,13 @@ impl App {
             preview_scroll: 0,
             pdf_requested: None,
             extension_response_seen: None,
+            extension_editor_inputs: Default::default(),
+            extension_editor_inflight: None,
+            extension_editor_polled: None,
+            extension_editor_closed_path: None,
+            extension_editor_transition: None,
+            extension_transition_wait: false,
+            extension_resolving_changes: false,
             extension_viewport_sent: None,
             pending_preview_page: None,
             ops_cursor: 0,
@@ -954,6 +975,7 @@ impl App {
             tz: jiff::tz::TimeZone::system(),
             last_preview_for: None,
             last_preview_stamp: None,
+            preview_focus_navigation: None,
             scaled: None,
             picture_ids: Vec::new(),
             now_override: None,
@@ -1064,7 +1086,9 @@ impl App {
                             self.repaint = true;
                         }
                         TermEvent::Paste(text) => {
-                            if self.editor.is_some() {
+                            if self.extension_editor_paste(&text) {
+                                self.repaint = true;
+                            } else if self.editor.is_some() {
                                 self.editor_paste(&text);
                             } else if self.overlays.paste(&text) {
                                 self.repaint = true;
@@ -1219,7 +1243,37 @@ impl App {
         self.poll_editor();
 
         self.poll_audio();
+        self.extension_editor_pump();
+        self.editor_transition_pump();
+        if self.extension_interactive()
+            && self.extension_editor_transition.is_none()
+            && self.layout.is_open(ModuleId::Preview)
+            && self.preview_extension_poll_ready()
+        {
+            self.extension_input(starfold_preview_protocol::Input::Action {
+                action: "refresh".into(),
+            });
+        }
 
+        if self.extension_interactive() && self.last_preview_for.is_none() {
+            self.last_preview_for = self
+                .core
+                .state()
+                .preview
+                .as_ref()
+                .map(|(path, _)| path.clone());
+            self.last_preview_stamp = self
+                .core
+                .state()
+                .cursor_entry()
+                .map(|e| (e.len, e.modified));
+        }
+        if self
+            .preview_focus_navigation
+            .is_some_and(|generation| generation != self.core.state().navigation_generation())
+        {
+            self.preview_focus_navigation = None;
+        }
         // The preview follows the cursor: a change of entry (or the panel
         // opening on one it had not asked for yet) is what re-sends
         // `Command::Preview`, not every frame.
@@ -1229,10 +1283,14 @@ impl App {
             .cursor_entry()
             .map(|e| (e.len, e.modified));
         if self.editor.is_none()
+            && self.preview_focus_navigation.is_none()
             && !self.audio_here()
+            && self.extension_editor_transition.is_none()
+            && self.extension_editor_closed_path.as_ref() != self.view.cursor_path.as_ref()
             && self.layout.is_open(ModuleId::Preview)
             && (self.view.cursor_path != self.last_preview_for || stamp != self.last_preview_stamp)
         {
+            self.extension_editor_closed_path = None;
             self.last_preview_stamp = stamp;
             if self.preserve_preview_scroll {
                 self.preserve_preview_scroll = false;
@@ -1243,7 +1301,11 @@ impl App {
             self.pdf_requested = None;
             self.last_preview_for = self.view.cursor_path.clone();
             if let Some(path) = self.last_preview_for.clone() {
-                self.core.send(Command::Preview(path));
+                if !self
+                    .editor_transition(preview_extensions::EditorTransition::Preview(path.clone()))
+                {
+                    self.core.send(Command::Preview(path));
+                }
             }
         }
         if let Some(page) = self.pending_preview_page {
@@ -1273,7 +1335,13 @@ impl App {
                             let generation = self.core.state().preview_generation;
                             if self.pdf_requested != Some((generation, page)) {
                                 self.pdf_requested = Some((generation, page));
-                                if let Some(path) = self.view.cursor_path.clone() {
+                                let path = self
+                                    .core
+                                    .state()
+                                    .preview
+                                    .as_ref()
+                                    .map(|(path, _)| path.clone());
+                                if let Some(path) = path {
                                     self.core.send(Command::PreviewPage {
                                         path,
                                         generation,
@@ -1575,6 +1643,9 @@ impl App {
         // empty directory, one still loading -- whatever was built last is
         // for something else, and showing it would say the wrong thing.
         let (preview_name, preview) = match (&state.preview, state.cursor_entry()) {
+            (Some((path, p)), _) if p.extension().is_some_and(|info| info.interactive) => {
+                (Some(display_name(path)), Some(Arc::clone(p)))
+            }
             (Some((path, p)), Some(entry)) if path == &entry.path => {
                 (Some(display_name(path)), Some(Arc::clone(p)))
             }
@@ -1804,6 +1875,23 @@ impl App {
 
     pub fn key(&mut self, k: KeyEvent) {
         self.refresh();
+        if !self.overlays.is_open() {
+            if let Some(action) = keymap::resolve_configured(k, &self.cfg.ui.shortcuts) {
+                if matches!(
+                    action,
+                    Action::NextTheme | Action::PrevTheme | Action::TogglePresentation
+                ) || (action == Action::Quit
+                    && k.modifiers
+                        .contains(starkit::crossterm::event::KeyModifiers::CONTROL))
+                {
+                    self.act(action);
+                    return;
+                }
+            }
+        }
+        if self.extension_editor_key(k) {
+            return;
+        }
         if self.tab_picker.is_some() {
             let answer = self.tab_picker.as_mut().unwrap().key(k);
             self.tab_answer(answer);
@@ -1961,7 +2049,9 @@ impl App {
         }
 
         let module = self.layout.focus().module();
-        if let Some(action) = keymap::module(module, k).or_else(|| keymap::resolve(k)) {
+        if let Some(action) = keymap::module(module, k)
+            .or_else(|| keymap::resolve_configured(k, &self.cfg.ui.shortcuts))
+        {
             self.act(action);
         }
     }
@@ -1989,7 +2079,13 @@ impl App {
                 }
             }
             Answer::Consumed => return,
-            Answer::Closed => self.dnd_cancel_choice(),
+            Answer::Closed => {
+                self.extension_editor_transition = None;
+                self.extension_transition_wait = false;
+                self.extension_resolving_changes = false;
+                self.dnd_cancel_choice();
+            }
+            Answer::EditorChanges(save) => self.editor_resolve_changes(save),
             Answer::Confirmed(pending) => self.on_confirmed(pending),
             Answer::RetryFailedDelete(paths) => {
                 self.overlays
@@ -2031,7 +2127,7 @@ impl App {
             Answer::ConflictNames { op, targets } => {
                 self.core.send(Command::SetConflictNames(op, targets));
             }
-            Answer::Quit => self.quit = true,
+            Answer::Quit => self.act(Action::Quit),
         }
         // Completed actions may change underlying graphics. Navigation and
         // text entry use ordinary frame diffs, without clearing the screen.
@@ -2056,6 +2152,18 @@ impl App {
 
     /// One action -- the single place a key or a click becomes a change.
     fn act(&mut self, a: Action) {
+        if matches!(
+            a,
+            Action::Quit
+                | Action::TogglePreview
+                | Action::NewTab
+                | Action::CloseTab
+                | Action::NextTab
+                | Action::PreviousTab
+        ) && self.editor_transition(preview_extensions::EditorTransition::Action(a))
+        {
+            return;
+        }
         match a {
             Action::NewTab => self.tab_action(super::tabs::Action::New),
             Action::CloseTab => {
@@ -2110,7 +2218,18 @@ impl App {
             }
 
             Action::FocusNext | Action::FocusPrev if self.commander => {
-                self.focus_pane(1 - self.active_pane);
+                let forward = a == Action::FocusNext;
+                match (self.layout.focus(), self.active_pane, forward) {
+                    (ModuleId::Stack, 0, true) | (ModuleId::Preview, _, false) => {
+                        self.focus_pane(1)
+                    }
+                    (ModuleId::Stack, _, true)
+                    | (ModuleId::Stack, 0, false)
+                    | (ModuleId::Operations, _, false) => self.layout.focus_set(ModuleId::Preview),
+                    (ModuleId::Preview, _, true)
+                    | (ModuleId::Stack, _, false)
+                    | (ModuleId::Operations, _, true) => self.focus_pane(0),
+                }
             }
             Action::FocusNext => self.layout.focus_next(),
             Action::FocusPrev => self.layout.focus_prev(),
@@ -2158,9 +2277,13 @@ impl App {
             Action::GoRoot => self.core.send(Command::Push(PathBuf::from("/"))),
             Action::OpenExternal => {
                 let path = if self.layout.focus() == ModuleId::Preview {
-                    self.audio_path
-                        .clone()
-                        .or_else(|| self.view.cursor_path.clone())
+                    self.audio_path.clone().or_else(|| {
+                        self.core
+                            .state()
+                            .preview
+                            .as_ref()
+                            .map(|(path, _)| path.clone())
+                    })
                 } else {
                     self.view.cursor_path.clone()
                 };
@@ -2287,6 +2410,7 @@ impl App {
             }
 
             Action::TogglePreview => {
+                self.preview_focus_navigation = None;
                 if self.layout.is_open(ModuleId::Preview) {
                     self.core.send(Command::ClosePreview);
                     self.last_preview_for = None;
@@ -2311,11 +2435,37 @@ impl App {
 
             Action::NextPictureScale => self.cycle_picture_scale(),
 
+            Action::TogglePresentation => {
+                #[cfg(feature = "terminal-graphics")]
+                if let Some(state) = self.graphical.as_mut() {
+                    if state.presentation_switch {
+                        state.effects.push(
+                            starkit::terminal_graphics::protocol::ServerMessage::TogglePresentation,
+                        );
+                    } else {
+                        self.note = Some((
+                            "This frontend does not support live presentation switching".into(),
+                            NoteLevel::Warning,
+                            Instant::now(),
+                        ));
+                    }
+                }
+                #[cfg(not(feature = "terminal-graphics"))]
+                {
+                    self.note = Some((
+                        "This build supports cell presentation only".into(),
+                        NoteLevel::Warning,
+                        Instant::now(),
+                    ));
+                }
+                self.repaint = true;
+            }
             Action::NextTheme => self.cycle_theme(true),
             Action::PrevTheme => self.cycle_theme(false),
 
             Action::Help => {
-                self.overlays.open_help();
+                self.overlays
+                    .open_help_with_shortcuts(&self.cfg.ui.shortcuts);
                 self.repaint = true;
             }
             Action::Quit => {
@@ -2548,6 +2698,10 @@ impl App {
             MouseEventKind::ScrollUp => Some(("scroll_up", 0)),
             MouseEventKind::Down(MouseButton::Left) => Some(("down", 0)),
             MouseEventKind::Up(MouseButton::Left) => Some(("up", 0)),
+            MouseEventKind::Drag(MouseButton::Left) => Some(("drag", 0)),
+            MouseEventKind::Down(MouseButton::Right) => Some(("down", 1)),
+            MouseEventKind::Up(MouseButton::Right) => Some(("up", 1)),
+            MouseEventKind::Drag(MouseButton::Right) => Some(("drag", 1)),
             _ => None,
         };
         if let Some((action, button)) = extension_pointer {
@@ -2881,7 +3035,8 @@ impl App {
         if let Some(hit) = status_hit(regions.status, &view, x, y) {
             match hit {
                 status::Hit::Help => {
-                    self.overlays.open_help();
+                    self.overlays
+                        .open_help_with_shortcuts(&self.cfg.ui.shortcuts);
                     self.repaint = true;
                 }
                 status::Hit::Progress => {
@@ -3217,6 +3372,7 @@ impl App {
                     ("x", "remove"),
                     ("esc", "remove waiting"),
                 ],
+                ModuleId::Preview if self.extension_interactive() => &[("F6", "browser")],
                 ModuleId::Preview if self.audio_here() => &[
                     ("space", "pause"),
                     ("[/]", "track"),
@@ -4782,6 +4938,107 @@ mod tests {
         fk.pump();
         app.tick();
         assert_eq!(app.view.cursor, before + 1);
+    }
+
+    #[test]
+    fn commander_tabbing_cycles_both_panes_and_preview_in_both_directions() {
+        let (mut app, fake, _) = app();
+        app.key(key('v'));
+        fake.pump();
+        app.tick();
+        assert!(app.commander);
+        for (module, pane) in [
+            (ModuleId::Stack, 1),
+            (ModuleId::Preview, 1),
+            (ModuleId::Stack, 0),
+        ] {
+            app.key(code(KeyCode::Tab));
+            app.tick();
+            assert_eq!((app.layout.focus(), app.active_pane), (module, pane));
+        }
+        for (module, pane) in [
+            (ModuleId::Preview, 0),
+            (ModuleId::Stack, 1),
+            (ModuleId::Stack, 0),
+        ] {
+            app.key(code(KeyCode::BackTab));
+            app.tick();
+            assert_eq!((app.layout.focus(), app.active_pane), (module, pane));
+        }
+    }
+
+    #[test]
+    fn commander_focus_preserves_preview_until_deliberate_navigation() {
+        let (mut app, fake, _) = app();
+        let left = fake.home().join("left-preview");
+        let right = fake.home().join("right-preview");
+        std::fs::create_dir(&left).unwrap();
+        std::fs::create_dir(&right).unwrap();
+        let source = left.join("source.txt");
+        std::fs::write(&source, "left preview\n").unwrap();
+        std::fs::write(right.join("a.txt"), "right first\n").unwrap();
+        std::fs::write(right.join("b.txt"), "right second\n").unwrap();
+        app.core.send(Command::RestoreCommander {
+            dirs: [left, right.clone()],
+            active: 0,
+            enabled: true,
+        });
+        fake.pump();
+        app.tick();
+        fake.pump();
+        app.tick();
+        let generation = app.core.state().preview_generation;
+        assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
+        app.key(code(KeyCode::Tab));
+        fake.pump();
+        app.tick();
+        assert_eq!(app.active_pane, 1);
+        assert_eq!(app.core.state().preview_generation, generation);
+        assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
+        app.key(code(KeyCode::Tab));
+        app.tick();
+        assert_eq!(app.layout.focus(), ModuleId::Preview);
+        assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
+        app.key(code(KeyCode::BackTab));
+        app.key(key('j'));
+        app.tick();
+        fake.pump();
+        app.tick();
+        assert_eq!(
+            app.core.state().preview.as_ref().unwrap().0,
+            right.join("b.txt")
+        );
+        app.key(code(KeyCode::F(7)));
+        assert_eq!(app.layout.focus(), ModuleId::Preview);
+    }
+
+    #[test]
+    fn commander_focus_keeps_inflight_preview_when_other_pane_finishes_listing() {
+        let (mut app, fake, _) = app();
+        let source = fake.fixture.path("projects/starwire/src/main.rs");
+        app.core.send(Command::RestoreCommander {
+            dirs: [
+                fake.fixture.path("projects/starwire/src"),
+                fake.fixture.path("projects/starwire"),
+            ],
+            active: 0,
+            enabled: true,
+        });
+        app.core.send(Command::Preview(source.clone()));
+        app.last_preview_for = Some(source.clone());
+        app.refresh();
+        let generation = app.core.state().preview_generation;
+        app.key(code(KeyCode::Tab));
+        // Both the preview and the new pane's nonempty listing complete later.
+        fake.pump();
+        app.tick();
+        assert!(!app.panes[1].rows.is_empty());
+        assert_eq!(app.core.state().preview_generation, generation);
+        assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
+        app.key(code(KeyCode::Tab));
+        app.tick();
+        assert_eq!(app.layout.focus(), ModuleId::Preview);
+        assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
     }
 
     #[test]

@@ -42,7 +42,7 @@ use starkit::image::imageops::FilterType;
 use starkit::image::RgbaImage;
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::Style;
+use starkit::ratatui::style::{Modifier, Style};
 
 use super::{empty, fit, rgb, width_of, words, ModuleId};
 use crate::config::Scale;
@@ -320,6 +320,51 @@ pub fn render(
             None
         }
         Preview::Document(d) => {
+            if let Some(grid) = d.cells.as_ref().filter(|_| !v.theme.graphical_rows) {
+                let content = below_meta(body);
+                for y in 0..grid.rows.min(content.height) {
+                    for x in 0..grid.columns.min(content.width) {
+                        let cell = &grid.cells
+                            [usize::from(y) * usize::from(grid.columns) + usize::from(x)];
+                        let mut style = Style::default()
+                            .fg(starkit::ratatui::style::Color::Rgb(
+                                cell.foreground[0],
+                                cell.foreground[1],
+                                cell.foreground[2],
+                            ))
+                            .bg(starkit::ratatui::style::Color::Rgb(
+                                cell.background[0],
+                                cell.background[1],
+                                cell.background[2],
+                            ));
+                        for (mask, modifier) in [
+                            (1, Modifier::BOLD),
+                            (2, Modifier::ITALIC),
+                            (4, Modifier::UNDERLINED),
+                            (8, Modifier::CROSSED_OUT),
+                        ] {
+                            if cell.modifiers & mask != 0 {
+                                style = style.add_modifier(modifier);
+                            }
+                        }
+                        if v.focused && grid.cursor == Some([x, y]) {
+                            style = style.add_modifier(Modifier::REVERSED);
+                        }
+                        let target = &mut buf[(content.x + x, content.y + y)];
+                        target
+                            .set_symbol(if cell.symbol.is_empty() {
+                                " "
+                            } else {
+                                &cell.symbol
+                            })
+                            .set_style(style);
+                        if cell.symbol.is_empty() {
+                            target.set_diff_option(starkit::ratatui::buffer::CellDiffOption::Skip);
+                        }
+                    }
+                }
+                return None;
+            }
             if let Some(image) = &d.image {
                 let label = d
                     .fields

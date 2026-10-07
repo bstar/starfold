@@ -8,7 +8,7 @@ license = "MIT"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-starkit = { git = "https://github.com/bstar/starkit", rev = "bd4949ca970dfb109e8a14b07e617f62ad35ca63", version = "0.3", default-features = false }
+starkit = { git = "https://github.com/bstar/starkit", rev = "2f45c8dbcc4ffe738c01514c31267a514c8a6d73", version = "0.3", default-features = false }
 
 [dev-dependencies]
 proptest = "1"

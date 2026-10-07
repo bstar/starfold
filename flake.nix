@@ -5,7 +5,7 @@
     nixpkgs.url = "nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     staramp-native = {
-      url = "github:bstar/staramp/815fc160402dae1f8bf60d0bd9dfb16476b81e24";
+      url = "github:bstar/staramp/9acbe60ffa28f51dc5c8fda745b439d8e58b1cdc";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-utils.follows = "flake-utils";
     };
@@ -150,6 +150,7 @@
             # freedesktop assets, which mean nothing on macOS.
             postInstall = ''
               install -Dm644 NOTICE $out/share/doc/starfold/NOTICE
+              cp -R documentation $out/share/doc/starfold/
               for media_license in LICENSES/ffmpeg-*.txt LICENSES/Hayro-*.txt; do
                 install -Dm644 "$media_license" "$out/share/licenses/starfold/$(basename "$media_license")"
               done
@@ -174,8 +175,8 @@
           };
       in
       {
-        packages.default = mkStarfold { };
-        packages.starfold = mkStarfold { };
+        packages.default = self.packages.${system}.graphical-host;
+        packages.starfold = self.packages.${system}.graphical-host;
         # Both local and remote graphical packages are native Rust.
         packages.graphical-host = pkgs.symlinkJoin {
           name = "starfold-graphical-host-${cargoToml.package.version}";

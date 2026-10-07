@@ -15,7 +15,16 @@ pub fn executable() -> PathBuf {
         }
     }
     #[cfg(not(bundled_staramp))]
-    PathBuf::from("staramp")
+    {
+        if let Some(path) = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("starfold-staramp")))
+            .filter(|p| p.is_file())
+        {
+            return path;
+        }
+        PathBuf::from("staramp")
+    }
 }
 
 pub fn command() -> std::process::Command {

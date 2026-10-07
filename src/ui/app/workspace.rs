@@ -324,6 +324,17 @@ impl App {
         self.tab_action(TabAction::Switch(id));
     }
     pub(super) fn tab_action(&mut self, action: TabAction) {
+        if matches!(
+            action,
+            TabAction::New
+                | TabAction::Switch(_)
+                | TabAction::Close(_)
+                | TabAction::Reopen
+                | TabAction::Duplicate(_)
+        ) && self.editor_transition(super::preview_extensions::EditorTransition::Tab(action))
+        {
+            return;
+        }
         if self.dnd.drag_active || self.dnd.choice.is_some() {
             return;
         }

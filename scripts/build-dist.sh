@@ -20,11 +20,11 @@ if [ "$target" = arch ]; then
     -e DIST_UID="$(id -u)" -e DIST_GID="$(id -g)" \
     archlinux:latest bash -c '
       set -euo pipefail
-      pacman -Syu --needed --noconfirm base-devel rust git ffmpeg alsa-lib clang pkgconf
+      pacman -Syu --needed --noconfirm base-devel rust git ffmpeg alsa-lib clang pkgconf python
       useradd --create-home builder
       mkdir /home/builder/starfold
       tar -C /src -cf - Cargo.toml Cargo.lock extensions build.rs flake.nix flake.lock src tests \
-        testdata vendor packaging scripts docs .github README.md LICENSE NOTICE LICENSES \
+        testdata vendor packaging scripts docs documentation .github README.md LICENSE NOTICE LICENSES \
         | tar -C /home/builder/starfold -xf -
       chown -R builder:builder /home/builder/starfold /out
       cleanup() { chown -R "$DIST_UID:$DIST_GID" /out; }

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Themes and ownership · STAR/FOLD</title><link rel="stylesheet" href="style.css"></head><body><a class="skip" href="#content">Skip to content</a><aside><a class="brand" href="index.html">STAR/FOLD</a><p>Preview extensions · v1</p><nav aria-label="Documentation"><a href="index.html">Overview</a><a href="extensions.html">Build an extension</a><a href="selection.html">File-type hierarchy</a><a href="themes.html" aria-current="page">Themes and ownership</a><a href="video.html">Video example</a><a href="nvim.html">Embedded Neovim</a><a href="presentation.html">Presentation and shortcuts</a></nav></aside><main id="content"><header><p class="eyebrow">DEVELOPER DOCUMENTATION</p><h1>Themes and ownership</h1><p class="subtitle">A shared palette, with pane chrome kept outside extensions.</p></header><h2>What the host sends</h2><pre><code class="language-json">{
+  &quot;width&quot;: 800,
+  &quot;height&quot;: 600,
+  &quot;foreground&quot;: &quot;#cdd6f4&quot;,
+  &quot;background&quot;: &quot;#1e1e2e&quot;
+}</code></pre><p>Open includes this viewport. Input::Viewport updates it when dimensions or colors change. Width and height are pixel dimensions of the available content. Providers should redraw their content and discard size-dependent caches when necessary.</p>
+<h2>Who chooses colors?</h2><table><thead><tr><th>Presentation</th><th>Theme behavior</th></tr></thead><tbody><tr><td>Plain text/fields</td><td>FOLD applies its semantic theme roles.</td></tr><tr><td>Native surface</td><td>The extension explicitly colors its primitives using the supplied foreground/background. The host validates and places the surface.</td></tr><tr><td>PDF raster</td><td>Hayro preserves document colors and uses white paper; it does not recolor PDF content to match the app.</td></tr><tr><td>Movie content</td><td>Preserves media colors.</td></tr><tr><td>Movie timeline/details</td><td>FOLD uses panel background, accent and muted text roles.</td></tr><tr><td>AMP controls</td><td>AMP receives seven roles: background, foreground, muted, accent, selected, border and error.</td></tr></tbody></table>
+<p>The general extension contract currently exposes only foreground and background, not AMP's richer palette. A native surface must provide literal colors; there is no automatic substitution of semantic tokens.</p>
+<h2>Example surface</h2><pre><code class="language-rust">let mut surface = starkit::native_surface::Surface::new(
+    width, height, viewport.background.clone(),
+);
+surface.text(
+    starkit::native_surface::PixelRect::new(0, 0, width, 20),
+    &quot;Read-only content&quot;, &amp;viewport.foreground, 14, false,
+);
+// Return the surface plus a TextPage fallback inside Presentation.</code></pre><p>FOLD owns borders, titles, focus indicators, pane padding, status/footer and popup layers. Keep extension primitives inside the supplied content area. Do not recreate terminal chrome or emit terminal controls.</p><footer>Local documentation · Sources and examples are linked relative to this checkout.</footer></main></body></html>

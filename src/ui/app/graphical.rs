@@ -10,6 +10,7 @@ pub(super) struct State {
     pub effects: Vec<ServerMessage>,
     pub output_pending: bool,
     pub(super) cell_mode: bool,
+    pub(super) presentation_switch: bool,
     pub(super) animated_images: bool,
     pub(super) surface_mode: bool,
     padded_chrome: bool,
@@ -18,6 +19,7 @@ pub(super) struct State {
     pub(super) base_scrollbars: Vec<Component>,
     placements: Vec<starkit::terminal_graphics::placement::Placement>,
     viewport: Option<Viewport>,
+    preserved_preview: Option<(u16, u16)>,
     pointer_capture: Option<starkit::terminal_graphics::placement::Placement>,
     video_capable: bool,
     video_player: bool,
@@ -65,7 +67,7 @@ pub(super) struct State {
 }
 impl State {
     pub(super) fn can_play_video(&self) -> bool {
-        self.video_capable && !self.cell_mode
+        self.video_capable
     }
     pub(super) fn drag_sources(&self) -> Option<(usize, Vec<PathBuf>)> {
         self.drag.as_ref().map(|d| (d.stack, d.sources.clone()))
@@ -613,11 +615,7 @@ impl App {
     }
 
     fn graphical_image(&mut self, scene: &mut Scene, regions: &Regions) {
-        if self.graphical.as_ref().unwrap().cell_mode
-            || self.editor.is_some()
-            || self.audio_here()
-            || !self.layout.preview_open
-        {
+        if self.editor.is_some() || self.audio_here() || !self.layout.preview_open {
             return;
         }
         let source = match self.view.preview.as_deref() {
@@ -960,13 +958,37 @@ fn native_header(
 }
 
 impl Controller for App {
+    fn supports_presentation_switch(&self) -> bool {
+        true
+    }
+    fn presentation(&mut self, cells: bool) {
+        let state = self.graphical.as_mut().unwrap();
+        state.preserved_preview = self
+            .layout
+            .last
+            .as_ref()
+            .zip(state.viewport)
+            .map(|(r, v)| (r.rect_of(ModuleId::Preview).height, v.rows));
+        state.cell_mode = cells;
+        state.placements.clear();
+        state.pointer_capture = None;
+        state.base_buffer = None;
+        state.base_scrollbars.clear();
+        state.resize_handle = None;
+        state.preview_resize = None;
+        self.layout.last = None;
+        self.extension_viewport_sent = None;
+        self.bars.release();
+        self.repaint = true;
+        self.graphics
+            .set_mode(if cells { Mode::Blocks } else { Mode::Off });
+    }
     fn frame_interval(&self) -> Duration {
         let graphics = self.graphical.as_ref().unwrap();
         if graphics.rendered_version != self.seen_version
             || (self.layout.preview_open
                 && self.editor.is_none()
                 && !self.audio_here()
-                && !graphics.cell_mode
                 && graphics
                     .thumbnail
                     .as_ref()
@@ -1026,6 +1048,13 @@ impl Controller for App {
             self.close_audio_relay();
             self.graphical.as_mut().unwrap().audio_local = false;
         }
+        if capabilities.audio_relay && !capabilities.local_media && !self.audio_here() {
+            if let Err(error) = self.audio.set_audio_local(true) {
+                self.audio_error = Some(error);
+            } else {
+                self.graphical.as_mut().unwrap().audio_local = true;
+            }
+        }
         // A new presentation connection needs a fresh audio epoch and credits.
         if capabilities.audio_relay && self.graphical.as_ref().is_some_and(|s| s.audio_local) {
             self.close_audio_relay();
@@ -1039,8 +1068,11 @@ impl Controller for App {
         self.graphical.as_mut().unwrap().local_media = capabilities.local_media;
         self.graphical.as_mut().unwrap().audio_relay_capable =
             capabilities.audio_relay && !capabilities.local_media;
-        let cells = capabilities.image_transport
-            == starkit::terminal_graphics::capabilities::ImageTransport::None;
+        self.graphical.as_mut().unwrap().presentation_switch = capabilities.presentation_switch;
+        let cells = capabilities.cell_presentation.unwrap_or(
+            capabilities.image_transport
+                == starkit::terminal_graphics::capabilities::ImageTransport::None,
+        );
         self.graphical.as_mut().unwrap().cell_mode = cells;
         let state = self.graphical.as_mut().unwrap();
         if state.animated_images != capabilities.animated_images {
@@ -1149,6 +1181,12 @@ impl Controller for App {
         // can stay subtle while labels retain readable text contrast.
         self.theme.graphical_rows = !state.cell_mode;
         let _chrome = starkit::chrome::frame::padding_scope(state.padded_chrome);
+        if let Some((height, rows)) = state.preserved_preview.take() {
+            self.layout.native_preview_rows = Some(
+                ((u32::from(height) * u32::from(viewport.rows) / u32::from(rows.max(1))) as u16)
+                    .saturating_sub(layout::COLLAPSED_ROWS + starkit::chrome::frame::extra_rows()),
+            );
+        }
         self.audio_cell_size = Some((
             (viewport.width / u32::from(viewport.columns)).clamp(1, 64) as u16,
             (viewport.height / u32::from(viewport.rows)).clamp(1, 128) as u16,
@@ -1616,7 +1654,11 @@ impl Controller for App {
         self.graphical_image(&mut scene, &regions);
         if self.layout.preview_open {
             if let Some(Preview::Document(d)) = self.view.preview.as_deref() {
-                if let Some(surface) = &d.surface {
+                if let Some(surface) = d
+                    .surface
+                    .as_ref()
+                    .filter(|_| !self.graphical.as_ref().unwrap().cell_mode)
+                {
                     scene.components.push(Component::Surface {
                         rect: extension_rect.into(),
                         surface: surface.as_ref().clone(),
@@ -1732,6 +1774,7 @@ impl Controller for App {
                         foreground: hex(self.theme.fg),
                         background: hex(self.theme.panel_bg),
                         bold: false,
+                        modifiers: 0,
                     });
                 }
             }
@@ -1758,6 +1801,7 @@ impl Controller for App {
                     foreground: hex(self.theme.fg),
                     background: hex(self.theme.panel_bg),
                     bold: line == 0,
+                    modifiers: 0,
                 });
             }
         }
@@ -2029,6 +2073,11 @@ impl Controller for App {
             }
             return;
         }
+        if let Input::Paste { text } = &input {
+            if self.extension_editor_paste(text) {
+                return;
+            }
+        }
         match input {
             Input::Notice { message } => {
                 if let Some(body) = message.strip_prefix("STARFOLD_UPDATE\n") {
@@ -2199,7 +2248,9 @@ impl Controller for App {
                         drag.started = true;
                     }
                 }
-                if matches!(kind, Some("M" | "E" | "R")) {
+                if matches!(kind, Some("M" | "E" | "R"))
+                    || (kind == Some("e") && !self.dnd.drag_active)
+                {
                     self.graphical.as_mut().unwrap().drag = None;
                     self.graphical.as_mut().unwrap().pointer_capture = None;
                 }
@@ -2368,7 +2419,7 @@ impl App {
 
     pub(super) fn audio_output_word(&self) -> Option<panels::Word> {
         let state = self.graphical.as_ref()?;
-        (self.audio_here() && state.audio_relay_capable && !state.cell_mode)
+        (self.audio_here() && state.audio_relay_capable)
             .then_some(panels::Word::AudioOutput(state.audio_local))
     }
     pub(super) fn close_audio_relay(&mut self) {
@@ -2410,7 +2461,6 @@ impl App {
     pub(super) fn video_words(&self) -> Option<Vec<panels::Word>> {
         let state = self.graphical.as_ref()?;
         if !state.video_capable
-            || state.cell_mode
             || !matches!(self.view.preview.as_deref(), Some(Preview::Video { .. }))
         {
             return None;
@@ -3438,6 +3488,7 @@ impl App {
             "Subtitles".into()
         };
         let request = crate::video_transport::Request {
+            cells: state.cell_mode.then_some([width, height]),
             width: width.saturating_mul(cw),
             height: height.saturating_mul(ch),
             theme: crate::audio_embed::Palette {
@@ -3484,6 +3535,11 @@ impl App {
             .video_picker_controls
             .get_or_insert_with(crate::video_transport::Client::new);
         if let Some(surface) = helper.render(request.clone()) {
+            if state.cell_mode {
+                if let Some(cells) = helper.cells(&request) {
+                    transport_cell_spans(scene, rect, &cells);
+                }
+            }
             // Menu marker creates a dedicated overlay placement in ordinary Preview.
             if state.video_fullscreen.is_none() {
                 scene.components.push(Component::Menu { rect: rect.into() });
@@ -3528,8 +3584,8 @@ impl App {
         if rect.height < 3 {
             return;
         }
-        let controls_rect =
-            (rect.height >= 6).then(|| Rect::new(rect.x, rect.bottom() - 2, rect.width, 2));
+        let controls_rect = (rect.height >= 6)
+            .then(|| Rect::new(rect.x, rect.bottom() - 2, rect.width.min(256), 2));
         rect.y += rect.height - if controls_rect.is_some() { 3 } else { 1 };
         rect.height = 1;
         let state = self.graphical.as_mut().unwrap();
@@ -3558,6 +3614,21 @@ impl App {
             },
             hex(self.theme.accent),
         );
+        if state.cell_mode {
+            scene.components.push(Component::Meter {
+                rect: rect.into(),
+                value: if poster.duration > 0. {
+                    (position / poster.duration * 1000.).clamp(0., 1000.) as u16
+                } else {
+                    0
+                },
+                foreground: hex(self.theme.accent),
+                background: hex(self.theme.border),
+            });
+            scene
+                .spans
+                .retain(|s| s.y != rect.y || s.x < rect.x || s.x >= rect.right());
+        }
         scene.components.push(Component::Surface {
             rect: rect.into(),
             surface,
@@ -3578,6 +3649,20 @@ impl App {
                 text.push_str(&format!(" · {warning}"));
             }
             let info = Rect::new(rect.x, rect.y.saturating_sub(1), rect.width, 1);
+            if state.cell_mode {
+                scene
+                    .spans
+                    .retain(|s| s.y != info.y || s.x < info.x || s.x >= info.right());
+                scene.spans.push(Span {
+                    x: info.x,
+                    y: info.y,
+                    text: starkit::text::truncate(&text, usize::from(info.width)),
+                    foreground: hex(self.theme.dim),
+                    background: hex(self.theme.panel_bg),
+                    bold: false,
+                    modifiers: 0,
+                });
+            }
             let mut surface = starkit::native_surface::Surface::new(
                 info.width.saturating_mul(cw).max(1),
                 ch.max(1),
@@ -3598,6 +3683,9 @@ impl App {
         if let Some(controls_rect) = controls_rect {
             let rgb = |c: starkit::theme::color::Rgb| [c.r, c.g, c.b];
             let request = crate::video_transport::Request {
+                cells: state
+                    .cell_mode
+                    .then_some([controls_rect.width, controls_rect.height]),
                 width: controls_rect.width.saturating_mul(cw).clamp(1, 8192),
                 height: controls_rect.height.saturating_mul(ch).clamp(1, 128),
                 theme: crate::audio_embed::Palette {
@@ -3630,6 +3718,11 @@ impl App {
                 .video_controls
                 .get_or_insert_with(crate::video_transport::Client::new);
             if let Some(surface) = controls.render(request.clone()) {
+                if state.cell_mode {
+                    if let Some(cells) = controls.cells(&request) {
+                        transport_cell_spans(scene, controls_rect, &cells);
+                    }
+                }
                 scene.components.push(Component::Surface {
                     rect: controls_rect.into(),
                     surface,
@@ -3650,8 +3743,96 @@ impl App {
     }
 }
 
+fn transport_cell_spans(
+    scene: &mut Scene,
+    rect: Rect,
+    grid: &crate::video_transport::CellTransport,
+) {
+    for y in 0..grid.rows.min(rect.height) {
+        let mut covered_until = 0;
+        for x in 0..grid.columns.min(rect.width) {
+            let cell = &grid.cells[usize::from(y) * usize::from(grid.columns) + usize::from(x)];
+            if x < covered_until {
+                continue;
+            }
+            covered_until = x.saturating_add(starkit::wrap::width_of(&cell.symbol));
+            let hex = |[r, g, b]: [u8; 3]| format!("#{r:02x}{g:02x}{b:02x}");
+            scene.spans.push(Span {
+                x: rect.x + x,
+                y: rect.y + y,
+                text: cell.symbol.clone(),
+                foreground: hex(cell.fg),
+                background: hex(cell.bg),
+                bold: false,
+                modifiers: cell.modifiers,
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn switching_presentation_preserves_controller_state_and_theme_shortcuts() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        fake.pump();
+        app.refresh();
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().presentation_switch = true;
+        app.graphical.as_mut().unwrap().video_capable = true;
+        let viewport = Viewport::default();
+        Controller::scene(&mut app, viewport);
+        let cursor = app.view.cursor_path.clone();
+        let theme = app.theme_name.clone();
+        Controller::input(
+            &mut app,
+            Input::Key {
+                code: "f:8".into(),
+                modifiers: 0,
+            },
+        );
+        assert_ne!(app.theme_name, theme);
+        Controller::input(
+            &mut app,
+            Input::Key {
+                code: "f:9".into(),
+                modifiers: 0,
+            },
+        );
+        assert!(Controller::effects(&mut app)
+            .iter()
+            .any(|e| matches!(e, ServerMessage::TogglePresentation)));
+        Controller::presentation(&mut app, true);
+        assert!(app.graphical.as_ref().unwrap().cell_mode);
+        assert!(app.graphical.as_ref().unwrap().can_play_video());
+        assert_eq!(app.view.cursor_path, cursor);
+        let cells = Controller::scene(
+            &mut app,
+            Viewport {
+                generation: 2,
+                ..viewport
+            },
+        );
+        assert!(cells.placements.is_empty());
+        Controller::presentation(&mut app, false);
+        Controller::scene(
+            &mut app,
+            Viewport {
+                generation: 3,
+                ..viewport
+            },
+        );
+        assert_eq!(app.view.cursor_path, cursor);
+    }
+
     #[test]
     fn missing_saved_video_is_reported_and_does_not_retry_forever() {
         let cfg = Config::default();
@@ -3840,7 +4021,10 @@ mod tests {
             Some(panels::Word::AudioOutput(true))
         );
         app.graphical.as_mut().unwrap().cell_mode = true;
-        assert!(app.audio_output_word().is_none());
+        assert_eq!(
+            app.audio_output_word(),
+            Some(panels::Word::AudioOutput(true))
+        );
     }
 
     #[test]
@@ -4753,14 +4937,14 @@ mod tests {
             );
             app.layout.focus_set(ModuleId::Operations);
             let scene = Controller::scene(&mut app, viewport);
-            assert!(
+            assert_eq!(
                 app.layout
                     .last
                     .as_ref()
                     .unwrap()
                     .rect_of(ModuleId::Operations)
-                    .height
-                    > 2
+                    .height,
+                2
             );
             for component in scene.components {
                 if let Component::Surface { surface, .. } = component {

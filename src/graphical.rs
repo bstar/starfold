@@ -13,11 +13,20 @@ use starkit::terminal_graphics::{
 #[derive(Parser)]
 #[command(
     name = "starfold-graphical",
-    about = "STAR/FOLD graphical interface inside Kitty"
+    version,
+    about = "STAR/FOLD — graphical and cell interfaces"
 )]
 struct Options {
     #[arg(long)]
     ssh: Option<String>,
+    /// Start in cell mode for this launch; F9 still switches live.
+    #[arg(long, conflicts_with = "graphical")]
+    cells: bool,
+    /// Start graphically for this launch where supported.
+    #[arg(long)]
+    graphical: bool,
+    #[arg(short, long)]
+    verbose: bool,
     #[arg(long)]
     ssh_config: Option<PathBuf>,
     /// Session name. Defaults to local on this machine, default over SSH.
@@ -80,7 +89,25 @@ fn terminal_event(
 
 pub fn handles_args() -> bool {
     let first = std::env::args().nth(1).unwrap_or_default();
-    first == "graphical" || first.starts_with("--graphical-")
+    first == "graphical"
+        || first.starts_with("--graphical-")
+        || matches!(
+            first.as_str(),
+            "--cells"
+                | "--graphical"
+                | "--ssh"
+                | "--ssh-config"
+                | "--session"
+                | "--attach"
+                | "--sessions"
+                | "--capabilities"
+                | "--play"
+                | "--remote-executable"
+                | "--help"
+                | "-h"
+                | "--version"
+                | "-V"
+        )
 }
 fn root() -> Result<PathBuf> {
     // HOME is resolved by the host, so local and SSH sessions remain independent.
@@ -154,9 +181,17 @@ fn presentation_options() -> Result<PresentationOptions> {
 }
 
 pub fn main() -> Result<()> {
-    if std::env::args().nth(1).as_deref() == Some("graphical") {
-        let args =
-            std::iter::once("starfold-graphical".to_string()).chain(std::env::args().skip(2));
+    if !std::env::args()
+        .nth(1)
+        .unwrap_or_default()
+        .starts_with("--graphical-")
+    {
+        let skip = if std::env::args().nth(1).as_deref() == Some("graphical") {
+            2
+        } else {
+            1
+        };
+        let args = std::iter::once("starfold".to_string()).chain(std::env::args().skip(skip));
         let options = Options::parse_from(args);
         let play = options.play.as_ref().map(|path| {
             if options.ssh.is_none()
@@ -219,7 +254,9 @@ pub fn main() -> Result<()> {
         }
         crate::PATHS.init_private_dirs();
         let _log = starkit::logging::init(&crate::PATHS, true)?;
-        return client::run_with_options(
+        let config_path = crate::PATHS.config_file()?;
+        let config = crate::config::Config::load(&config_path)?;
+        return client::run_with_preference(
             Launch {
                 executable: if options.ssh.is_some() {
                     options.remote_executable
@@ -236,16 +273,28 @@ pub fn main() -> Result<()> {
             terminal_event,
             crate::updates::frontend_notice,
             presentation_options()?,
+            client::PresentationPreference {
+                cells: options.cells
+                    || (!options.graphical
+                        && config.ui.presentation == crate::config::PresentationMode::Cells),
+                path: config_path,
+            },
         );
     }
     let options = Relay::parse();
     if let Some(socket) = options.graphical_terminal_client {
         crate::PATHS.init_private_dirs();
         let _log = starkit::logging::init(&crate::PATHS, true)?;
-        return client::run_terminal_socket_with_options(
+        let path = crate::PATHS.config_file()?;
+        let config = crate::config::Config::load(&path)?;
+        return client::run_terminal_socket_with_preference(
             &socket,
             terminal_event,
             presentation_options()?,
+            client::PresentationPreference {
+                cells: config.ui.presentation == crate::config::PresentationMode::Cells,
+                path,
+            },
         );
     }
     if options.graphical_sessions {

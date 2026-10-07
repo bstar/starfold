@@ -63,6 +63,11 @@ fn main() -> Result<()> {
         return fold::elevated::delete_one(&path).map_err(anyhow::Error::msg);
     }
     let cli = cli::Cli::parse();
+    #[cfg(feature = "terminal-graphics")]
+    if cli.command.is_none() {
+        updates::startup();
+        return graphical::main();
+    }
 
     PATHS.init_private_dirs();
     // The guard must outlive everything that logs; dropping it early loses
@@ -74,6 +79,10 @@ fn main() -> Result<()> {
         Some(cli::Command::Update { action }) => updates::command(action),
         None => {
             updates::startup();
+            anyhow::ensure!(
+                !cli.graphical,
+                "This build has no graphical frontend; use --cells"
+            );
             run_tui(cli.dir)
         }
     }

@@ -55,8 +55,10 @@ extensions = ["note"]
 mime_types = []
 ```
 
-Provider ids are unique. Explicit MIME overrides take precedence, followed by
-configured matching providers in configuration order, then bundled PDF/video.
+Provider ids are unique. Explicit suffix overrides (`extension_overrides`) precede
+MIME overrides. Configured providers rank by longest suffix, exact MIME, MIME
+family (`text/*`), then `*/*`. Higher `priority` wins within the same specificity;
+ties preserve configuration order. Bundled PDF/video follow configured matches.
 File classification recognizes PDF headers as well as names. An override of a
 disabled provider leaves metadata available. Directory, text, image, symlink and
 archive previews remain built in. Archive operations use their existing queue.
@@ -92,6 +94,9 @@ dimensions must respect host limits. Controls advertise consumed keys. FOLD
 retains global shortcuts, placement, focus and terminal input; pointer precision
 remains cells, mapped to the extension's content coordinates. Surface hit actions
 are forwarded to their owner. Extensions must not emit terminal escape sequences.
+Editor surfaces may set `cell_size: [8, 18]` (source pixels) to request fixed
+cell advances, shared pixel edges and connected terminal glyphs. Omit it for
+ordinary shaped UI text; older frontends ignore the optional hint.
 
 Only the current file's session remains active. File identity includes path,
 device/inode, size, mtime and ctime. Generation checks discard superseded replies.
@@ -102,3 +107,22 @@ not lose playback commands. Format-specific renderers never reach into the UI.
 
 Linux/macOS release packages ship both providers. Hayro's font, character-map
 and color-data notices accompany the helpers in `LICENSES/Hayro-*.txt`.
+
+## NVIM and HTML developer documentation
+
+The optional `starfold-preview-nvim` helper embeds read/write Neovim editing
+using an isolated MessagePack-RPC child and its real screen-grid UI. Clean previews follow the cursor and reuse Neovim across files. Unsaved changes
+prompt before switching files or quitting: save, discard, or cancel. :w saves, :q closes, and :q! explicitly discards. Configure it explicitly; Neovim is an
+external runtime dependency. It is built with the default workspace members.
+See [the HTML developer guide](../documentation/index.html), including the
+[NVIM setup](../documentation/nvim.html) and
+[file-type hierarchy](../documentation/selection.html).
+
+## Graphical and cell presentation
+
+`Viewport.cells` optionally supplies exact `[columns, rows]` for a cell frontend.
+`Presentation.cells` optionally returns a bounded `CellGrid` with RGB colors,
+modifiers and cursor coordinates. Neovim uses this grid directly, without page
+headings or wrapping. Text pages remain the fallback for older providers.
+See [presentation and shortcuts](../documentation/presentation.html) for launch,
+switching, media and configuration examples.

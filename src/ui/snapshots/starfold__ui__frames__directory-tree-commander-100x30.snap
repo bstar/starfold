@@ -1,5 +1,6 @@
 ---
 source: src/ui/frames.rs
+assertion_line: 589
 expression: "render(&mut app, 100, 30)"
 ---
 ╔═ S T A R / F O L D — › LEFT ═══════ commander ═╗╔═ RIGHT ════════════════════════════ commander ═╗
@@ -13,19 +14,19 @@ expression: "render(&mut app, 100, 30)"
 ║    ↗ notes.txt                             27 B║║    ↗ notes.txt                             27 B║
 ║                                                ║║                                                ║
 ║                                                ║║                                                ║
+║                                                ║║                                                ║
+║                                                ║║                                                ║
+║                                                ║║                                                ║
+║                                                ║║                                                ║
+║                                                ║║                                                ║
 ╚═■■■■■■■■■■■■ 125.0 GB free / 500.0 GB total════╝╚═■■■■■■■■■■■■ 125.0 GB free / 500.0 GB total════╝
 ╔═ PREVIEW — ▸ projects ═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
 ║                                                                    Tree · 4 files · 3 dirs shown ║
-║ └── ▸ starwire/                                                                                  ║
+║ └── ▸ starwire/                                                                                  █
 ║     ├── ▸ src/                                                                                   ║
 ║     │   └── λ main.rs                                                                            ║
 ║     ├── ▸ target/                                                                                ║
-║     ├── ◇ .gitignore                                                                             ║
-║     ├── λ Cargo.toml                                                                             ║
-║     └── ≡ README.md                                                                              ║
-║                                                                                                  ║
-║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ╔═ OPERATIONS ═════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                           remove ║

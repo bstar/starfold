@@ -99,11 +99,17 @@ pub struct State {
     /// older generation was built for a file the cursor has since left and is
     /// dropped rather than shown.
     pub preview_generation: u64,
+    /// Explicit browser commands, excluding pane focus and worker completions.
+    navigation_generation: u64,
     /// Set until the start directory's first listing lands.
     pub loading: bool,
 }
 
 impl State {
+    pub fn navigation_generation(&self) -> u64 {
+        self.navigation_generation
+    }
+
     pub fn selection_for_stack(&self, index: usize) -> &Selection {
         if index == self.tabs.active().active_stack {
             &self.selection
@@ -141,6 +147,7 @@ impl State {
             home,
             version: 0,
             preview_generation: 0,
+            navigation_generation: 0,
             loading: true,
         }
     }
@@ -294,6 +301,58 @@ fn apply_inner(state: &mut State, change: Change) -> Effects {
 }
 
 fn apply_command(state: &mut State, command: Command) -> Effects {
+    if state
+        .preview
+        .as_ref()
+        .and_then(|(_, p)| p.extension())
+        .is_some_and(|info| info.interactive && info.modified)
+        && (matches!(
+            &command,
+            Command::Preview(_)
+                | Command::ClosePreview
+                | Command::NewTab { .. }
+                | Command::SwitchTab(_)
+                | Command::CloseTab(_)
+                | Command::ReopenTab
+                | Command::RestoreTabs(..)
+        ) || matches!(&command, Command::UnmountPlace {path,..} if state.preview.as_ref().is_some_and(|(file,_)| file.starts_with(path))))
+    {
+        return Effects {
+            jobs: vec![],
+            events: vec![Event::Note(Note::error(
+                "editor",
+                "Resolve unsaved editor changes before replacing Preview or switching tabs",
+            ))],
+        };
+    }
+    if matches!(
+        &command,
+        Command::CursorTo(_)
+            | Command::CursorBy(_)
+            | Command::Enter
+            | Command::Back
+            | Command::JumpTo(_)
+            | Command::Forward
+            | Command::Push(_)
+            | Command::Reload
+            | Command::SetFilter(_)
+            | Command::ClearFilter
+            | Command::StartSearch(_)
+            | Command::StartContentSearch(_)
+            | Command::CloseSearch
+            | Command::SetSort(_)
+            | Command::SetHidden(_)
+            | Command::ToggleMark
+            | Command::ToggleView
+            | Command::NewTab { .. }
+            | Command::SwitchTab(_)
+            | Command::CloseTab(_)
+            | Command::ReopenTab
+            | Command::RestoreTabs(..)
+            | Command::RestoreCommander { .. }
+    ) {
+        state.navigation_generation = state.navigation_generation.wrapping_add(1);
+    }
     match command {
         Command::LoadPlaces(path) => {
             state.places.requested_path = Some(path.clone());
@@ -436,6 +495,7 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
                 } else {
                     0
                 },
+                false,
             )
         }
         Command::FocusPane(pane) => {
@@ -443,7 +503,7 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
                 return Effects::default();
             }
             state.commander_pane = pane;
-            switch_stack(state, pane + 1)
+            switch_stack(state, pane + 1, true)
         }
         Command::RestoreCommander {
             dirs,
@@ -459,8 +519,11 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
                 .extend(dirs.iter().cloned().map(Stack::new));
             state.commander_pane = active.min(1);
             state.commander = enabled;
-            let mut effects =
-                switch_stack(state, if enabled { state.commander_pane + 1 } else { 0 });
+            let mut effects = switch_stack(
+                state,
+                if enabled { state.commander_pane + 1 } else { 0 },
+                false,
+            );
             effects.jobs.extend(dirs.into_iter().map(Job::List));
             effects
         }
@@ -855,13 +918,21 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
     }
 }
 
-fn switch_stack(state: &mut State, index: usize) -> Effects {
+fn switch_stack(state: &mut State, index: usize, preserve_preview: bool) -> Effects {
     let old = state.tabs.active().active_stack;
     std::mem::swap(&mut state.selection, &mut state.parked_selections[old]);
     state.tabs.active_mut().active_stack = index;
     std::mem::swap(&mut state.selection, &mut state.parked_selections[index]);
-    state.preview_generation += 1;
-    state.preview = None;
+    if !preserve_preview
+        && !state
+            .preview
+            .as_ref()
+            .and_then(|(_, p)| p.extension())
+            .is_some_and(|info| info.interactive)
+    {
+        state.preview_generation += 1;
+        state.preview = None;
+    }
     let jobs = ensure_listed(state);
     Effects {
         jobs,
@@ -1681,8 +1752,15 @@ fn cmd_start_search(state: &mut State, query: String, mode: search::Mode) -> Eff
         errors: vec![],
         progress: Arc::clone(&progress),
     });
-    state.preview_generation += 1;
-    state.preview = None;
+    if !state
+        .preview
+        .as_ref()
+        .and_then(|(_, p)| p.extension())
+        .is_some_and(|info| info.interactive)
+    {
+        state.preview_generation += 1;
+        state.preview = None;
+    }
     Effects {
         jobs: vec![Job::Search {
             tab: state.tabs.active().id,
@@ -1705,8 +1783,15 @@ fn close_search(state: &mut State) -> Effects {
         .progress
         .cancel
         .store(true, std::sync::atomic::Ordering::Relaxed);
-    state.preview_generation += 1;
-    state.preview = None;
+    if !state
+        .preview
+        .as_ref()
+        .and_then(|(_, p)| p.extension())
+        .is_some_and(|info| info.interactive)
+    {
+        state.preview_generation += 1;
+        state.preview = None;
+    }
     Effects {
         jobs: vec![],
         events: vec![Event::Stack],
@@ -4105,6 +4190,8 @@ mod tests {
                 session: 9,
                 sequence,
                 keys: vec![],
+                interactive: false,
+                modified: false,
                 actions: vec![Action {
                     sequence,
                     action: MediaAction::PlayPause,

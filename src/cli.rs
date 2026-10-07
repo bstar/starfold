@@ -24,6 +24,10 @@ pub struct Cli {
     /// Log at debug level. To the log file, never to the terminal.
     #[arg(short, long, global = true)]
     pub verbose: bool,
+    #[arg(long, conflicts_with = "graphical")]
+    pub cells: bool,
+    #[arg(long)]
+    pub graphical: bool,
 
     /// Directory to open (default: the session's last directory, else the
     /// current directory).

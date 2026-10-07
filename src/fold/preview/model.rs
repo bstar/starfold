@@ -31,6 +31,8 @@ pub struct Document {
     pub image: Option<std::sync::Arc<starkit::image::RgbaImage>>,
     pub image_page: Option<u32>,
     pub surface: Option<Box<starkit::native_surface::Surface>>,
+    #[serde(default)]
+    pub cells: Option<Box<starfold_preview_protocol::CellGrid>>,
     pub extension: Option<Box<super::extensions::Info>>,
 }
 impl Document {
@@ -45,6 +47,7 @@ impl Document {
             image: None,
             image_page: None,
             surface: None,
+            cells: None,
             extension: None,
         }
     }
@@ -75,6 +78,9 @@ impl Document {
                 .surface
                 .as_ref()
                 .map_or(0, |surface| surface.nodes.len() * 128)
+            + self.cells.as_ref().map_or(0, |g| {
+                g.cells.iter().map(|c| c.symbol.len() + 32).sum::<usize>()
+            })
             + 256
     }
 }

@@ -129,7 +129,13 @@ impl App {
             return;
         }
         self.pdf_requested = Some((generation, page));
-        if let Some(path) = self.view.cursor_path.clone() {
+        let path = self
+            .core
+            .state()
+            .preview
+            .as_ref()
+            .map(|(path, _)| path.clone());
+        if let Some(path) = path {
             self.core.send(Command::PreviewPage {
                 path,
                 generation,
@@ -177,6 +183,9 @@ impl App {
         use overlays::context::{Action as A, Request};
         match action {
             A::Tabs => self.open_tab_picker(None),
+            A::NextTheme => self.act(Action::NextTheme),
+            A::PrevTheme => self.act(Action::PrevTheme),
+            A::TogglePresentation => self.act(Action::TogglePresentation),
             A::Open => {
                 let current_matches = self
                     .core
@@ -430,7 +439,7 @@ mod tests {
         app.tick();
         assert!(source_dir.join("from left").is_dir());
         assert_eq!(app.view.active_dir, right_dir);
-        app.key(key(KeyCode::Tab));
+        app.key(key(KeyCode::BackTab));
         app.refresh();
         assert_eq!(app.view.cursor_path, Some(source_dir.join("from left")));
     }

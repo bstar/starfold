@@ -47,3 +47,9 @@ there:
   exists.
 - `src/session.rs` explains what `session.toml` keeps and why.
 - `AGENTS.md` keeps working notes for whoever is changing the code next.
+
+[HTML preview extension developer guide](../documentation/index.html) — Video, NVIM, protocol, themes and provider hierarchy.
+
+[Presentation modes and shortcuts](../documentation/presentation.html) describes live switching, F8/F9 and styled editor cells.
+
+For coordinated unreleased KIT/AMP changes, run `scripts/build-local.sh`. It uses the sibling KIT and `staramp-ssh-audio` checkouts, builds through Nix, restores the git-sourced lockfiles and installs the matching private AMP helper beside FOLD. Published distributions use pinned revisions; update those pins after the shared changes are released.

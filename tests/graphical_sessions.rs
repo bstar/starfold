@@ -59,6 +59,12 @@ impl Host {
         }
     }
     fn connect(&self) -> (UnixStream, BufReader<UnixStream>) {
+        self.connect_with_capabilities(None)
+    }
+    fn connect_with_capabilities(
+        &self,
+        capabilities: Option<starkit::terminal_graphics::capabilities::Capabilities>,
+    ) -> (UnixStream, BufReader<UnixStream>) {
         // bind creates the filesystem entry before listen completes. macOS
         // can expose that short interval to the test's existence check.
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -81,7 +87,7 @@ impl Host {
             .unwrap();
         write_message(
             &ClientMessage::Hello {
-                capabilities: None,
+                capabilities,
                 version: VERSION,
                 viewport: Viewport::default(),
                 client: "persistent-test".into(),
@@ -335,4 +341,69 @@ fn capability_report_does_not_start_a_controller_or_require_electron() {
         !base.exists(),
         "capability inspection started application state"
     );
+}
+
+#[test]
+fn live_presentation_changes_keep_the_same_controller_and_key_route() {
+    use starkit::terminal_graphics::capabilities::{Capabilities, ImageTransport};
+    let host = Host::start();
+    let mut capabilities = Capabilities::detected(&starkit::graphics::Graphics::disabled());
+    capabilities.cell_presentation = Some(false);
+    capabilities.presentation_switch = true;
+    capabilities.image_transport = ImageTransport::Kitty;
+    let (mut socket, mut reader) = host.connect_with_capabilities(Some(capabilities));
+    assert!(matches!(
+        wait(&mut reader, |m| matches!(m, ServerMessage::Hello { .. })),
+        ServerMessage::Hello {
+            presentation_switch: true,
+            ..
+        }
+    ));
+    let ServerMessage::Scene { scene: first } =
+        wait(&mut reader, |m| matches!(m, ServerMessage::Scene { .. }))
+    else {
+        unreachable!()
+    };
+    for (index, cells) in [true, false, true].into_iter().enumerate() {
+        let viewport = Viewport {
+            generation: index as u64 + 2,
+            ..first.viewport
+        };
+        write_message(
+            &ClientMessage::Presentation { viewport, cells },
+            &mut socket,
+        )
+        .unwrap();
+        let ServerMessage::Scene { scene } = wait(
+            &mut reader,
+            |m| matches!(m,ServerMessage::Scene{scene} if scene.viewport.generation == viewport.generation),
+        ) else {
+            unreachable!()
+        };
+        assert!(scene
+            .spans
+            .iter()
+            .any(|s| s.text.contains("one 日本語.bin")));
+        assert!(host.socket.exists());
+        if cells {
+            assert!(scene.placements.is_empty());
+        }
+        write_message(
+            &ClientMessage::Input {
+                id: index as u64 + 1,
+                revision: scene.revision,
+                generation: viewport.generation,
+                input: Input::Key {
+                    code: "f:8".into(),
+                    modifiers: 0,
+                },
+            },
+            &mut socket,
+        )
+        .unwrap();
+        assert!(matches!(
+            wait(&mut reader, |m| matches!(m, ServerMessage::Ack { .. })),
+            ServerMessage::Ack { accepted: true, .. }
+        ));
+    }
 }

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Video extension · STAR/FOLD</title><link rel="stylesheet" href="style.css"></head><body><a class="skip" href="#content">Skip to content</a><aside><a class="brand" href="index.html">STAR/FOLD</a><p>Preview extensions · v1</p><nav aria-label="Documentation"><a href="index.html">Overview</a><a href="extensions.html">Build an extension</a><a href="selection.html">File-type hierarchy</a><a href="themes.html">Themes and ownership</a><a href="video.html" aria-current="page">Video example</a><a href="nvim.html">Embedded Neovim</a><a href="presentation.html">Presentation and shortcuts</a></nav></aside><main id="content"><header><p class="eyebrow">DEVELOPER DOCUMENTATION</p><h1>Video extension</h1><p class="subtitle">Posters from the helper; playback through host media services.</p></header><p>The bundled <code>starfold-preview-video</code> is a concrete example of extending Preview without creating another player UI.</p>
+<div class="flow"><span>Video helper: poster + actions</span><b>→</b><span>FOLD: playback controller</span><b>→</b><span>KIT: decode / transport</span></div>
+<h2>Open: return the poster and media descriptor</h2><pre><code class="language-rust">let poster = starkit::media::poster(&amp;path, Arc::new(AtomicBool::new(false)))?;
+let pixels = poster.pixels.as_raw().clone();
+let presentation = Presentation {
+    kind: &quot;Video&quot;.into(),
+    media: Some(Media {
+        duration: poster.duration,
+        width: poster.width,
+        height: poster.height,
+        audio: poster.audio,
+    }),
+    raster: Some(Raster {
+        width: poster.pixels.width(), height: poster.pixels.height(), page: 0,
+    }),
+    keys: vec![&quot;space&quot;.into(), &quot;left&quot;.into(), &quot;right&quot;.into()],
+    ..Default::default()
+};
+// The attachment is pixels, not an encoded movie.</code></pre><h2>Input: request a host action</h2><pre><code class="language-rust">let action = match key.as_str() {
+    &quot;space&quot; | &quot;play_pause&quot; =&gt; Some(MediaAction::PlayPause),
+    &quot;left&quot; | &quot;seek_backward&quot; =&gt; Some(MediaAction::SeekBackward),
+    &quot;right&quot; | &quot;seek_forward&quot; =&gt; Some(MediaAction::SeekForward),
+    _ =&gt; None,
+};
+let mut reply = presentation.clone();
+reply.actions = action.into_iter().collect();
+// Return (reply, pixels.clone()); do not replay old actions on later replies.</code></pre><p>FOLD consumes typed actions and acknowledges them. KIT owns decoding, host/local audio and original-media SSH range transport. AMP owns the buttons and their hit regions, receiving a palette and current playback state through the transport helper. FOLD places the timeline, playback details and AMP's returned control surface inside Preview.</p>
+<h2>Configuration</h2><pre><code class="language-toml">[preview.extensions.overrides]
+&quot;video/*&quot; = &quot;video&quot;</code></pre><p>This directs video MIME-family matches to the bundled provider. No configured provider is needed for ordinary recognized video files. Movie playback requires the graphical media capability; cell clients can display the poster. Version 1 does not accept URL/live-stream sources.</p>
+<p><a href="../extensions/video/src/main.rs">Complete, compiled video example</a> · <a href="../src/video_transport.rs">AMP transport client</a></p><footer>Local documentation · Sources and examples are linked relative to this checkout.</footer></main></body></html>

@@ -14,9 +14,8 @@ prefix=starfold
 build_args=()
 if [ "${STARFOLD_GRAPHICAL:-0}" = 1 ]; then
   prefix=starfold-graphical
-  . scripts/dist/build-amp-helper.sh
-  build_args+=(--features terminal-graphics)
 fi
+. scripts/dist/build-amp-helper.sh
 cargo build --workspace --release --locked --target aarch64-apple-darwin "${build_args[@]}"
 bin="${CARGO_TARGET_DIR:-target}/aarch64-apple-darwin/release/starfold"
 # KIT's standalone updater replaces only FOLD. Include matching compressed
@@ -28,19 +27,20 @@ export STARFOLD_BUNDLE_PREVIEW_VIDEO="$work/video.gz"
 cargo build -p starfold --release --locked --target aarch64-apple-darwin "${build_args[@]}"
 
 "$bin" --version
-if [ "$prefix" = starfold-graphical ]; then "$bin" --bundled-amp-version; fi
+"$bin" --bundled-amp-version
 stage="$work/$prefix-$ver"
 mkdir -p "$stage"
 install -m755 "$bin" "$stage/starfold"
-for helper in starfold-preview-pdf starfold-preview-video; do
+for helper in starfold-preview-pdf starfold-preview-video starfold-preview-nvim; do
   install -m755 "$(dirname "$bin")/$helper" "$stage/$helper"
 done
 cp README.md LICENSE "$stage/"
+cp -R documentation "$stage/"
+mkdir -p "$stage/LICENSES/STARAMP"
+cp "$amp_source/LICENSE" "$stage/LICENSES/STARAMP/"
+[ ! -f "$amp_source/NOTICE" ] || cp "$amp_source/NOTICE" "$stage/LICENSES/STARAMP/"
+[ ! -d "$amp_source/LICENSES" ] || cp -R "$amp_source/LICENSES/". "$stage/LICENSES/STARAMP/"
 if [ "$prefix" = starfold-graphical ]; then
-  mkdir -p "$stage/LICENSES/STARAMP"
-  cp "$amp_source/LICENSE" "$stage/LICENSES/STARAMP/"
-  [ ! -f "$amp_source/NOTICE" ] || cp "$amp_source/NOTICE" "$stage/LICENSES/STARAMP/"
-  [ ! -d "$amp_source/LICENSES" ] || cp -R "$amp_source/LICENSES/". "$stage/LICENSES/STARAMP/"
   cat > "$stage/starfold-graphical" <<'WRAPPER'
 #!/bin/sh
 launcher=$0

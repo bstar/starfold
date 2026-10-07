@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Build an extension · STAR/FOLD</title><link rel="stylesheet" href="style.css"></head><body><a class="skip" href="#content">Skip to content</a><aside><a class="brand" href="index.html">STAR/FOLD</a><p>Preview extensions · v1</p><nav aria-label="Documentation"><a href="index.html">Overview</a><a href="extensions.html" aria-current="page">Build an extension</a><a href="selection.html">File-type hierarchy</a><a href="themes.html">Themes and ownership</a><a href="video.html">Video example</a><a href="nvim.html">Embedded Neovim</a><a href="presentation.html">Presentation and shortcuts</a></nav></aside><main id="content"><header><p class="eyebrow">DEVELOPER DOCUMENTATION</p><h1>Build an extension</h1><p class="subtitle">Use the Rust SDK or implement the versioned wire protocol.</p></header><h2>Minimal Rust provider</h2><p>Create a binary crate with these dependencies. Adjust the SDK path relative to your crate.</p><pre><code class="language-toml">[dependencies]
+anyhow = &quot;1&quot;
+starfold-preview-protocol = { path = &quot;../starfold/extensions/protocol&quot; }</code></pre><pre><code class="language-rust">use anyhow::{ensure, Result};
+use starfold_preview_protocol::{Presentation, Request};
+use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
+
+fn main() -&gt; Result&lt;()&gt; {
+    let mut content: Option&lt;Presentation&gt; = None;
+    starfold_preview_protocol::serve(
+        &quot;notes&quot;, &quot;1&quot;, &amp;[&quot;documents&quot;], |request| {
+            match request {
+                Request::Open { path, .. } =&gt; {
+                    let path = PathBuf::from(OsString::from_vec(path));
+                    ensure!(std::fs::metadata(&amp;path)?.is_file(), &quot;Regular files only&quot;);
+                    content = Some(Presentation {
+                        kind: &quot;Notes example&quot;.into(),
+                        fields: vec![(&quot;Name&quot;.into(),
+                            path.file_name().unwrap_or_default().to_string_lossy().into())],
+                        ..Default::default()
+                    });
+                }
+                Request::Input { .. } =&gt; {} // No consumed keys in this example.
+                _ =&gt; anyhow::bail!(&quot;Unsupported request&quot;),
+            }
+            Ok((content.clone().ok_or_else(|| anyhow::anyhow!(&quot;Open first&quot;))?, vec![]))
+        },
+    )
+}</code></pre><p>The SDK handles hello/version negotiation, framing, scope echoing, close/cancel and presentation validation. Your callback handles Open and Input. It returns one presentation and an optional binary attachment for each request.</p>
+<h2>Register it</h2><pre><code class="language-toml">[[preview.extensions.providers]]
+id = &quot;notes&quot;
+command = [&quot;/absolute/path/to/notes-helper&quot;]
+extensions = [&quot;note&quot;]
+mime_types = []
+priority = 0</code></pre><p>Commands are argv arrays, with no shell interpolation. Provider IDs must be unique. Register only trusted programs; supervision is not an operating-system sandbox. Helpers are never discovered from the directory being browsed.</p>
+<h2>Wire format</h2><p>Each frame contains a big-endian u32 JSON length, a big-endian u32 binary length, JSON bytes and then binary bytes. Maximum lengths are 1 MiB and 32 MiB. Standard output contains protocol frames only; diagnostics belong on standard error.</p><pre><code class="language-json">{
+  &quot;session&quot;: 42, &quot;generation&quot;: 7, &quot;sequence&quot;: 3,
+  &quot;message&quot;: {
+    &quot;type&quot;: &quot;input&quot;,
+    &quot;input&quot;: {&quot;type&quot;: &quot;key&quot;, &quot;key&quot;: &quot;j&quot;}
+  }
+}</code></pre><p>Every reply echoes session, generation and sequence exactly. The sequence is a request/reply pair, not an unsolicited event stream. Hello negotiates protocol version 1. Open supplies raw Unix filename bytes, budgets and a viewport. Input supplies keys, actions, pointer coordinates, page requests or a changed viewport. Close and Cancel end the session.</p>
+<h2>Presentation choices</h2><ul><li><strong>Fields and text pages:</strong> plain data styled by FOLD; never terminal escape sequences.</li><li><strong>Raster:</strong> one raw RGBA8 attachment, exactly width × height × 4 bytes.</li><li><strong>Native surface:</strong> bounded KIT drawing primitives and hit regions. Provide text as a fallback for cell clients.</li><li><strong>Media:</strong> metadata and typed media actions; video bytes do not travel through the generic extension attachment stream.</li></ul>
+<h2>Interactive editor sessions</h2><p>An editor requires the host's negotiated <code>editor</code> capability. Return <code>interactive: true</code> to receive focused keyboard input, and <code>modified</code> to report buffer state. Input::Paste carries bounded pasted text. Return <code>interactive: false</code> only when the editor closes. The host queues editor input in order and preserves the session across file writes. Clean buffers can follow the cursor. Modified buffers prompt before replacement, closing or quitting; handle <code>Input::Action</code> values <code>editor-save</code> and <code>editor-discard</code> and report the resulting <code>modified</code> state. A failed save must leave the editor live and modified. Advertise <code>reopen</code> in the helper handshake to accept repeated Open requests within the same session. The host can keep one clean reusable editor idle across other preview types; closing Preview kills both active and idle helpers. Older hosts must be refused before opening an editor.</p><h2>Input and lifecycle</h2><p>Advertise only the keys you consume. FOLD routes them while Preview has focus and retains application shortcuts. Surface hit actions return to the extension. Terminal pointer precision remains cell based. Keep sessions responsive: a deadline or changed selection terminates and reaps the helper process group, including children. A failed selected helper reports an error; FOLD does not silently try the next lower-ranked executable.</p>
+<p>Resources are bounded by Open limits and protocol validation. Respect the host text/cache/image budgets before allocating or decoding. File identity and generation checks prevent stale results from replacing a newer selection. The UI acknowledges durable media actions after consuming them.</p>
+<h2>Source references</h2><ul><li><a href="../extensions/protocol/src/lib.rs">Rust SDK and authoritative schema</a></li><li><a href="../extensions/examples/metadata.py">Independent Python implementation</a></li><li><a href="../src/fold/preview/extensions.rs">Registry and process supervision</a></li></ul><footer>Local documentation · Sources and examples are linked relative to this checkout.</footer></main></body></html>

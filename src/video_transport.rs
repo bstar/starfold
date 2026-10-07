@@ -14,6 +14,7 @@ use starkit::native_surface::Surface;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Request {
+    pub cells: Option<[u16; 2]>,
     pub width: u16,
     pub height: u16,
     pub theme: crate::audio_embed::Palette,
@@ -28,15 +29,23 @@ pub struct Request {
     pub title: String,
     pub font: u16,
 }
+#[derive(Clone, Deserialize)]
+pub struct CellTransport {
+    pub columns: u16,
+    pub rows: u16,
+    pub cells: Vec<crate::audio_embed::Cell>,
+}
 #[derive(Deserialize)]
 struct Response {
     surface: Option<Surface>,
+    cells: Option<CellTransport>,
     action: Option<String>,
     value: Option<f32>,
 }
 #[derive(Default)]
 struct Latest {
     frame: Option<(Request, Surface)>,
+    cells: Option<CellTransport>,
     changed: bool,
     error: Option<String>,
 }
@@ -90,6 +99,11 @@ impl Client {
             .as_ref()
             .filter(|(key, _)| key == &request)
             .map(|(_, frame)| frame.clone())
+    }
+    pub fn cells(&self, request: &Request) -> Option<CellTransport> {
+        let latest = self.latest.lock().unwrap();
+        latest.frame.as_ref().filter(|(key, _)| key == request)?;
+        latest.cells.clone()
     }
     pub fn pointer(&self, mut request: Request, x: u16, y: u16) {
         request.pointer = Some([x, y]);
@@ -146,6 +160,11 @@ fn serve(
                     "AMP transport response missing or oversized"
                 );
                 let response: Response = serde_json::from_slice(&line)?;
+                if let Some(cells) = &response.cells {
+                    let count = usize::from(cells.columns) * usize::from(cells.rows);
+                    anyhow::ensure!(count <= 512 && count > 0 && cells.cells.len() == count
+                        && cells.cells.iter().all(|c| c.symbol.len() <= 128 && starkit::wrap::width_of(&c.symbol) <= 2 && !c.symbol.chars().any(|c| c.is_control() || matches!(c,'\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))), "Invalid AMP transport cells");
+                }
                 if let Some(surface) = &response.surface {
                     surface.validate()?;
                 }
@@ -186,6 +205,7 @@ fn serve(
             };
             if let Some(surface) = response.surface {
                 let mut latest = latest.lock().unwrap();
+                latest.cells = response.cells;
                 latest.frame = Some((request, surface));
                 latest.changed = true;
             } else if let Some(action) = response.action {

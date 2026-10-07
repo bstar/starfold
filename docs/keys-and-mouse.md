@@ -34,8 +34,10 @@ Low → High or High → Low for size, with corresponding labels for other keys;
 `S` toggles direction directly. The picker also toggles directories first.
 Timestamp sorts show newest first by default, with unavailable dates last.
 
-In Commander view, `tab` and `shift+tab` switch file panes. `alt+1` focuses
-the active pane; `alt+2` and `alt+3` reach preview and operations. `y` (or
+In Commander view, `tab` cycles left pane, right pane and Preview;
+`shift+tab` reverses that cycle. Changing pane focus preserves the displayed
+preview; navigating or selecting a file updates it. `F7` jumps directly into
+Preview. `alt+1` focuses the active pane; `alt+2` and `alt+3` reach preview and operations. `y` (or
 `yy`) saves the marked entries or highlighted file; `p` queues a copy into
 the active pane's directory. `m` queues a move into the opposite pane's
 directory. `dd` asks for confirmation before queuing deletion. `v` switches views, `b`
@@ -66,7 +68,7 @@ _everywhere_
 | `tab`          | next module |
 | `shift+tab`    | previous module |
 | `alt+1`        | the stack |
-| `alt+2`        | the preview |
+| `F7/alt+2`     | the preview |
 | `alt+3`        | operations |
 | `up/k`         | up one |
 | `down/j`       | down one |
@@ -163,8 +165,9 @@ _everywhere_
 
 | key | what it does |
 |---|---|
-| `alt+t`        | next theme |
-| `alt+shift+t`  | previous theme |
+| `F8`           | next theme |
+| `shift+F8`     | previous theme |
+| `F9`           | graphical / cells |
 
 ## application
 

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>File-type hierarchy · STAR/FOLD</title><link rel="stylesheet" href="style.css"></head><body><a class="skip" href="#content">Skip to content</a><aside><a class="brand" href="index.html">STAR/FOLD</a><p>Preview extensions · v1</p><nav aria-label="Documentation"><a href="index.html">Overview</a><a href="extensions.html">Build an extension</a><a href="selection.html" aria-current="page">File-type hierarchy</a><a href="themes.html">Themes and ownership</a><a href="video.html">Video example</a><a href="nvim.html">Embedded Neovim</a><a href="presentation.html">Presentation and shortcuts</a></nav></aside><main id="content"><header><p class="eyebrow">DEVELOPER DOCUMENTATION</p><h1>File-type hierarchy</h1><p class="subtitle">Specific rules beat broad rules; priority resolves peers.</p></header><p>Providers may overlap. Selection is deterministic and does not depend solely on registration order.</p>
+<h2>Selection order</h2><ol><li><strong>Explicit suffix override.</strong> Case-insensitive; the longest compound suffix wins.</li><li><strong>Explicit MIME override.</strong> Exact MIME, then family (<code>text/*</code>), then <code>*/*</code>.</li><li><strong>Configured provider suffix.</strong> Longest matching suffix, such as <code>tar.gz</code> before <code>gz</code>.</li><li><strong>Configured exact MIME.</strong> Such as <code>text/plain</code>.</li><li><strong>Configured MIME family.</strong> Such as <code>text/*</code> or <code>video/*</code>.</li><li><strong>Configured catch-all.</strong> <code>*/*</code>.</li><li><strong>Bundled PDF/video provider, then built-in preview handling.</strong></li></ol>
+<p>Within an equally specific configured match, higher integer <code>priority</code> wins. Equal priorities preserve configuration order. A provider listing several rules is ranked by its best match. Priority never makes a broad rule outrank a more specific rule. Extensions may include a leading dot; matching is case-insensitive and requires a dot before the suffix.</p>
+<h2>A broad NVIM provider and a specialist</h2><pre><code class="language-toml">[[preview.extensions.providers]]
+id = &quot;nvim&quot;
+command = [&quot;/absolute/path/to/starfold-preview-nvim&quot;, &quot;/absolute/path/to/nvim&quot;]
+mime_types = [&quot;text/*&quot;]
+priority = 0
+
+[[preview.extensions.providers]]
+id = &quot;markdown&quot;
+command = [&quot;/absolute/path/to/markdown-preview&quot;]
+extensions = [&quot;md&quot;, &quot;markdown&quot;]
+priority = 0
+
+[preview.extensions.extension_overrides]
+&quot;txt&quot; = &quot;nvim&quot;
+
+[preview.extensions.overrides]
+&quot;application/pdf&quot; = &quot;pdf&quot;</code></pre><table><thead><tr><th>File</th><th>Winner</th><th>Reason</th></tr></thead><tbody><tr><td>guide.md</td><td>markdown</td><td>Suffix is more specific than text/*</td></tr><tr><td>notes.txt</td><td>nvim</td><td>Explicit suffix override</td></tr><tr><td>README containing UTF-8 text</td><td>nvim</td><td>Unknown MIME becomes text/plain after a textual-header check</td></tr><tr><td>book.pdf</td><td>pdf</td><td>Explicit MIME override</td></tr></tbody></table>
+<h2>Disable and classification behavior</h2><p><code>disabled</code> removes ordinary provider candidates. An explicit override targeting a disabled provider blocks that choice and leaves metadata/built-in fallback behavior; it does not choose another extension. Disabling bundled PDF/video also prevents their old in-process preview route. PDF headers are recognized regardless of filename. Other known MIME types come from filenames; an unknown type becomes text/plain only for a nonempty UTF-8 header without binary controls. This is bounded classification, not comprehensive content sniffing.</p>
+<p>Directories and symlinks retain their dedicated built-in handling. Catch-all rules apply to eligible regular-file previews and should be used deliberately. A rule chooses a provider, not an error-recovery chain.</p><footer>Local documentation · Sources and examples are linked relative to this checkout.</footer></main></body></html>

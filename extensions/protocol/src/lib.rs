@@ -19,10 +19,14 @@ pub struct Viewport {
     pub height: u32,
     pub foreground: String,
     pub background: String,
+    /// Exact cell grid for a cell presentation; omitted by older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cells: Option<[u16; 2]>,
 }
 impl Default for Viewport {
     fn default() -> Self {
         Self {
+            cells: None,
             width: 800,
             height: 600,
             foreground: "#ffffff".into(),
@@ -35,6 +39,9 @@ impl Default for Viewport {
 pub enum Input {
     Key {
         key: String,
+    },
+    Paste {
+        text: String,
     },
     Action {
         action: String,
@@ -115,6 +122,54 @@ pub enum MediaAction {
     ExitFullscreen,
     Stop,
 }
+/// A bounded editor grid. Empty symbols are wide-character continuation cells.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StyledCell {
+    pub symbol: String,
+    pub foreground: [u8; 3],
+    pub background: [u8; 3],
+    /// Bold, italic, underline and strikethrough, respectively.
+    pub modifiers: u8,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellGrid {
+    pub columns: u16,
+    pub rows: u16,
+    pub cells: Vec<StyledCell>,
+    pub cursor: Option<[u16; 2]>,
+}
+impl CellGrid {
+    pub fn validate(&self) -> Result<()> {
+        let count = usize::from(self.columns) * usize::from(self.rows);
+        ensure!(
+            self.columns > 0 && self.rows > 0 && count <= 8192 && self.cells.len() == count,
+            "invalid cell grid dimensions"
+        );
+        ensure!(
+            self.cells.iter().all(|c| c.symbol.len() <= 128
+                && !c.symbol.chars().any(|c| c.is_control()
+                    || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+                && c.modifiers & !15 == 0
+                && starkit::wrap::width_of(&c.symbol) <= 2),
+            "invalid styled cell"
+        );
+        for (index, cell) in self.cells.iter().enumerate() {
+            if starkit::wrap::width_of(&cell.symbol) == 2 {
+                ensure!(
+                    index % usize::from(self.columns) + 1 < usize::from(self.columns)
+                        && self.cells[index + 1].symbol.is_empty(),
+                    "wide cell has no continuation"
+                );
+            }
+        }
+        ensure!(
+            self.cursor
+                .is_none_or(|[x, y]| x < self.columns && y < self.rows),
+            "cursor outside cell grid"
+        );
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Presentation {
     pub kind: String,
@@ -127,10 +182,17 @@ pub struct Presentation {
     pub raster: Option<Raster>,
     /// A cell-compatible explanation must accompany a native surface.
     pub surface: Option<Surface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cells: Option<CellGrid>,
     pub media: Option<Media>,
     pub actions: Vec<MediaAction>,
     /// Keys consumed by the extension while Preview has focus.
     pub keys: Vec<String>,
+    /// An editor session pins Preview and owns focused keyboard input.
+    #[serde(default)]
+    pub interactive: bool,
+    #[serde(default)]
+    pub modified: bool,
 }
 impl Presentation {
     pub fn validate(&self, bytes: &[u8]) -> Result<()> {
@@ -153,6 +215,9 @@ impl Presentation {
             );
         } else {
             ensure!(bytes.is_empty(), "unexpected binary attachment");
+        }
+        if let Some(cells) = &self.cells {
+            cells.validate()?;
         }
         if let Some(surface) = &self.surface {
             ensure!(
@@ -243,8 +308,13 @@ pub fn serve(
         let result = match request.message {
             Request::Hello {
                 version,
-                capabilities: _,
+                capabilities: host_capabilities,
             } => {
+                ensure!(
+                    !capabilities.contains(&"editor")
+                        || host_capabilities.iter().any(|c| c == "editor"),
+                    "Host does not support protected editor sessions"
+                );
                 ensure!(
                     !negotiated && version == VERSION,
                     "unsupported protocol version"
@@ -298,6 +368,44 @@ pub fn serve(
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    #[test]
+    fn cell_grids_validate_dimensions_cursor_and_foreign_symbols() {
+        let mut grid = CellGrid {
+            columns: 2,
+            rows: 1,
+            cursor: Some([1, 0]),
+            cells: vec![
+                StyledCell {
+                    symbol: "x".into(),
+                    foreground: [1; 3],
+                    background: [2; 3],
+                    modifiers: 3
+                };
+                2
+            ],
+        };
+        grid.validate().unwrap();
+        grid.cursor = Some([2, 0]);
+        assert!(grid.validate().is_err());
+        grid.cursor = None;
+        grid.cells[0].symbol = "\x1b[2J".into();
+        assert!(grid.validate().is_err());
+        grid.cells[0].symbol = "x".into();
+        grid.cells.pop();
+        assert!(grid.validate().is_err());
+        let old: Viewport = serde_json::from_str(
+            r##"{"width":80,"height":40,"foreground":"#fff","background":"#000"}"##,
+        )
+        .unwrap();
+        assert_eq!(old.cells, None);
+    }
+    proptest::proptest! {
+        #[test]
+        fn untrusted_cell_grid_validation_is_bounded(cols in 0u16..300, rows in 0u16..140, symbol in ".{0,140}") {
+            let grid = CellGrid { columns:cols,rows,cursor:None,cells:vec![StyledCell {symbol,foreground:[0;3],background:[0;3],modifiers:0}] };
+            let _ = grid.validate();
+        }
+    }
     #[test]
     fn rejects_oversized_header_before_allocation() {
         let bytes = [u32::MAX.to_be_bytes(), 0u32.to_be_bytes()].concat();

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Presentation and shortcuts · STAR/FOLD</title><link rel="stylesheet" href="style.css"></head><body><aside><a class="brand" href="index.html">STAR/FOLD</a><nav><a href="index.html">Overview</a><a href="nvim.html">Embedded Neovim</a><a href="presentation.html" aria-current="page">Presentation and shortcuts</a></nav></aside><main><h1>Presentation and shortcuts</h1><p>STAR/FOLD uses one persistent controller for graphical and cell presentations. Graphical is the default in supported Kitty terminals; other terminals use cells.</p><table><thead><tr><th>Action</th><th>Default</th></tr></thead><tbody><tr><td>Next theme</td><td>F8; Alt+T alias</td></tr><tr><td>Previous theme</td><td>Shift+F8; Alt+Shift+T alias</td></tr><tr><td>Graphical / cells</td><td>F9</td></tr></tbody></table><p>These application shortcuts work while Neovim has focus. Modal dialogs own their keys. Macs may require Fn/Globe with function keys. The Actions menu offers an Appearance submenu.</p><pre><code>starfold
+starfold --cells
+starfold --graphical
+starfold --ssh your-host --cells</code></pre><p>Launch flags override the saved choice for that launch. F9 changes the live renderer and saves the preference on the presentation machine after the first new frame is shown. Cursor, tabs, unsaved edits, operations and playback remain in the controller. Fallback does not overwrite your preferred mode.</p><h2>Configuration</h2><pre><code>[ui]
+presentation = "graphical"
+
+[ui.shortcuts]
+next_theme = "F8/alt+t"
+previous_theme = "shift+F8/alt+shift+t"
+presentation = "F9"</code></pre><p>Shortcut overrides belong to the controller's config, including the host config for SSH. An empty shortcut string disables that action's bindings. Invalid and duplicate appearance bindings are rejected with a configuration error.</p><h2>Pane focus and Preview</h2><p>Tab cycles Left, Right and Preview in Commander. Changing focus preserves the displayed preview, including an embedded editor. Navigation or a file selection updates it. F7 jumps straight into Preview; F6 returns to the browser from Neovim.</p><h2>Previews in cells</h2><p>Neovim returns its styled grid and cursor at the available cell dimensions, keeping your normal configuration and colors. Clean previews follow the browser; unsaved changes keep the existing save/discard/cancel protection. Video uses the local KIT player, terminal images where supported, and colored half blocks otherwise. AMP owns both native and cell controls. SSH audio stays on the presentation machine in both modes; unsupported helpers and output failures are reported.</p><h2>Extension interface</h2><pre><code>// Viewport.cells is Some([columns, rows]) in a cell presentation.
+// Return an optional validated CellGrid alongside older text fallbacks.
+let grid = CellGrid {
+    columns: 1, rows: 1,
+    cells: vec![StyledCell {
+        symbol: "x".into(), foreground: [205, 214, 244],
+        background: [30, 30, 46], modifiers: 1,
+    }],
+    cursor: Some([0, 0]),
+};
+grid.validate()?;
+presentation.cells = Some(grid);</code></pre><p>Grid payloads are limited to 8,192 cells. Empty symbols represent wide-character continuation cells. Modifiers encode bold, italic, underline and strikethrough. Older providers can omit cells and use text pages.</p></main></body></html>

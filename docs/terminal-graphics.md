@@ -1,6 +1,6 @@
 # Native graphical STAR/FOLD inside Kitty
 
-This experiment uses the established STAR/FOLD controller with STAR/KIT's native
+This presentation uses the established STAR/FOLD controller with STAR/KIT's native
 Rust renderer. There is no Electron, Chromium, webview, HTML, CSS or JavaScript
 rendering. The earlier separate GPUI desktop experiment remains on
 `experiment/graphical-presentation`; this mode draws inside the existing terminal.
@@ -24,8 +24,9 @@ target/release/starfold graphical ~/Pictures
 ```
 
 No separate graphical runtime or display server is required by the renderer.
-Kitty supplies the final image display. Normal `starfold` continues to use the
-standard CLI/TUI. The graphical layout defaults to 100% of the terminal’s
+Kitty supplies the final image display. Normal `starfold` chooses graphical presentation in supported Kitty terminals
+and cells elsewhere. F9 switches live; `--cells` and `--graphical` override the
+saved preference for one launch. F8 / Shift+F8 change themes, with Alt+T aliases. The graphical layout defaults to 100% of the terminal’s
 measured size. Increase it explicitly if desired:
 
 ```sh

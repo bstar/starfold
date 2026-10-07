@@ -31,6 +31,9 @@ pub struct Ui {
     pub theme: String,
     /// `auto`, `kitty`, `blocks` or `off`.
     pub graphics: String,
+    /// Local presentation preference, independent of a remote controller.
+    pub presentation: PresentationMode,
+    pub shortcuts: Shortcuts,
     /// Graphical pane border corners, read by the local frontend.
     pub pane_corners: CornerStyle,
     /// Rounded pane border radius in display pixels.
@@ -63,6 +66,8 @@ impl Default for Ui {
         Self {
             theme: "catppuccin-mocha".into(),
             graphics: "auto".into(),
+            presentation: PresentationMode::Graphical,
+            shortcuts: Shortcuts::default(),
             pane_corners: CornerStyle::default(),
             pane_corner_radius: 9,
             padding_x: 0,
@@ -89,6 +94,46 @@ impl Ui {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationMode {
+    #[default]
+    Graphical,
+    Cells,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Shortcuts {
+    pub next_theme: String,
+    pub previous_theme: String,
+    pub presentation: String,
+}
+impl Shortcuts {
+    fn validate(&self) -> Result<()> {
+        let mut specs = Vec::new();
+        for keys in [&self.next_theme, &self.previous_theme, &self.presentation] {
+            for key in starkit::keymap::alternatives(keys) {
+                let spec = starkit::keymap::KeySpec::parse(key)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid application shortcut: {key}"))?;
+                anyhow::ensure!(
+                    !specs.contains(&spec),
+                    "Duplicate application shortcut: {key}"
+                );
+                specs.push(spec);
+            }
+        }
+        Ok(())
+    }
+}
+impl Default for Shortcuts {
+    fn default() -> Self {
+        Self {
+            next_theme: "F8/alt+t".into(),
+            previous_theme: "shift+F8/alt+shift+t".into(),
+            presentation: "F9".into(),
+        }
+    }
+}
 /// How operations run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -305,6 +350,7 @@ impl Config {
         let config: Self =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         config.preview.extensions.validate()?;
+        config.ui.shortcuts.validate()?;
         Ok(config)
     }
 
@@ -370,11 +416,13 @@ const TEMPLATE: &str = r#"# STAR/FOLD configuration.
 # session and the log. $STARFOLD_DIR relocates all of it.
 
 [ui]
-# "system" follows the desktop. Or name one of the built-in themes; Alt+T and
-# Alt+Shift+T cycle through them while it is running.
+# "system" follows the desktop. Or name one of the built-in themes; F8 and
+# Shift+F8 cycle through them while it is running. Alt+T remains an alias.
 theme = "catppuccin-mocha"
 # How pictures are drawn in the preview: auto, kitty, blocks, or off.
 graphics = "auto"
+# Local display preference; F9 switches live and saves this choice.
+presentation = "graphical"
 # Graphical pane borders: rounded or square (rigid is also accepted).
 # Read from the client machine's config for SSH sessions. Restart to apply.
 pane_corners = "rounded"
@@ -399,6 +447,11 @@ preview_rows = 10
 ops_rows = 6
 # A directory bigger than this is truncated rather than read whole.
 max_entries = 50000
+
+[ui.shortcuts]
+next_theme = "F8/alt+t"
+previous_theme = "shift+F8/alt+shift+t"
+presentation = "F9"
 
 [ops]
 # auto uses the trash where one was found at startup and falls back to a
@@ -447,6 +500,19 @@ command = ""
 mod tests {
     use super::*;
 
+    #[test]
+    fn appearance_shortcuts_validate_and_old_configs_keep_defaults() {
+        let old: Config = toml::from_str("[ui]\ntheme = \"catppuccin-mocha\"").unwrap();
+        assert_eq!(old.ui.presentation, PresentationMode::Graphical);
+        old.ui.shortcuts.validate().unwrap();
+        let mut keys = old.ui.shortcuts;
+        keys.next_theme = "bad-key-name".into();
+        assert!(keys.validate().is_err());
+        keys.next_theme = "F9".into();
+        assert!(keys.validate().is_err());
+        keys.next_theme = String::new();
+        keys.validate().unwrap();
+    }
     #[test]
     fn audio_button_preferences_round_trip() {
         assert_eq!(Config::default().preview.audio_buttons, AudioButtons::Auto);

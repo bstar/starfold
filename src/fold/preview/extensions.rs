@@ -22,6 +22,8 @@ pub struct Registry {
     pub providers: Vec<Provider>,
     /// MIME type -> provider id. Explicit overrides precede ordinary matches.
     pub overrides: BTreeMap<String, String>,
+    /// File suffix -> provider id; more specific than MIME overrides.
+    pub extension_overrides: BTreeMap<String, String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provider {
@@ -31,6 +33,9 @@ pub struct Provider {
     pub extensions: Vec<String>,
     #[serde(default)]
     pub mime_types: Vec<String>,
+    /// Higher wins among equally specific matches; ties keep configuration order.
+    #[serde(default)]
+    pub priority: i32,
 }
 impl Registry {
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -46,7 +51,35 @@ impl Registry {
                 "Preview provider needs executable argv"
             );
         }
-        for id in self.overrides.values() {
+        for suffix in self
+            .extension_overrides
+            .keys()
+            .chain(self.providers.iter().flat_map(|p| p.extensions.iter()))
+        {
+            anyhow::ensure!(
+                valid_suffix(suffix),
+                "Invalid preview extension suffix: {suffix}"
+            );
+        }
+        for mime in self
+            .overrides
+            .keys()
+            .chain(self.providers.iter().flat_map(|p| p.mime_types.iter()))
+        {
+            anyhow::ensure!(valid_mime(mime), "Invalid preview MIME pattern: {mime}");
+        }
+        let mut suffix_overrides = std::collections::BTreeSet::new();
+        for suffix in self.extension_overrides.keys() {
+            anyhow::ensure!(
+                suffix_overrides.insert(suffix.trim_start_matches('.').to_ascii_lowercase()),
+                "Duplicate preview suffix override: {suffix}"
+            );
+        }
+        for id in self
+            .overrides
+            .values()
+            .chain(self.extension_overrides.values())
+        {
             anyhow::ensure!(
                 ["pdf", "video"].contains(&id.as_str())
                     || self.providers.iter().any(|p| &p.id == id),
@@ -58,13 +91,7 @@ impl Registry {
 
     pub fn select(&self, path: &Path, head: &[u8]) -> Option<Provider> {
         let kind = crate::fold::file_type::classify(path, head);
-        let mime = if kind == crate::fold::file_type::FileType::Pdf {
-            "application/pdf".into()
-        } else {
-            mime_guess::from_path(path)
-                .first_or_octet_stream()
-                .to_string()
-        };
+        let mime = detected_mime(path, head);
         let builtin = match kind {
             crate::fold::file_type::FileType::Pdf => Some("pdf"),
             #[cfg(feature = "media")]
@@ -83,40 +110,35 @@ impl Registry {
                         command: vec![helper_path(id).to_string_lossy().into_owned()],
                         extensions: vec![],
                         mime_types: vec![],
+                        priority: 0,
                     })
                 })
         };
-        if let Some(id) = self.overrides.get(&mime) {
+        if let Some(id) = self.override_for(path, &mime) {
             return enabled(id).then(|| resolve(id)).flatten();
         }
-        if let Some(p) = self.providers.iter().find(|p| {
-            enabled(&p.id)
-                && (p.mime_types.contains(&mime)
-                    || path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .is_some_and(|ext| {
-                            p.extensions.iter().any(|e| e.eq_ignore_ascii_case(ext))
-                        }))
-        }) {
-            return Some(p.clone());
+        let mut best: Option<(&Provider, (u8, usize, i32))> = None;
+        for provider in &self.providers {
+            if !enabled(&provider.id) {
+                continue;
+            }
+            if let Some((level, length)) = provider_match(provider, path, &mime) {
+                let rank = (level, length, provider.priority);
+                if best.as_ref().is_none_or(|(_, previous)| rank > *previous) {
+                    best = Some((provider, rank));
+                }
+            }
+        }
+        if let Some((provider, _)) = best {
+            return Some(provider.clone());
         }
         builtin.filter(|id| enabled(id)).and_then(resolve)
     }
     pub fn disables_builtin(&self, path: &Path, head: &[u8]) -> bool {
-        let mime = if crate::fold::file_type::classify(path, head)
-            == crate::fold::file_type::FileType::Pdf
-        {
-            "application/pdf".into()
-        } else {
-            mime_guess::from_path(path)
-                .first_or_octet_stream()
-                .to_string()
-        };
+        let mime = detected_mime(path, head);
         if self
-            .overrides
-            .get(&mime)
-            .is_some_and(|id| self.disabled.contains(id))
+            .override_for(path, &mime)
+            .is_some_and(|id| self.disabled.iter().any(|v| v == id))
         {
             return true;
         }
@@ -128,6 +150,101 @@ impl Registry {
         };
         self.disabled.iter().any(|s| s == id)
     }
+    fn override_for<'a>(&'a self, path: &Path, mime: &str) -> Option<&'a str> {
+        self.extension_overrides
+            .iter()
+            .filter(|(suffix, _)| suffix_matches(path, suffix))
+            .max_by_key(|(suffix, _)| suffix.trim_start_matches('.').len())
+            .map(|(_, id)| id.as_str())
+            .or_else(|| {
+                self.overrides
+                    .iter()
+                    .filter_map(|(pattern, id)| mime_match(pattern, mime).map(|rank| (rank, id)))
+                    .max_by_key(|(rank, _)| *rank)
+                    .map(|(_, id)| id.as_str())
+            })
+    }
+}
+fn valid_suffix(suffix: &str) -> bool {
+    let suffix = suffix.trim_start_matches('.');
+    !suffix.is_empty()
+        && suffix
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"._+-".contains(&c))
+}
+fn valid_mime(pattern: &str) -> bool {
+    if pattern == "*/*" {
+        return true;
+    }
+    let Some((major, minor)) = pattern.split_once('/') else {
+        return false;
+    };
+    let token = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b".+_-".contains(&c))
+    };
+    token(major) && (minor == "*" || token(minor))
+}
+fn detected_mime(path: &Path, head: &[u8]) -> String {
+    if crate::fold::file_type::classify(path, head) == crate::fold::file_type::FileType::Pdf {
+        return "application/pdf".into();
+    }
+    let mime = mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .to_string();
+    if mime == "application/octet-stream"
+        && !head.is_empty()
+        && !head.contains(&0)
+        && std::str::from_utf8(head).is_ok()
+        && head
+            .iter()
+            .all(|c| *c >= 32 || matches!(*c, b'\n' | b'\r' | b'\t'))
+    {
+        "text/plain".into()
+    } else {
+        mime
+    }
+}
+fn suffix_matches(path: &Path, suffix: &str) -> bool {
+    let suffix = suffix.trim_start_matches('.');
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| {
+            name.len() > suffix.len()
+                && name.as_bytes()[name.len() - suffix.len() - 1] == b'.'
+                && name
+                    .get(name.len() - suffix.len()..)
+                    .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+        })
+}
+fn mime_match(pattern: &str, mime: &str) -> Option<u8> {
+    if pattern == mime {
+        Some(3)
+    } else if pattern == "*/*" {
+        Some(1)
+    } else if pattern
+        .strip_suffix("/*")
+        .is_some_and(|major| mime.split_once('/').is_some_and(|(m, _)| major == m))
+    {
+        Some(2)
+    } else {
+        None
+    }
+}
+fn provider_match(provider: &Provider, path: &Path, mime: &str) -> Option<(u8, usize)> {
+    provider
+        .extensions
+        .iter()
+        .filter(|s| suffix_matches(path, s))
+        .map(|s| (4, s.trim_start_matches('.').len()))
+        .chain(
+            provider
+                .mime_types
+                .iter()
+                .filter_map(|p| mime_match(p, mime).map(|rank| (rank, 0))),
+        )
+        .max()
 }
 fn helper_path(id: &str) -> PathBuf {
     match crate::bundled_preview::executable(id) {
@@ -159,6 +276,10 @@ pub struct Info {
     pub session: u64,
     pub sequence: u64,
     pub keys: Vec<String>,
+    #[serde(default)]
+    pub interactive: bool,
+    #[serde(default)]
+    pub modified: bool,
     pub actions: Vec<Action>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +301,9 @@ pub struct Session {
     provider: String,
     revision: String,
     image: Option<std::sync::Arc<starkit::image::RgbaImage>>,
+    pub(super) interactive: bool,
+    pub(super) modified: bool,
+    pub(super) reusable: bool,
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -253,6 +377,9 @@ impl Session {
             provider: provider.id.clone(),
             revision: String::new(),
             image: None,
+            interactive: false,
+            modified: false,
+            reusable: false,
         })
     }
     fn request(
@@ -306,27 +433,34 @@ impl Session {
         cfg: &PreviewConfig,
         stale: &dyn Fn() -> bool,
     ) -> anyhow::Result<Preview> {
-        let hello = self.request(
-            wire::Request::Hello {
-                version: wire::VERSION,
-                capabilities: vec![
-                    "documents".into(),
-                    "raster".into(),
-                    "surfaces".into(),
-                    "media".into(),
-                ],
-            },
-            generation,
-            cfg,
-            stale,
-        )?;
-        match hello.envelope.message {
-            wire::Reply::Hello {
-                version, revision, ..
-            } if version == wire::VERSION && hello.bytes.is_empty() => {
-                self.revision = super::model::clean(&revision, 128)
+        if self.revision.is_empty() {
+            let hello = self.request(
+                wire::Request::Hello {
+                    version: wire::VERSION,
+                    capabilities: vec![
+                        "documents".into(),
+                        "raster".into(),
+                        "surfaces".into(),
+                        "media".into(),
+                        "editor".into(),
+                    ],
+                },
+                generation,
+                cfg,
+                stale,
+            )?;
+            match hello.envelope.message {
+                wire::Reply::Hello {
+                    version,
+                    revision,
+                    capabilities,
+                    ..
+                } if version == wire::VERSION && hello.bytes.is_empty() => {
+                    self.revision = super::model::clean(&revision, 128);
+                    self.reusable = capabilities.iter().any(|c| c == "reopen")
+                }
+                _ => anyhow::bail!("Incompatible preview extension"),
             }
-            _ => anyhow::bail!("Incompatible preview extension"),
         }
         let packet = self.request(
             wire::Request::Open {
@@ -365,6 +499,8 @@ impl Session {
             anyhow::bail!("Expected preview content");
         };
         p.validate(&packet.bytes)?;
+        self.interactive = p.interactive;
+        self.modified = p.modified;
         if let Some(r) = &p.raster {
             anyhow::ensure!(
                 r.width <= cfg.max_image_dimension && r.height <= cfg.max_image_dimension,
@@ -398,6 +534,8 @@ impl Session {
                 .into_iter()
                 .map(|s| super::model::clean(&s, 64))
                 .collect(),
+            interactive: p.interactive,
+            modified: p.modified,
             actions: p
                 .actions
                 .into_iter()
@@ -444,6 +582,7 @@ impl Session {
         d.image = image;
         d.image_page = p.raster.map(|r| r.page);
         d.surface = p.surface.map(Box::new);
+        d.cells = p.cells.map(Box::new);
         d.extension = Some(Box::new(info));
         Ok(Preview::Document(d))
     }
@@ -459,6 +598,7 @@ mod tests {
             command: vec!["/opt/helper".into()],
             extensions: vec!["xyz".into()],
             mime_types: vec![],
+            priority: 0,
         });
         assert_eq!(
             registry.select(Path::new("test.xyz"), &[]).unwrap().id,
@@ -474,12 +614,87 @@ mod tests {
         registry.disabled.push("custom".into());
         assert!(registry.select(Path::new("test.pdf"), b"%PDF-").is_none());
     }
+    fn provider(id: &str, suffixes: &[&str], mimes: &[&str], priority: i32) -> Provider {
+        Provider {
+            id: id.into(),
+            command: vec!["/opt/helper".into()],
+            extensions: suffixes.iter().map(|s| (*s).into()).collect(),
+            mime_types: mimes.iter().map(|s| (*s).into()).collect(),
+            priority,
+        }
+    }
+    #[test]
+    fn specificity_priority_and_order_resolve_overlapping_types() {
+        let mut registry = Registry {
+            providers: vec![
+                provider("any", &[], &["*/*"], 1000),
+                provider("text", &[], &["text/*"], 100),
+                provider("plain", &[], &["text/plain"], 10),
+                provider("notes", &["txt"], &[], 0),
+                provider("other", &["txt"], &[], 0),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            registry.select(Path::new("README"), b"hello").unwrap().id,
+            "plain"
+        );
+        assert_eq!(
+            registry.select(Path::new("a.txt"), b"hello").unwrap().id,
+            "notes"
+        );
+        registry.providers[4].priority = 1;
+        assert_eq!(
+            registry.select(Path::new("a.TXT"), b"hello").unwrap().id,
+            "other"
+        );
+        registry.disabled.push("other".into());
+        assert_eq!(
+            registry.select(Path::new("a.txt"), b"hello").unwrap().id,
+            "notes"
+        );
+        registry.overrides.insert("text/*".into(), "text".into());
+        assert_eq!(
+            registry.select(Path::new("a.txt"), b"hello").unwrap().id,
+            "text"
+        );
+        registry
+            .extension_overrides
+            .insert(".TXT".into(), "plain".into());
+        assert_eq!(
+            registry.select(Path::new("a.txt"), b"hello").unwrap().id,
+            "plain"
+        );
+        registry.disabled.push("plain".into());
+        assert!(registry.select(Path::new("a.txt"), b"hello").is_none());
+        assert!(registry.disables_builtin(Path::new("a.txt"), b"hello"));
+    }
+    #[test]
+    fn compound_suffixes_and_invalid_patterns() {
+        let mut registry = Registry {
+            providers: vec![
+                provider("gzip", &["gz"], &[], 100),
+                provider("tar", &["tar.gz"], &[], 0),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            registry.select(Path::new("backup.TAR.GZ"), b"").unwrap().id,
+            "tar"
+        );
+        assert!(registry.validate().is_ok());
+        registry.providers[0].mime_types.push("*/plain".into());
+        assert!(registry.validate().is_err());
+        registry.providers[0].mime_types.clear();
+        registry.providers[0].extensions.push("../txt".into());
+        assert!(registry.validate().is_err());
+    }
     proptest::proptest! {
         #[test]
         fn arbitrary_paths_and_heads_never_panic(path in proptest::collection::vec(proptest::prelude::any::<u8>(),0..200), head in proptest::collection::vec(proptest::prelude::any::<u8>(),0..512)) {
             use std::os::unix::ffi::OsStringExt;
             let path = PathBuf::from(std::ffi::OsString::from_vec(path));
-            let registry = Registry::default();
+            let registry = Registry { providers: vec![provider("unicode", &["txt", "tar.gz"], &["text/*", "*/*"], 0)], ..Default::default() };
             let _ = registry.select(&path,&head); let _ = registry.disables_builtin(&path,&head);
         }
     }
@@ -490,6 +705,7 @@ mod tests {
             command: vec!["sh".into(), "-c".into(), "sleep 30 & wait".into()],
             extensions: vec![],
             mime_types: vec![],
+            priority: 0,
         };
         let mut session = Session::spawn(&provider).unwrap();
         let start = Instant::now();
@@ -522,6 +738,7 @@ mod tests {
             command: vec!["sh".into(), "-c".into(), "exec sleep 30".into()],
             extensions: vec![],
             mime_types: vec![],
+            priority: 0,
         };
         let mut session = Session::spawn(&provider).unwrap();
         let start = Instant::now();

@@ -14,7 +14,7 @@ expression: "render(&mut app, 100, 30)"
 ║         ║  tab           next module          modules                                  ║         ║
 ║         ║  shift+tab     previous module      click a fold         open it             ║         ║
 ║         ║  alt+1         the stack            click a word         what it says        ║         ║
-║         ║  alt+2         the preview          status                                   ║         ║
+║         ║  F7/alt+2      the preview          status                                   ║         ║
 ║         ║  alt+3         operations           click the bar        open operations     ║         ║
 ║         ║  up/k          up one                                                        ║         ║
 ║         ║  down/j        down one                                                      ║         ║
