@@ -46,6 +46,7 @@ pub struct Fake {
     events: EventSink,
     senders: Senders,
     cfg: FoldConfig,
+    preview: std::cell::RefCell<crate::fold::preview::connection::Connection>,
 }
 
 /// Build a [`Handle`] over the fixture tree, with a [`Fake`] standing in for
@@ -102,6 +103,9 @@ pub fn handle(cfg: FoldConfig) -> (Handle, Fake) {
         state,
         events,
         senders,
+        preview: std::cell::RefCell::new(
+            crate::fold::preview::connection::Connection::with_registry(cfg.extensions.clone()),
+        ),
         cfg,
     };
 
@@ -144,6 +148,24 @@ impl Fake {
     /// -- the inline equivalent of one turn through `spawn_io`'s loop body.
     fn run_io(&self, job: Job) {
         let cancel = AtomicBool::new(false);
+        if matches!(
+            job,
+            Job::Preview { .. }
+                | Job::PreviewPage { .. }
+                | Job::PreviewInput { .. }
+                | Job::ClosePreview
+        ) {
+            if let Some(done) = worker::perform_preview(
+                job,
+                &mut self.preview.borrow_mut(),
+                &self.cfg.preview,
+                &self.state,
+                &cancel,
+            ) {
+                worker::finish(done, &self.state, &self.events, &self.senders);
+            }
+            return;
+        }
         match worker::perform_io(job, &self.cfg, &self.state, &cancel) {
             IoOutcome::Done(Done::Listed(mut listing)) => {
                 listing.space = Some(FIXTURE_SPACE);

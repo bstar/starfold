@@ -288,13 +288,18 @@ The following broader terminal/platform checks are still outstanding:
 
 ## Modular previews and archive operations
 
-`fold::preview::providers` is the registry: providers open sessions and sessions
-return presentation data from `preview::model`. PDF sessions retain the parsed
-document, returning three requested pages. `preview::connection` owns a bounded
-cache keyed by path, device/inode, size, mtime and ctime, and a disposable
-`starfold --preview-worker` child. Cancellation and deadlines kill/reap the child;
-closing Preview releases the session. The UI keeps at most 24 PDF pages and can
-request evicted pages again. Backend APIs never reach the renderer.
+`fold::preview::extensions` selects explicitly configured executable providers
+and the bundled PDF/video helpers; `extensions/protocol` is their versioned,
+length-prefixed JSON/binary contract. `fold::preview::providers` retains built-in
+metadata/archive adapters. `preview::connection` owns file identity, cancellation
+and sessions; helpers are killed/reaped with their process groups on cancellation,
+deadlines and Preview close. The PDF helper retains parsed documents and at most
+24 rendered views under the byte budget; the UI holds its current presentation.
+Hayro is linked only into `starfold-preview-pdf`. All default workspace members
+must be built so adjacent helpers match FOLD. Standalone macOS distributions also
+embed compressed helpers for the single-executable updater; Nix and AppImage use
+adjacent helpers. Backend APIs never reach the renderer. Media actions remain in
+state until acknowledged, so coalesced UI notifications cannot drop commands.
 
 Large raster images can use `vipsthumbnail` as an optional preview fallback.
 It runs with a deadline and its output is decoded under the bounded preview

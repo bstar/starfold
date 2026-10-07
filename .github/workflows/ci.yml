@@ -52,11 +52,11 @@ jobs:
       # Every other lint is an error.
       # unrar_sys builds bundled C++; Ubuntu build-essential and the macOS
       # Xcode toolchain already provide the required compiler/runtime.
-      - run: cargo clippy --all-targets --all-features -- -D warnings -A dead_code
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings -A dead_code
       # Anything that needs a trash daemon running is gated behind
       # STARFOLD_TEST_TRASH.
-      - run: cargo test --all-features
-      - run: cargo test --no-default-features
+      - run: cargo test --workspace --all-features
+      - run: cargo test --workspace --no-default-features
 
   # macOS is a supported target, and most of what breaks there breaks at
   # compile time -- a `cfg` that assumed Linux, a trash backend that is not
@@ -80,9 +80,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # unrar_sys builds bundled C++; Ubuntu build-essential and the macOS
       # Xcode toolchain already provide the required compiler/runtime.
-      - run: cargo clippy --all-targets --all-features -- -D warnings -A dead_code
-      - run: cargo test --all-features
-      - run: cargo test --no-default-features
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings -A dead_code
+      - run: cargo test --workspace --all-features
+      - run: cargo test --workspace --no-default-features
 
   # What the dependency tree is carrying, which nobody notices by reading it.
   # Two questions: is anything under a known advisory, and is anything under a
@@ -102,7 +102,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
-          toolchain: "1.90"
+          toolchain: "1.92"
       - name: Native media dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg
@@ -113,7 +113,7 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - run: cargo check --all-targets --all-features
+      - run: cargo check --workspace --all-targets --all-features
 
   graphical-ssh:
     runs-on: ubuntu-latest
@@ -131,5 +131,5 @@ jobs:
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: sudo apt-get update && sudo apt-get install -y openssh-server
-      - run: cargo build --features terminal-graphics
+      - run: cargo build --workspace --features terminal-graphics
       - run: python3 scripts/test-graphical-ssh.py --binary target/debug/starfold --rtt-ms 50 --bandwidth-mbps 10

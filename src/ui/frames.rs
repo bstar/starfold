@@ -101,13 +101,18 @@ fn settle(app: &mut App, fk: &fake::Fake) {
 /// An app over the fixture, pinned to `theme`, UTC, and the fixture's own
 /// clock -- see the module doc.
 fn build(theme: &str) -> (App, fake::Fake) {
-    let cfg = Config {
+    build_with_trash(theme, crate::fold::TrashMode::default())
+}
+
+fn build_with_trash(theme: &str, trash: crate::fold::TrashMode) -> (App, fake::Fake) {
+    let mut cfg = Config {
         ui: Ui {
             theme: theme.into(),
             ..Ui::default()
         },
         ..Config::default()
     };
+    cfg.ops.trash = trash;
     let (core, fk) = fake::handle(cfg.core());
     let mut app = App::new(
         core,
@@ -665,7 +670,8 @@ fn the_help_overlay() {
 /// of them running, with OPERATIONS focused so the module is open.
 #[test]
 fn three_queued_operations_with_the_module_focused() {
-    let (mut app, fk) = build("terminal");
+    // Frame tests must not depend on Finder or a running trash service.
+    let (mut app, fk) = build_with_trash("terminal", crate::fold::TrashMode::Never);
 
     cursor_to(&mut app, &fk, "blob.bin");
     app.key(key(' '));

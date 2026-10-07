@@ -32,7 +32,7 @@ if [ "${STARFOLD_GRAPHICAL:-0}" = 1 ]; then
   . scripts/dist/build-amp-helper.sh
   build_args+=(--features terminal-graphics)
 fi
-cargo build --release --locked "${build_args[@]}"
+cargo build --workspace --release --locked "${build_args[@]}"
 # Not `target/`: the container is handed its own CARGO_TARGET_DIR so it cannot
 # leave a Debian binary where the host's next `cargo run` expects a native one.
 bin="${CARGO_TARGET_DIR:-target}/release/starfold"
@@ -40,6 +40,9 @@ scripts/dist/glibc-floor.sh "$bin"
 
 appdir=$work/AppDir
 install -Dm755 "$bin"                         "$appdir/usr/bin/starfold"
+for helper in starfold-preview-pdf starfold-preview-video; do
+  install -Dm755 "$(dirname "$bin")/$helper" "$appdir/usr/bin/$helper"
+done
 install -Dm644 packaging/starfold.desktop     "$appdir/starfold.desktop"
 install -Dm644 packaging/starfold.png         "$appdir/starfold.png"
 install -Dm644 packaging/starfold.desktop     "$appdir/usr/share/applications/starfold.desktop"
@@ -48,7 +51,7 @@ install -Dm644 packaging/starfold.svg         "$appdir/usr/share/icons/hicolor/s
 install -Dm644 README.md LICENSE NOTICE -t           "$appdir/usr/share/doc/starfold/"
 install -Dm644 LICENSES/UnRAR.txt "$appdir/usr/share/doc/starfold/LICENSES/UnRAR.txt"
 install -Dm644 LICENSES/OFL-Liberation.txt "$appdir/usr/share/doc/starfold/LICENSES/OFL-Liberation.txt"
-for media_license in LICENSES/ffmpeg-*.txt; do
+for media_license in LICENSES/ffmpeg-*.txt LICENSES/Hayro-*.txt; do
   install -Dm644 "$media_license" "$appdir/usr/share/doc/starfold/LICENSES/$(basename "$media_license")"
 done
 cp "$appdir/starfold.png" "$appdir/.DirIcon"
@@ -90,7 +93,9 @@ done
 # RUNPATH beats ld.so.cache, so a host library cannot shadow ours even when the
 # soname matches exactly. Harmless while usr/lib is empty, and correct the day
 # it is not.
-patchelf --set-rpath '$ORIGIN/../lib' "$appdir/usr/bin/starfold"
+for executable in starfold starfold-preview-pdf starfold-preview-video; do
+  patchelf --set-rpath '$ORIGIN/../lib' "$appdir/usr/bin/$executable"
+done
 for so in "$appdir"/usr/lib/*.so*; do
   [ -e "$so" ] || continue
   patchelf --set-rpath '$ORIGIN' "$so"

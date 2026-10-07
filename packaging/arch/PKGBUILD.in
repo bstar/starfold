@@ -7,7 +7,7 @@ arch=('x86_64')
 url='https://github.com/bstar/starfold'
 license=('MIT' 'LicenseRef-UnRAR')
 depends=('glibc' 'gcc-libs' 'ffmpeg' 'alsa-lib')
-makedepends=('rust>=1.90' 'git' 'clang' 'pkgconf')
+makedepends=('rust>=1.92' 'git' 'clang' 'pkgconf')
 optdepends=('xdg-utils: open files with desktop applications'
             'libvips: thumbnail very large images')
 options=('!lto' '!debug')
@@ -29,25 +29,28 @@ prepare() {
 build() {
     cd "$srcdir/starfold-$pkgver"
     _cargo_env
-    cargo build --release --frozen
+    cargo build --workspace --release --frozen
 }
 
 check() {
     cd "$srcdir/starfold-$pkgver"
     _cargo_env
-    cargo test --release --frozen --all
+    cargo test --workspace --release --frozen --all
 }
 
 package() {
     cd "$srcdir/starfold-$pkgver"
     install -Dm755 "$srcdir/target/release/starfold" "$pkgdir/usr/bin/starfold"
+    for helper in starfold-preview-pdf starfold-preview-video; do
+        install -Dm755 "$srcdir/target/release/$helper" "$pkgdir/usr/bin/$helper"
+    done
     install -Dm644 packaging/starfold.desktop "$pkgdir/usr/share/applications/starfold.desktop"
     install -Dm644 packaging/starfold.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/starfold.png"
     install -Dm644 packaging/starfold.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/starfold.svg"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/starfold/LICENSE"
     install -Dm644 LICENSES/UnRAR.txt "$pkgdir/usr/share/licenses/starfold/UnRAR.txt"
     install -Dm644 NOTICE "$pkgdir/usr/share/doc/starfold/NOTICE"
-    for media_license in LICENSES/ffmpeg-*.txt; do
+    for media_license in LICENSES/ffmpeg-*.txt LICENSES/Hayro-*.txt; do
         install -Dm644 "$media_license" "$pkgdir/usr/share/licenses/starfold/$(basename "$media_license")"
     done
     install -Dm644 LICENSES/OFL-Liberation.txt "$pkgdir/usr/share/licenses/starfold/OFL-Liberation.txt"

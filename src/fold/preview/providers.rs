@@ -1,5 +1,6 @@
 //! Provider registry. Format-specific APIs stop at this boundary.
 mod media;
+#[cfg(test)]
 mod pdf;
 use super::{
     model::{Content, Document},
@@ -16,7 +17,9 @@ pub trait Provider {
     fn accepts(&self, kind: FileType) -> bool;
     fn open(&self, path: &Path) -> anyhow::Result<Box<dyn Session>>;
 }
+#[cfg(test)]
 struct Pdf;
+#[cfg(test)]
 impl Provider for Pdf {
     fn accepts(&self, kind: FileType) -> bool {
         kind == FileType::Pdf
@@ -59,7 +62,10 @@ impl Session for Fixed {
         Ok(self.0.clone())
     }
 }
+#[cfg(test)]
 static PROVIDERS: [&(dyn Provider + Sync); 3] = [&Pdf, &Media, &Archive];
+#[cfg(not(test))]
+static PROVIDERS: [&(dyn Provider + Sync); 2] = [&Media, &Archive];
 pub fn supported(path: &Path, head: &[u8]) -> bool {
     PROVIDERS.iter().any(|p| p.accepts(classify(path, head)))
 }

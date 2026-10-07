@@ -71,8 +71,8 @@ rest of it.
 - **Native drag and drop.** In terminals that support the [OSC 72 protocol](https://sw.kovidgoyal.net/kitty/dnd-protocol/),
   drag files into Fold or Commander, between panes, or out to the desktop.
   Remote sessions can transfer files over the terminal connection.
-- **Intelligent previews.** Music/video tags, PDF text loaded three pages at
-  a time as you scroll, archive contents, images, text and directory summaries.
+- **Intelligent previews.** Music/video previews, Hayro-rendered PDF pages with
+  zoom and text mode, archive contents, images, text and directory summaries.
   Other binary files show useful metadata. Unicode file-type icons appear in
   Fold, Commander and previews; no special font is required.
   Open an audio track to play it here using a separately installed,
@@ -201,3 +201,7 @@ The `experiment/terminal-graphics` branch adds an optional shared native Rust
 renderer and persistent SSH scene relay. Neither the local renderer nor remote application needs a browser or display server. See [terminal graphics](docs/terminal-graphics.md) for build,
 launch, verification and compatibility details. The ordinary TUI remains the
 standard build.
+
+PDF and video previews use bundled executable extensions. PDF pages are rendered
+with Hayro; independent providers can implement the same versioned protocol.
+See [Preview extensions](docs/preview-extensions.md) for configuration and controls.

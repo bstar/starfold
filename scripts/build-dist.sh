@@ -23,7 +23,7 @@ if [ "$target" = arch ]; then
       pacman -Syu --needed --noconfirm base-devel rust git ffmpeg alsa-lib clang pkgconf
       useradd --create-home builder
       mkdir /home/builder/starfold
-      tar -C /src -cf - Cargo.toml Cargo.lock flake.nix flake.lock src tests \
+      tar -C /src -cf - Cargo.toml Cargo.lock extensions build.rs flake.nix flake.lock src tests \
         testdata vendor packaging scripts docs .github README.md LICENSE NOTICE LICENSES \
         | tar -C /home/builder/starfold -xf -
       chown -R builder:builder /home/builder/starfold /out

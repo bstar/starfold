@@ -2,6 +2,7 @@
 
 mod audio_embed;
 mod bundled_amp;
+mod bundled_preview;
 mod cli;
 mod config;
 mod fold;

@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import shutil
+import struct
 
 CFG = dict(timeout_ms=2000, cache_bytes=33554432, pdf_page_bytes=262144,
            max_bytes=262144, max_lines=400, max_image_dimension=4096, dir_budget=20000)
@@ -39,7 +40,36 @@ def make_pdf(path, count):
     data.extend(f'trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
     path.write_bytes(data)
 
+def extension_request(child, message):
+    child.sequence += 1
+    data = json.dumps(dict(session=1, generation=1, sequence=child.sequence, message=message)).encode()
+    child.stdin.write(struct.pack('>II', len(data), 0) + data)
+    child.stdin.flush()
+    header = child.stdout.read(8)
+    if len(header) != 8:
+        raise RuntimeError('PDF extension stopped')
+    control, binary = struct.unpack('>II', header)
+    if control > 1024 * 1024 or binary > 32 * 1024 * 1024:
+        raise RuntimeError('Extension reply exceeds limits')
+    result = json.loads(child.stdout.read(control))['message']
+    if len(child.stdout.read(binary)) != binary:
+        raise RuntimeError('Incomplete PDF raster')
+    if result['type'] == 'error':
+        raise RuntimeError(result['message'])
+    return result
+
 def request(child, path, page):
+    if child.pdf_extension:
+        if child.sequence == 0:
+            extension_request(child, dict(type='hello', version=1, capabilities=['raster']))
+            result = extension_request(child, dict(type='open', path=list(bytes(path)),
+                limits=dict(text_bytes=CFG['pdf_page_bytes'], cache_bytes=CFG['cache_bytes'], image_dimension=4096),
+                viewport=dict(width=800, height=600, foreground='#ffffff', background='#000000')))
+        else:
+            result = extension_request(child, dict(type='input', input=dict(type='page', page=page)))
+        presentation = result['presentation']
+        presentation['content'] = {'Pages': presentation['pages']}
+        return presentation
     child.stdin.write(json.dumps(dict(path=list(bytes(path)), page=page, cfg=CFG)) + '\n')
     child.stdin.flush()
     result = json.loads(child.stdout.readline())
@@ -51,8 +81,12 @@ def bench(binary, path):
     initial, more = [], []
     for _ in range(7):
         start = time.perf_counter()
-        child = subprocess.Popen([binary, '--preview-worker'], stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        is_pdf = path.suffix == '.pdf'
+        command = [str(pathlib.Path(binary).with_name('starfold-preview-pdf'))] if is_pdf else [binary, '--preview-worker']
+        child = subprocess.Popen(command, stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=not is_pdf)
+        child.pdf_extension = is_pdf
+        child.sequence = 0
         try:
             result = request(child, path, 1)
             initial.append((time.perf_counter() - start) * 1000)
@@ -67,9 +101,9 @@ def bench(binary, path):
             child.stdin.close()
             child.wait(timeout=5)
     print(f'{path.name}: first preview {statistics.median(initial):.2f} ms'
-          + (f'; next 3 pages {statistics.median(more):.2f} ms' if more else ''))
+          + (f'; next rendered page {statistics.median(more):.2f} ms' if more else ''))
     if path.suffix == '.pdf' and shutil.which('pdftotext'):
-        args = ['pdftotext', '-f', '1', '-l', '3', str(path), '-']
+        args = ['pdftotext', '-f', '1', '-l', '1', str(path), '-']
     elif path.suffix in ('.mp3', '.mp4') and shutil.which('ffprobe'):
         args = ['ffprobe', '-v', 'error', '-show_format', '-show_streams', '-of', 'json', str(path)]
     else:

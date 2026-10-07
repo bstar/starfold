@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-want=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+want=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "starfold") | .version')
 rc=0
 
 expect() { # name actual

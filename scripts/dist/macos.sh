@@ -17,13 +17,24 @@ if [ "${STARFOLD_GRAPHICAL:-0}" = 1 ]; then
   . scripts/dist/build-amp-helper.sh
   build_args+=(--features terminal-graphics)
 fi
-cargo build --release --locked --target aarch64-apple-darwin "${build_args[@]}"
+cargo build --workspace --release --locked --target aarch64-apple-darwin "${build_args[@]}"
 bin="${CARGO_TARGET_DIR:-target}/aarch64-apple-darwin/release/starfold"
+# KIT's standalone updater replaces only FOLD. Include matching compressed
+# helpers so future updates/rollbacks cannot select stale adjacent providers.
+gzip -n -c "$(dirname "$bin")/starfold-preview-pdf" > "$work/pdf.gz"
+gzip -n -c "$(dirname "$bin")/starfold-preview-video" > "$work/video.gz"
+export STARFOLD_BUNDLE_PREVIEW_PDF="$work/pdf.gz"
+export STARFOLD_BUNDLE_PREVIEW_VIDEO="$work/video.gz"
+cargo build -p starfold --release --locked --target aarch64-apple-darwin "${build_args[@]}"
+
 "$bin" --version
 if [ "$prefix" = starfold-graphical ]; then "$bin" --bundled-amp-version; fi
 stage="$work/$prefix-$ver"
 mkdir -p "$stage"
 install -m755 "$bin" "$stage/starfold"
+for helper in starfold-preview-pdf starfold-preview-video; do
+  install -m755 "$(dirname "$bin")/$helper" "$stage/$helper"
+done
 cp README.md LICENSE "$stage/"
 if [ "$prefix" = starfold-graphical ]; then
   mkdir -p "$stage/LICENSES/STARAMP"

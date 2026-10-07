@@ -1,0 +1,13 @@
+[package]
+name = "starfold-preview-video"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+starfold-preview-protocol = { version = "0.1", path = "../protocol" }
+anyhow = "1"
+starkit = { git = "https://github.com/bstar/starkit", rev = "bd4949ca970dfb109e8a14b07e617f62ad35ca63", version = "0.3", default-features = false, features = ["media"] }
+
+[dev-dependencies]
+tempfile = "3"

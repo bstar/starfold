@@ -29,6 +29,6 @@ expression: "render(&mut app, 100, 30)"
 ║                                                                                     Copy  remove ║
 ║COPY 1 item: ~/blob.bin → ~                                      failed · enter details · x remove║
 ║MOVE 1 item: ~/notes.txt → ~                                                                failed║
-║TRASH 1 item                                                                                  done║
+║DELETE 1 item                                                                                 done║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 ? help  enter details/resume  C copy operations  ctrl+x cancel  x remove  esc remove waiting  ~  off

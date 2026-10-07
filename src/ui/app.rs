@@ -43,6 +43,7 @@ mod editing;
 mod file_actions;
 #[cfg(feature = "terminal-graphics")]
 mod graphical;
+mod preview_extensions;
 mod rows;
 mod workspace;
 
@@ -320,6 +321,8 @@ pub struct App {
     scroll: HashMap<(usize, FrameId), usize>,
     preview_scroll: usize,
     pdf_requested: Option<(u64, u32)>,
+    extension_response_seen: Option<(u64, u64)>,
+    extension_viewport_sent: Option<(u64, starfold_preview_protocol::Viewport)>,
     pending_preview_page: Option<u32>,
     ops_cursor: usize,
     ops_scroll: usize,
@@ -930,6 +933,8 @@ impl App {
             scroll: HashMap::new(),
             preview_scroll: 0,
             pdf_requested: None,
+            extension_response_seen: None,
+            extension_viewport_sent: None,
             pending_preview_page: None,
             ops_cursor: 0,
             ops_scroll: 0,
@@ -1733,6 +1738,7 @@ impl App {
                 }),
         };
         drop(state);
+        self.extension_updated();
         if picture_changed {
             self.forget_picture();
         }
@@ -1899,6 +1905,25 @@ impl App {
                 self.act(action);
             }
             return;
+        }
+        if k.modifiers.is_empty() || k.modifiers == starkit::crossterm::event::KeyModifiers::SHIFT {
+            let extension_key = match k.code {
+                KeyCode::Char(' ') => Some("space".into()),
+                KeyCode::Char(c) => Some(c.to_string()),
+                KeyCode::Left => Some("left".into()),
+                KeyCode::Right => Some("right".into()),
+                KeyCode::Up => Some("up".into()),
+                KeyCode::Down => Some("down".into()),
+                KeyCode::PageUp => Some("pageup".into()),
+                KeyCode::PageDown => Some("pagedown".into()),
+                _ => None,
+            };
+            if extension_key
+                .as_deref()
+                .is_some_and(|key| self.extension_key(key))
+            {
+                return;
+            }
         }
         #[cfg(feature = "terminal-graphics")]
         if self.graphical.as_ref().is_some_and(|g| !g.cell_mode)
@@ -2518,6 +2543,19 @@ impl App {
         } else {
             m.kind
         };
+        let extension_pointer = match kind {
+            MouseEventKind::ScrollDown => Some(("scroll_down", 0)),
+            MouseEventKind::ScrollUp => Some(("scroll_up", 0)),
+            MouseEventKind::Down(MouseButton::Left) => Some(("down", 0)),
+            MouseEventKind::Up(MouseButton::Left) => Some(("up", 0)),
+            _ => None,
+        };
+        if let Some((action, button)) = extension_pointer {
+            let content = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
+            if self.extension_pointer(action, button, m.column, m.row, content) {
+                return;
+            }
+        }
         if let Some(picker) = &mut self.tab_picker {
             match kind {
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -3316,6 +3354,19 @@ impl App {
             return;
         };
 
+        #[cfg(feature = "terminal-graphics")]
+        let is_pixel_frontend = self
+            .graphical
+            .as_ref()
+            .is_some_and(|state| !state.cell_mode);
+        #[cfg(not(feature = "terminal-graphics"))]
+        let is_pixel_frontend = false;
+        if !is_pixel_frontend && self.layout.preview_open {
+            self.extension_viewport(
+                panels::preview::content_rect(regions.rect_of(ModuleId::Preview)),
+                self.audio_cell_size.unwrap_or((8, 16)),
+            );
+        }
         self.tab_hits.clear();
         if let Some(rect) = regions.tabs {
             let items = self.tab_items();
@@ -3502,6 +3553,7 @@ impl App {
                 #[cfg(feature = "media")]
                 Some(Preview::Video { poster, .. }) => Some(Arc::clone(&poster.pixels)),
                 Some(Preview::Image { data, .. }) => Some(Arc::clone(data)),
+                Some(Preview::Document(d)) => d.image.clone(),
                 _ => None,
             };
             if let Some(data) = data {
@@ -3725,6 +3777,7 @@ fn picture_address(preview: Option<&Preview>) -> Option<ImageId> {
         #[cfg(feature = "media")]
         Some(Preview::Video { poster, .. }) => Some(ImageId::of_arc(&poster.pixels)),
         Some(Preview::Image { data, .. }) => Some(ImageId::of_arc(data)),
+        Some(Preview::Document(d)) => d.image.as_ref().map(ImageId::of_arc),
         _ => None,
     }
 }

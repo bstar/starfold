@@ -93,6 +93,9 @@ impl App {
         let Some(Preview::Document(d)) = self.view.preview.as_deref() else {
             return;
         };
+        if d.extension.is_some() {
+            return;
+        }
         let Content::Pages(pages) = &d.content else {
             return;
         };
@@ -599,10 +602,10 @@ mod tests {
         );
     }
     #[test]
-    fn scrolling_loads_pdf_batches_and_keeps_the_scroll_anchor() {
+    fn pdf_extension_renders_and_navigates_without_changing_browser_cursor() {
         let (mut app, fake) = app();
         let path = fake.fixture.path("book.pdf");
-        crate::fold::testing::write_pdf(&path, 32);
+        crate::fold::testing::write_pdf(&path, 4);
         app.core.send(Command::Reload);
         fake.pump();
         app.tick();
@@ -610,35 +613,42 @@ mod tests {
         app.core.send(Command::Preview(path));
         fake.pump();
         app.refresh();
-        let area = Rect::new(0, 0, 100, 30);
-        app.draw(area, &mut Buffer::empty(area));
-        for expected in (6..=30).step_by(3) {
-            app.preview_scroll = panels::preview::lines(app.view.preview.as_deref().unwrap(), 80)
-                .len()
-                .saturating_sub(1);
-            app.request_pdf_pages(1);
-            fake.pump();
-            app.refresh();
-            let Some(Preview::Document(d)) = app.view.preview.as_deref() else {
-                panic!()
-            };
-            let crate::fold::preview::model::Content::Pages(p) = &d.content else {
-                panic!()
-            };
-            assert_eq!(p.last().unwrap().number, expected);
-            assert!(p.len() <= 24);
-        }
-        app.preview_scroll = 0;
-        app.request_pdf_pages(-1);
+        app.key(KeyEvent::new(
+            KeyCode::Char('2'),
+            starkit::crossterm::event::KeyModifiers::ALT,
+        ));
+        assert_eq!(app.layout.focus(), ModuleId::Preview);
+        let cursor_before = app.view.cursor_path.clone();
+        let Some(Preview::Document(d)) = app.view.preview.as_deref() else {
+            panic!()
+        };
+        assert!(d.image.is_some());
+        assert_eq!(d.image_page, Some(1));
+        app.key(KeyEvent::new(
+            KeyCode::Char('n'),
+            starkit::crossterm::event::KeyModifiers::NONE,
+        ));
         fake.pump();
         app.refresh();
         let Some(Preview::Document(d)) = app.view.preview.as_deref() else {
             panic!()
         };
-        let crate::fold::preview::model::Content::Pages(p) = &d.content else {
+        assert_eq!(d.image_page, Some(2));
+        assert_eq!(app.view.cursor_path, cursor_before);
+        app.key(KeyEvent::new(
+            KeyCode::Char('t'),
+            starkit::crossterm::event::KeyModifiers::NONE,
+        ));
+        fake.pump();
+        app.refresh();
+        let Some(Preview::Document(d)) = app.view.preview.as_deref() else {
             panic!()
         };
-        assert_eq!(p.first().unwrap().number, 4);
-        assert!(app.preview_scroll > 0);
+        assert!(d.image.is_none());
+        assert!(
+            panels::preview::lines(app.view.preview.as_deref().unwrap(), 80)
+                .iter()
+                .any(|line| line.contains("Page 2 contents"))
+        );
     }
 }

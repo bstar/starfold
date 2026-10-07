@@ -96,6 +96,7 @@ pub struct OpenConfig {
 pub struct FoldConfig {
     pub list: listing::ListConfig,
     pub preview: preview::PreviewConfig,
+    pub extensions: preview::extensions::Registry,
     pub trash: TrashMode,
     pub conflicts: ops::ConflictPolicy,
     pub preserve_times: bool,

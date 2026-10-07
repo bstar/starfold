@@ -27,6 +27,11 @@ pub struct Document {
     pub total_pages: Option<u32>,
     pub next_page: Option<u32>,
     pub notice: Option<String>,
+    #[serde(skip)]
+    pub image: Option<std::sync::Arc<starkit::image::RgbaImage>>,
+    pub image_page: Option<u32>,
+    pub surface: Option<Box<starkit::native_surface::Surface>>,
+    pub extension: Option<Box<super::extensions::Info>>,
 }
 impl Document {
     pub fn new(kind: impl Into<String>) -> Self {
@@ -37,6 +42,10 @@ impl Document {
             total_pages: None,
             next_page: None,
             notice: None,
+            image: None,
+            image_page: None,
+            surface: None,
+            extension: None,
         }
     }
     pub fn field(&mut self, label: impl Into<String>, value: impl ToString) {
@@ -61,6 +70,11 @@ impl Document {
                 Content::Pages(p) => p.iter().map(|p| p.text.len()).sum(),
                 Content::Archive(a) => a.iter().map(|a| a.name.len() + 32).sum(),
             }
+            + self.image.as_ref().map_or(0, |image| image.as_raw().len())
+            + self
+                .surface
+                .as_ref()
+                .map_or(0, |surface| surface.nodes.len() * 128)
             + 256
     }
 }

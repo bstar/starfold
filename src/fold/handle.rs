@@ -176,6 +176,15 @@ pub enum Command {
         op: OpId,
         reason: String,
     },
+    PreviewAck {
+        session: u64,
+        sequence: u64,
+    },
+    PreviewInput {
+        path: PathBuf,
+        generation: u64,
+        input: starfold_preview_protocol::Input,
+    },
     PreviewPage {
         path: PathBuf,
         generation: u64,

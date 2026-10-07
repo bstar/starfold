@@ -192,13 +192,7 @@ fn pixel_placements(
             && p.source != regions.status.into()
         {
             p.padding = Some(placement::PanelPadding {
-                inset: metrics.inset.saturating_add(
-                    if p.source == regions.rect_of(ModuleId::Preview).into() {
-                        4
-                    } else {
-                        0
-                    },
-                ),
+                inset: metrics.inset,
                 gap: metrics.gap,
             });
         }
@@ -630,8 +624,13 @@ impl App {
         let source = match self.view.preview.as_deref() {
             Some(Preview::Video { poster, .. }) => Some(Arc::clone(&poster.pixels)),
             Some(Preview::Image { data, .. }) => Some(Arc::clone(data)),
+            Some(Preview::Document(d)) => d.image.clone(),
             _ => None,
         };
+        let movie_body = video_image_body(
+            regions.rect_of(ModuleId::Preview),
+            self.graphical.as_ref().unwrap().uses_pixel_layout(),
+        );
         let state = self.graphical.as_mut().unwrap();
         if let Some((id, png)) = state
             .thumbnail
@@ -673,10 +672,7 @@ impl App {
         }
 
         if let Some(video) = &state.video {
-            let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
-            rect.height = rect
-                .height
-                .saturating_sub(if rect.height >= 6 { 4 } else { 2 });
+            let rect = movie_body;
             scene.components.push(Component::Image {
                 rect: rect.into(),
                 id: format!("video-{}-{}", video.session, video.generation),
@@ -689,9 +685,7 @@ impl App {
         if let Some((id, png)) = &state.image {
             let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
             if matches!(self.view.preview.as_deref(), Some(Preview::Video { .. })) {
-                rect.height = rect
-                    .height
-                    .saturating_sub(if rect.height >= 6 { 4 } else { 2 });
+                rect = movie_body;
             }
             scene.components.push(Component::Image {
                 rect: rect.into(),
@@ -850,6 +844,47 @@ fn breadcrumb_slots(
     slots
 }
 
+// Pixel movies have their own details/timeline below the picture.
+// Keep the legacy metadata row for clients using cell geometry.
+fn video_image_body(area: Rect, pixel_layout: bool) -> Rect {
+    let mut body = video_body(area, pixel_layout);
+    let controls = body.height >= 6;
+    body.height = body.height.saturating_sub(if controls { 4 } else { 2 });
+    // Match the header's gap with a row above playback details.
+    if pixel_layout && controls {
+        body.height = body.height.saturating_sub(1);
+    }
+    body
+}
+
+fn balance_video_padding(p: &mut starkit::terminal_graphics::placement::Placement) {
+    if let Some(padding) = &mut p.padding {
+        if p.source.height >= 8 {
+            // The movie panel adds four pixels to the shared inset, and
+            // the controls add another four pixels of border spacing.
+            padding.inset = padding.inset.saturating_add(8);
+            padding.gap = ((f32::from(p.target.height) - 2. * f32::from(padding.inset))
+                / f32::from(p.source.height - 2))
+            .round()
+            .max(1.) as u16;
+        }
+    }
+}
+
+fn video_body(area: Rect, pixel_layout: bool) -> Rect {
+    if pixel_layout {
+        let mut body = panels::preview::body(area);
+        // Pixel placement already supplies the bottom border inset. The
+        // cell frame's extra blank footer row would add a second inset.
+        if area.height >= 8 && starkit::chrome::frame::extra_rows() > 0 {
+            body.height = body.height.saturating_add(1);
+        }
+        body
+    } else {
+        panels::preview::content_rect(area)
+    }
+}
+
 fn native_header(
     rect: Rect,
     title: &str,
@@ -880,14 +915,20 @@ fn native_header(
         .saturating_sub(cw)
         .max(4)
         .saturating_add(title_padding);
-    let title_width = (end - area.x).saturating_mul(cw).saturating_sub(inset + 8);
-    surface.text(
-        R::new(inset, 0, title_width, ch),
-        title,
-        &hex(theme.header_fg),
-        font,
-        true,
-    );
+    let title_width = end
+        .saturating_sub(area.x)
+        .saturating_mul(cw)
+        .saturating_sub(inset + 8);
+    surface
+        .nodes
+        .push(starkit::native_surface::Primitive::Text {
+            rect: R::new(inset, 0, title_width, ch),
+            text: starkit::text::truncate(title, usize::from(title_width / cw.max(1))),
+            color: hex(theme.header_fg),
+            size: font,
+            bold: true,
+            mono: true,
+        });
     let shortcut = theme
         .panel_bg
         .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]);
@@ -1255,7 +1296,7 @@ impl Controller for App {
                         &self.theme,
                         (cw, ch),
                         self.native_header_hotkeys(module),
-                        if module == ModuleId::Preview { 4 } else { 0 },
+                        0,
                     ));
                 }
             }
@@ -1565,7 +1606,25 @@ impl Controller for App {
             }
         }
         scene.interaction = targets.finish();
+        let extension_rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
+        self.extension_viewport(
+            extension_rect,
+            (
+                (viewport.width / u32::from(viewport.columns).max(1)).max(1) as u16,
+                (viewport.height / u32::from(viewport.rows).max(1)).max(1) as u16,
+            ),
+        );
         self.graphical_image(&mut scene, &regions);
+        if self.layout.preview_open {
+            if let Some(Preview::Document(d)) = self.view.preview.as_deref() {
+                if let Some(surface) = &d.surface {
+                    scene.components.push(Component::Surface {
+                        rect: extension_rect.into(),
+                        surface: surface.as_ref().clone(),
+                    });
+                }
+            }
+        }
         if self.audio_graphics_config().is_some() {
             if let Some(frame) = &self.audio_frame {
                 use std::hash::{Hash, Hasher};
@@ -1827,6 +1886,15 @@ impl Controller for App {
                 );
                 placement.overlay = Some(vec![]);
                 scene.placements.push(placement);
+            }
+            if matches!(self.view.preview.as_deref(), Some(Preview::Video { .. })) {
+                if let Some(p) = scene
+                    .placements
+                    .iter_mut()
+                    .find(|p| p.source == regions.rect_of(ModuleId::Preview).into())
+                {
+                    balance_video_padding(p);
+                }
             }
             state.placements = scene.placements.clone();
             if !modal && self.layout.preview_open {
@@ -2763,6 +2831,9 @@ impl App {
         self.repaint = true;
     }
     fn video_key(&mut self, code: &str, modifiers: u8) -> bool {
+        if self.g_pending || self.d_pending {
+            return false;
+        }
         if modifiers & !starkit::crossterm::event::KeyModifiers::SHIFT.bits() != 0
             || self.layout.focus() != ModuleId::Preview
             || self.overlays.is_open()
@@ -2771,6 +2842,9 @@ impl App {
             return false;
         }
         let code = code.strip_prefix("char:").unwrap_or(code);
+        if self.extension_key(code) {
+            return true;
+        }
         match code {
             "p" | "P" | " " | "space" => self.video_action(panels::Word::VideoPlay(true)),
             "a" | "A" if self.graphical.as_ref().unwrap().video_player => {
@@ -2819,6 +2893,72 @@ impl App {
             _ => return false,
         }
         true
+    }
+    pub(super) fn extension_media_actions(
+        &mut self,
+        actions: &[crate::fold::preview::extensions::Action],
+    ) {
+        use starfold_preview_protocol::MediaAction as A;
+        if self.video_words().is_none() {
+            return;
+        }
+        for scoped in actions {
+            let action = &scoped.action;
+            match action {
+                A::PlayPause => self.video_action(panels::Word::VideoPlay(true)),
+                A::VolumeUp => self.video_action(panels::Word::VideoVolumeUp),
+                A::VolumeDown => self.video_action(panels::Word::VideoVolumeDown),
+                A::Mute => self.video_action(panels::Word::VideoMute(0)),
+                A::Expand => self.video_action(panels::Word::VideoExpand(false)),
+                A::WindowFullscreen => {
+                    if self.graphical.as_ref().unwrap().video_player {
+                        self.toggle_video_fullscreen(false);
+                    } else {
+                        self.video_action(panels::Word::VideoExpand(false));
+                    }
+                }
+                A::Fullscreen => {
+                    if self.graphical.as_ref().unwrap().video_player {
+                        self.toggle_video_fullscreen(true);
+                    } else {
+                        self.video_action(panels::Word::VideoExpand(false));
+                    }
+                }
+                A::AudioTracks => {
+                    if self.graphical.as_ref().unwrap().video_player {
+                        self.open_video_picker(true);
+                    } else {
+                        self.video_action(panels::Word::VideoMute(0));
+                    }
+                }
+                A::Subtitles => {
+                    if self.graphical.as_ref().unwrap().video_player {
+                        self.open_video_picker(false);
+                    }
+                }
+                A::StreamMode => self.cycle_video_mode(),
+                A::ExitFullscreen => self.exit_video_fullscreen(),
+                A::Stop => self.stop_video(),
+                A::SeekForward | A::SeekBackward => {
+                    let duration = match self.view.preview.as_deref() {
+                        Some(Preview::Video { poster, .. }) => poster.duration,
+                        _ => 0.0,
+                    };
+                    if let Some(video) = self.graphical.as_mut().unwrap().video.as_mut() {
+                        video.restart(
+                            (video.position
+                                + if *action == A::SeekBackward {
+                                    -5.0
+                                } else {
+                                    5.0
+                                })
+                            .clamp(0.0, duration),
+                        );
+                    }
+                }
+            }
+        }
+        self.repaint = true;
     }
     fn video_transport_action(&mut self, action: &str, value: Option<f32>) {
         match action {
@@ -3401,7 +3541,10 @@ impl App {
                 scene.viewport.rows,
             )
         } else {
-            panels::preview::content_rect(regions.rect_of(ModuleId::Preview))
+            video_body(
+                regions.rect_of(ModuleId::Preview),
+                self.graphical.as_ref().unwrap().uses_pixel_layout(),
+            )
         };
         if rect.height < 3 {
             return;
@@ -3463,7 +3606,7 @@ impl App {
             );
             surface.text(
                 starkit::native_surface::PixelRect::new(0, 0, surface.width, surface.height),
-                &text,
+                starkit::text::truncate(&text, usize::from(info.width)),
                 &hex(self.theme.dim),
                 starkit::native_surface::Metrics::from_cell(cw, ch).font,
                 false,
@@ -3575,6 +3718,7 @@ mod tests {
         let path = fake.home().join("movie.mkv");
         app.view.cursor_path = Some(path.clone());
         app.view.preview = Some(Arc::new(Preview::Video {
+            extension: None,
             path: path.clone(),
             poster: starkit::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
@@ -3729,6 +3873,7 @@ mod tests {
         state.video_player = true;
         state.local_media = true;
         app.view.preview = Some(Arc::new(Preview::Video {
+            extension: None,
             path: fake.home().join("movie.mkv"),
             poster: starkit::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
@@ -3802,6 +3947,7 @@ mod tests {
         app.graphical.as_mut().unwrap().video_capable = true;
         app.graphical.as_mut().unwrap().original_media = true;
         app.view.preview = Some(Arc::new(Preview::Video {
+            extension: None,
             path: fake.home().join("original.mkv"),
             poster: starkit::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
@@ -3921,6 +4067,7 @@ mod tests {
             Some(&path)
         );
         app.view.preview = Some(Arc::new(Preview::Video {
+            extension: None,
             path: path.clone(),
             poster: starkit::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
@@ -3963,6 +4110,7 @@ mod tests {
         state.pixel_layout = true;
         app.layout.preview_open = true;
         app.view.preview = Some(Arc::new(Preview::Video {
+            extension: None,
             path: fake.home().join("movie.mp4"),
             poster: starkit::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
@@ -4782,6 +4930,87 @@ mod tests {
             .nodes
             .iter()
             .any(|n| matches!(n, Primitive::Text { text, .. } if text == "three")));
+    }
+
+    #[test]
+    fn movie_letterbox_has_equal_gaps_above_and_below() {
+        use starkit::native_surface::PixelRect;
+        use starkit::terminal_graphics::placement::{PanelPadding, Placement};
+        let _padding = starkit::chrome::frame::padding_scope(true);
+        for rows in [12, 24, 40] {
+            let area = Rect::new(0, 0, 160, rows);
+            let mut p = Placement::new(area.into(), PixelRect::new(0, 0, 1600, rows * 20));
+            p.padding = Some(PanelPadding { inset: 12, gap: 8 });
+            balance_video_padding(&mut p);
+            let picture = video_image_body(area, true);
+            let body = video_body(area, true);
+            let top_inset = p.row_edge(1);
+            let bottom_inset = f32::from(p.target.height) - p.row_edge(body.bottom());
+            assert!(
+                (top_inset - bottom_inset).abs() < 0.001,
+                "title/control border insets differ: {top_inset}/{bottom_inset}"
+            );
+            let details_row = body.bottom() - 4;
+            let above = p.row_edge(picture.y) - p.row_edge(2);
+            let below = p.row_edge(details_row) - p.row_edge(picture.bottom());
+            assert!(
+                (above - below).abs() <= 1.,
+                "unequal movie padding: {above}/{below}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_video_body_uses_panel_content_without_a_blank_metadata_row() {
+        let _padding = starkit::chrome::frame::padding_scope(true);
+        let area = Rect::new(0, 0, 160, 40);
+        let native = video_body(area, true);
+        let legacy = video_body(area, false);
+        assert_eq!(native.y, panels::preview::body(area).y);
+        assert_eq!(native.height, panels::preview::body(area).height + 1);
+        assert_eq!(legacy, panels::preview::content_rect(area));
+        assert_eq!(native.y + 1, legacy.y);
+        assert_eq!(native.bottom(), legacy.bottom() + 1);
+    }
+
+    #[test]
+    fn native_header_truncates_long_titles_before_the_controls() {
+        use starkit::native_surface::Primitive;
+        let _padding = starkit::chrome::frame::padding_scope(true);
+        let theme = crate::ui::theme::tests_support::theme("terminal");
+        let title = format!("Preview · {}.mkv", "Very long movie title 界 ".repeat(20));
+        for width in [60, 100, 160] {
+            let words = panels::words(ModuleId::Preview);
+            let Component::Surface { surface, .. } = native_header(
+                Rect::new(0, 0, width, 30),
+                &title,
+                &words,
+                &theme,
+                (8, 18),
+                false,
+                0,
+            ) else {
+                unreachable!()
+            };
+            surface.validate().unwrap();
+            let Primitive::Text {
+                rect, text, mono, ..
+            } = &surface.nodes[0]
+            else {
+                unreachable!()
+            };
+            assert!(*mono);
+            assert!(text.ends_with('…'));
+            assert!(
+                starkit::ratatui::text::Line::raw(text.as_str()).width()
+                    <= usize::from(rect.width / 8)
+            );
+            assert!(surface
+                .nodes
+                .iter()
+                .skip(1)
+                .all(|node| node.rect().x >= rect.x + rect.width));
+        }
     }
 
     #[test]

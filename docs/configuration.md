@@ -246,3 +246,11 @@ Local files and files on mounted devices/network shares are supported; direct
 network URLs, playlists, and CUE expansion are not. Paths that cannot be
 represented as UTF-8 are explicitly rejected by embedding, not renamed or
 lossily converted; the external opener remains available.
+
+### Preview extensions
+
+PDF and video are enabled as bundled providers. `[preview.extensions]` controls
+disabled provider ids, ordered executable providers and MIME overrides. See
+[Preview extensions](preview-extensions.md) for the configuration format,
+PDF controls and the executable protocol. Configured providers run with your
+user privileges; process supervision is not an OS sandbox.

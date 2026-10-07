@@ -320,6 +320,23 @@ pub fn render(
             None
         }
         Preview::Document(d) => {
+            if let Some(image) = &d.image {
+                let label = d
+                    .fields
+                    .iter()
+                    .find(|f| f.label == "View")
+                    .map(|f| f.value.clone())
+                    .unwrap_or_else(|| format!("{} · page {}", d.kind, d.image_page.unwrap_or(1)));
+                return render_image(
+                    frame::body(area, &word_list),
+                    buf,
+                    v,
+                    image,
+                    image.width(),
+                    image.height(),
+                    &label,
+                );
+            }
             let meta = d
                 .total_pages
                 .map(|n| format!("{} · {n} pages", d.kind))
@@ -525,6 +542,15 @@ pub fn page_rows(page: &crate::fold::preview::model::Page, width: u16) -> usize 
 
 fn document_lines(d: &crate::fold::preview::model::Document, width: u16) -> Vec<String> {
     use crate::fold::preview::model::Content;
+    if d.image.is_some() {
+        return d
+            .fields
+            .iter()
+            .filter(|field| field.label == "View")
+            .map(|field| field.value.clone())
+            .chain(d.notice.iter().cloned())
+            .collect();
+    }
     let mut lines: Vec<String> = d
         .fields
         .iter()

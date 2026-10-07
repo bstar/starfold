@@ -15,3 +15,10 @@ libraries in usr/lib, replaceable with compatible libraries without rebuilding
 STAR/FOLD. macOS archives require Homebrew FFmpeg. Sources for these libraries
 are available from https://ffmpeg.org/download.html and the supplying
 package distribution. See FFmpeg's LICENSE.md for component-specific terms.
+
+Bundled PDF preview extension
+
+starfold-preview-pdf uses Hayro 0.8.0 (https://github.com/LaurenzV/hayro),
+licensed under MIT or Apache-2.0. Its embedded standard fonts, character maps
+and color data carry the notices installed as LICENSES/Hayro-*.txt.
+Hayro is isolated in the PDF executable; it is not linked into STAR/FOLD.

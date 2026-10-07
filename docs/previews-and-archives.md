@@ -15,27 +15,32 @@ checks signatures. A Nerd Font is not required.
   listings are indicated. Hidden entries are included.
 - Audio: common tags plus duration, bitrate, sample rate and channel count through
   Lofty. Extra textual tags are included; cover artwork is not decoded here.
-- Video: MP4/MOV/M4V and Matroska/WebM tags and track details. MP4 media payloads
-  are skipped by seeking; they are not scanned or decoded. Other containers show
-  basic metadata and an explanation when unsupported.
-- PDF: three pages initially, with more requested as you scroll near the end.
-  Page boundaries, truncation and loading are explicit. At most 24 pages are
-  retained on screen; scrolling back requests evicted pages. End goes to the
-  loaded boundary and does not convert the entire document.
+- Video: the bundled video extension supplies posters and playback actions,
+  using the existing KIT media services and AMP transport controls. Local and
+  SSH playback retain their audio, subtitle and fullscreen controls. Container
+  metadata remains available when the extension cannot open a file.
+- PDF: the bundled Hayro extension renders pages on demand and retains the parsed
+  document. Focus Preview for page navigation, zoom, fit and pan controls;
+  `t` switches to extracted text. Its raster cache respects the preview byte
+  budget and retains at most 24 entries. See [extension controls and configuration](preview-extensions.md).
 - Archives: bounded member lists with sizes; no extraction just to preview.
 - Other binaries: type, size, modification time and permissions instead of hex.
   Existing text, image, directory and symlink previews remain available.
 
-PDF text extraction does not perform OCR or request passwords. Image-only pages,
-protected PDFs, corrupt inputs and unsupported formats have explicit messages.
-Complex PDFs may have imperfect text ordering or font decoding. A request that
-exceeds its time or memory limit leaves an explanation; browsing stays responsive.
+PDF text extraction does not perform OCR or request passwords. Image-only pages
+can be rendered; protected PDFs require an external viewer. Corrupt inputs and
+unsupported features have explicit messages, and render failures switch to text.
+Complex PDFs may have imperfect rendering, text ordering or font decoding.
+A request that exceeds its time or memory limit leaves an explanation; browsing
+stays responsive.
 
-The parsers are part of Starfold. No `pdftotext`, `ffprobe`, `7z`, or `unrar`
+The PDF and video parsers ship as bundled executable extensions. Other preview
+parsers remain part of Starfold. No `pdftotext`, `ffprobe`, `7z`, or `unrar`
 installation is required. Preview children are isolated from the UI, bounded by a
 request deadline (two seconds by default) and a 768 MiB resource ceiling. These
 are process/resource boundaries, not an operating-system filesystem sandbox.
-The cache is memory-only and defaults to 32 MiB. See [configuration](configuration.md).
+The cache is memory-only and defaults to 32 MiB. See [configuration](configuration.md)
+and the [public extension protocol](preview-extensions.md).
 
 ## Right-click actions
 
@@ -94,7 +99,7 @@ python3 scripts/bench-previews.py target/release/starfold
 ```
 
 The script generates simple 10-, 200- and 1000-page PDFs, verifies extracted text,
-and measures fresh parser startup plus the first three pages, then retained-session
+and measures helper startup plus first-page rendering, then retained-session
 page loading. With FFmpeg installed it also generates tagged audio/video fixtures.
 Installed `pdftotext` and `ffprobe` are comparison tools only. Measurements use warm
 filesystem caches and synthetic documents; they are not a guarantee for arbitrary

@@ -119,6 +119,7 @@ pub struct Preview {
     pub timeout_ms: u64,
     pub cache_bytes: usize,
     pub pdf_page_bytes: usize,
+    pub extensions: fold::preview::extensions::Registry,
     /// Prefer a separately installed compatible STAR/AMP for audio playback.
     pub audio_player: AudioPlayer,
     /// Embedded transport pictures where supported, or always text.
@@ -147,6 +148,7 @@ impl Default for Preview {
             timeout_ms: 2000,
             cache_bytes: 32 * 1024 * 1024,
             pdf_page_bytes: 262_144,
+            extensions: Default::default(),
             audio_player: AudioPlayer::default(),
             audio_buttons: AudioButtons::default(),
             max_bytes: 262_144,
@@ -300,7 +302,10 @@ impl Config {
         }
         let text =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+        let config: Self =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        config.preview.extensions.validate()?;
+        Ok(config)
     }
 
     /// Write a commented starting file, if there is not one already. A
@@ -330,6 +335,7 @@ impl Config {
                 },
                 show_hidden: self.ui.show_hidden,
             },
+            extensions: self.preview.extensions.clone(),
             preview: fold::preview::PreviewConfig {
                 timeout_ms: self.preview.timeout_ms.clamp(100, 30_000),
                 cache_bytes: self.preview.cache_bytes.clamp(1_048_576, 134_217_728),

@@ -1,7 +1,7 @@
 //! Real-process coverage of the private preview protocol. No installed helpers.
 use serde_json::{json, Value};
+use starfold_preview_protocol as wire;
 use std::{
-    io::{BufRead, BufReader, Write},
     os::unix::ffi::OsStrExt,
     process::{Command, Stdio},
     time::Duration,
@@ -37,13 +37,16 @@ fn pdf(path: &std::path::Path) {
     doc.save(path).unwrap();
 }
 #[test]
-fn parser_process_retains_pdf_and_exits_on_eof_without_creating_config() {
+fn pdf_extension_retains_document_and_exits_on_eof_without_creating_config() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("book.pdf");
     pdf(&path);
     let config = tmp.path().join("config");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_starfold"))
-        .arg("--preview-worker")
+    let helper = std::path::Path::new(env!("CARGO_BIN_EXE_starfold"))
+        .parent()
+        .unwrap()
+        .join("starfold-preview-pdf");
+    let mut child = Command::new(helper)
         .env("STARFOLD_DIR", &config)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -51,38 +54,81 @@ fn parser_process_retains_pdf_and_exits_on_eof_without_creating_config() {
         .spawn()
         .unwrap();
     let mut input = child.stdin.take().unwrap();
-    let stdout = child.stdout.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            if tx.send(line.unwrap()).is_err() {
+        while let Some((reply, bytes)) =
+            wire::read_frame::<wire::Envelope<wire::Reply>>(&mut stdout).unwrap()
+        {
+            if tx.send((reply, bytes)).is_err() {
                 break;
             }
         }
     });
-    for (page, count, next) in [(1, 3, json!(4)), (4, 3, json!(7)), (7, 2, Value::Null)] {
-        let request = json!({"path":path.as_os_str().as_bytes(),"page":page,"cfg":{"timeout_ms":2000,"cache_bytes":33554432,"pdf_page_bytes":262144,"max_bytes":262144,"max_lines":400,"max_image_dimension":4096,"dir_budget":20000}});
-        writeln!(input, "{request}").unwrap();
-        input.flush().unwrap();
-        let line = match rx.recv_timeout(Duration::from_secs(10)) {
-            Ok(line) => line,
+    let requests = [
+        wire::Request::Hello {
+            version: 1,
+            capabilities: vec!["raster".into()],
+        },
+        wire::Request::Open {
+            path: path.as_os_str().as_bytes().to_vec(),
+            limits: wire::Limits {
+                text_bytes: 262144,
+                cache_bytes: 33554432,
+                image_dimension: 4096,
+            },
+            viewport: Default::default(),
+        },
+        wire::Request::Input {
+            input: wire::Input::Page { page: 4 },
+        },
+        wire::Request::Input {
+            input: wire::Input::Page { page: 7 },
+        },
+    ];
+    for (index, message) in requests.into_iter().enumerate() {
+        wire::write_frame(
+            &mut input,
+            &wire::Envelope {
+                session: 5,
+                generation: 6,
+                sequence: index as u64,
+                message,
+            },
+            &[],
+        )
+        .unwrap();
+        let (reply, bytes) = match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(packet) => packet,
             Err(e) => {
                 let _ = child.kill();
-                panic!("parser did not reply: {e}");
+                panic!("extension did not reply: {e}");
             }
         };
-        let reply: Value = serde_json::from_str(&line).unwrap();
-        let doc = &reply["Ok"];
-        assert_eq!(doc["kind"], "PDF", "{reply}");
-        let pages = doc["content"]["Pages"].as_array().unwrap();
-        assert_eq!(pages.len(), count);
-        assert_eq!(pages[0]["number"], page);
-        assert_eq!(doc["next_page"], next);
-        assert!(pages[0]["text"]
-            .as_str()
-            .unwrap()
+        assert_eq!(
+            (reply.session, reply.generation, reply.sequence),
+            (5, 6, index as u64)
+        );
+        if index == 0 {
+            assert!(matches!(
+                reply.message,
+                wire::Reply::Hello { version: 1, .. }
+            ));
+            continue;
+        }
+        let wire::Reply::Content { presentation } = reply.message else {
+            panic!("{reply:?}")
+        };
+        presentation.validate(&bytes).unwrap();
+        let page = [1, 4, 7][index - 1];
+        assert_eq!(presentation.kind, "PDF");
+        assert_eq!(presentation.total_pages, Some(8));
+        assert_eq!(presentation.pages[0].number, page);
+        assert!(presentation.pages[0]
+            .text
             .contains(&format!("Page {page} text")));
-        if page == 1 {
+        assert!(presentation.raster.is_some());
+        if index == 1 {
             std::fs::remove_file(&path).unwrap();
         }
     }

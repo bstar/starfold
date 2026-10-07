@@ -125,8 +125,8 @@
             pname = "starfold";
             version = cargoToml.package.version;
             src = ./.;
-            cargoBuildFlags = pkgsFor.lib.optionals graphical [ "--features" "terminal-graphics" ];
-            cargoTestFlags = pkgsFor.lib.optionals graphical [ "--features" "terminal-graphics" ];
+            cargoBuildFlags = [ "--workspace" ] ++ pkgsFor.lib.optionals graphical [ "--features" "terminal-graphics" ];
+            cargoTestFlags = [ "--workspace" ] ++ pkgsFor.lib.optionals graphical [ "--features" "terminal-graphics" ];
             cargoLock.lockFile = ./Cargo.lock;
             # STAR/KIT comes from a git tag rather than from crates.io, and
             # `cargoLock.lockFile` alone cannot fetch it: nix wants a hash for
@@ -150,7 +150,7 @@
             # freedesktop assets, which mean nothing on macOS.
             postInstall = ''
               install -Dm644 NOTICE $out/share/doc/starfold/NOTICE
-              for media_license in LICENSES/ffmpeg-*.txt; do
+              for media_license in LICENSES/ffmpeg-*.txt LICENSES/Hayro-*.txt; do
                 install -Dm644 "$media_license" "$out/share/licenses/starfold/$(basename "$media_license")"
               done
               install -Dm644 LICENSES/UnRAR.txt $out/share/licenses/starfold/UnRAR.txt
@@ -207,7 +207,7 @@
             { nativeBuildInputs = [ pkgs.rustfmt ]; }
             ''
               cd ${./.}
-              find src tests -name '*.rs' -print0 \
+              find src tests extensions -name '*.rs' -print0 \
                 | xargs -0 rustfmt --check --edition 2021
               touch $out
             '';

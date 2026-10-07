@@ -9,6 +9,7 @@
 
 pub mod connection;
 pub mod directory;
+pub mod extensions;
 mod image;
 mod text;
 use image::{build_image, looks_like_image};
@@ -45,6 +46,7 @@ pub enum Preview {
     Video {
         path: PathBuf,
         poster: starkit::media::Poster,
+        extension: Option<extensions::Info>,
     },
     Image {
         data: Arc<starkit::image::RgbaImage>,
@@ -59,6 +61,25 @@ pub enum Preview {
         broken: bool,
     },
     Error(String),
+}
+
+impl Preview {
+    pub fn extension(&self) -> Option<&extensions::Info> {
+        match self {
+            Self::Document(d) => d.extension.as_deref(),
+            #[cfg(feature = "media")]
+            Self::Video { extension, .. } => extension.as_ref(),
+            _ => None,
+        }
+    }
+    pub fn extension_mut(&mut self) -> Option<&mut extensions::Info> {
+        match self {
+            Self::Document(d) => d.extension.as_deref_mut(),
+            #[cfg(feature = "media")]
+            Self::Video { extension, .. } => extension.as_mut(),
+            _ => None,
+        }
+    }
 }
 
 /// Limits `build` is kept inside, all from `[preview]` in `config.toml`.
@@ -162,6 +183,7 @@ fn build_file(path: &Path, full_len: u64, cfg: &PreviewConfig, cancel: &AtomicBo
             Ok(poster) => Preview::Video {
                 path: path.to_owned(),
                 poster,
+                extension: None,
             },
             Err(e) => Preview::Error(format!("Video preview: {e:#}")),
         };

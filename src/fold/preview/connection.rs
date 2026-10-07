@@ -135,16 +135,190 @@ impl Parser {
         }
     }
 }
+struct ExtensionRequest {
+    identity: Identity,
+    provider: super::extensions::Provider,
+    page: u32,
+    generation: u64,
+    input: Option<starfold_preview_protocol::Input>,
+}
 #[derive(Default)]
 pub struct Connection {
     parser: Option<(Identity, Parser)>,
     cache: VecDeque<(Identity, u32, Document)>,
+    registry: super::extensions::Registry,
+    extension: Option<(
+        Identity,
+        super::extensions::Provider,
+        super::extensions::Session,
+    )>,
+    viewport: starfold_preview_protocol::Viewport,
 }
 impl Connection {
+    pub fn with_registry(registry: super::extensions::Registry) -> Self {
+        Self {
+            registry,
+            ..Default::default()
+        }
+    }
     pub fn close(&mut self) {
+        self.extension = None;
         self.parser = None;
     }
 
+    pub fn build_scoped(
+        &mut self,
+        path: &Path,
+        page: u32,
+        generation: u64,
+        cfg: &PreviewConfig,
+        stale: &dyn Fn() -> bool,
+    ) -> Option<Preview> {
+        if stale() {
+            self.close();
+            return None;
+        }
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(meta) => meta,
+            Err(e) => {
+                self.close();
+                return Some(Preview::Error(e.to_string()));
+            }
+        };
+        if meta.is_file() {
+            let mut head = [0; 512];
+            let n = std::fs::File::open(path)
+                .and_then(|mut f| f.read(&mut head))
+                .unwrap_or(0);
+            if let Some(provider) = self.registry.select(path, &head[..n]) {
+                return self.extension_build(
+                    path,
+                    ExtensionRequest {
+                        identity: Identity::read(path).ok()?,
+                        provider,
+                        page,
+                        generation,
+                        input: None,
+                    },
+                    cfg,
+                    stale,
+                );
+            }
+        }
+        self.build(path, page, cfg, stale)
+    }
+    pub fn input(
+        &mut self,
+        path: &Path,
+        generation: u64,
+        input: starfold_preview_protocol::Input,
+        cfg: &PreviewConfig,
+        stale: &dyn Fn() -> bool,
+    ) -> Option<Preview> {
+        if stale() {
+            self.close();
+            return None;
+        }
+        if let starfold_preview_protocol::Input::Viewport { viewport } = &input {
+            self.viewport = viewport.clone();
+        }
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(meta) => meta,
+            Err(e) => {
+                self.close();
+                return Some(Preview::Error(e.to_string()));
+            }
+        };
+        if !meta.is_file() {
+            self.close();
+            return self.build(path, 1, cfg, stale);
+        }
+        let identity = Identity::read(path).ok()?;
+        let mut head = [0; 512];
+        let n = std::fs::File::open(path)
+            .and_then(|mut f| f.read(&mut head))
+            .unwrap_or(0);
+        let provider = self.registry.select(path, &head[..n])?;
+        self.extension_build(
+            path,
+            ExtensionRequest {
+                identity,
+                provider,
+                page: 1,
+                generation,
+                input: Some(input),
+            },
+            cfg,
+            stale,
+        )
+    }
+    fn extension_build(
+        &mut self,
+        path: &Path,
+        request: ExtensionRequest,
+        cfg: &PreviewConfig,
+        stale: &dyn Fn() -> bool,
+    ) -> Option<Preview> {
+        let ExtensionRequest {
+            identity,
+            provider,
+            page,
+            generation,
+            input,
+        } = request;
+        self.parser = None;
+        let result = (|| -> anyhow::Result<Preview> {
+            let opened = if !self
+                .extension
+                .as_ref()
+                .is_some_and(|(id, p, _)| *id == identity && *p == provider)
+            {
+                self.extension = None;
+                let mut session = super::extensions::Session::spawn(&provider)?;
+                let preview = session.open(path, generation, self.viewport.clone(), cfg, stale)?;
+                self.extension = Some((identity.clone(), provider, session));
+                Some(preview)
+            } else {
+                None
+            };
+            let session = &mut self.extension.as_mut().unwrap().2;
+            if let Some(input) = input {
+                session.input(path, generation, input, cfg, stale)
+            } else {
+                match opened {
+                    Some(preview) if page == 1 => Ok(preview),
+                    _ => session.input(
+                        path,
+                        generation,
+                        starfold_preview_protocol::Input::Page { page },
+                        cfg,
+                        stale,
+                    ),
+                }
+            }
+        })();
+        if stale() || Identity::read(path).ok().as_ref() != Some(&identity) {
+            self.extension = None;
+            return None;
+        }
+        match result {
+            Ok(mut preview) => {
+                if let Preview::Document(d) = &mut preview {
+                    d.fields.extend(providers::metadata(path).fields);
+                }
+                Some(preview)
+            }
+            Err(e) => {
+                self.extension = None;
+                let mut d = providers::metadata(path);
+                d.notice = Some(super::model::clean(
+                    &format!("Preview extension unavailable: {e}"),
+                    512,
+                ));
+                Some(Preview::Document(d))
+            }
+        }
+    }
     pub fn build(
         &mut self,
         path: &Path,
@@ -153,8 +327,16 @@ impl Connection {
         stale: &dyn Fn() -> bool,
     ) -> Option<Preview> {
         if stale() {
+            self.extension = None;
             self.parser = None;
             return None;
+        }
+        if self
+            .extension
+            .as_ref()
+            .is_some_and(|(id, _, _)| id.path != path)
+        {
+            self.extension = None;
         }
         let meta = match std::fs::symlink_metadata(path) {
             Ok(m) => m,
@@ -166,6 +348,7 @@ impl Connection {
             return (!stale()).then_some(Preview::Dir(tree));
         }
         if !meta.is_file() {
+            self.close();
             return Some(super::build(
                 path,
                 cfg,
@@ -204,6 +387,26 @@ impl Connection {
             .and_then(|mut f| f.read(&mut head))
             .unwrap_or(0);
         head.truncate(n);
+        if let Some(provider) = self.registry.select(path, &head) {
+            return self.extension_build(
+                path,
+                ExtensionRequest {
+                    identity,
+                    provider,
+                    page,
+                    generation: 0,
+                    input: None,
+                },
+                cfg,
+                stale,
+            );
+        }
+        self.extension = None;
+        if self.registry.disables_builtin(path, &head) {
+            let mut d = providers::metadata(path);
+            d.notice = Some("Preview extension disabled".into());
+            return Some(Preview::Document(d));
+        }
         #[cfg(feature = "media")]
         if crate::fold::file_type::classify(path, &head) == crate::fold::file_type::FileType::Video
         {

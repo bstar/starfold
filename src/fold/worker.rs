@@ -156,6 +156,12 @@ pub enum Job {
         origin: CreateOrigin,
     },
     Summarize(PathBuf),
+    PreviewInput {
+        tab: super::tab::TabId,
+        path: PathBuf,
+        generation: u64,
+        input: starfold_preview_protocol::Input,
+    },
     PreviewPage {
         tab: super::tab::TabId,
         path: PathBuf,
@@ -470,6 +476,31 @@ pub fn perform_io(
                 preview,
             })
         }
+        Job::PreviewInput {
+            tab,
+            path,
+            generation,
+            input,
+        } => {
+            if is_stale_tab_preview(state, tab, generation) {
+                return IoOutcome::None;
+            }
+            let mut connection =
+                preview::connection::Connection::with_registry(cfg.extensions.clone());
+            let stale = || {
+                cancel.load(std::sync::atomic::Ordering::Relaxed)
+                    || is_stale_tab_preview(state, tab, generation)
+            };
+            match connection.input(&path, generation, input, &cfg.preview, &stale) {
+                Some(preview) => IoOutcome::Done(Done::Previewed {
+                    tab,
+                    path,
+                    generation,
+                    preview,
+                }),
+                None => IoOutcome::None,
+            }
+        }
         Job::PreviewPage {
             tab,
             path,
@@ -633,6 +664,7 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
         | Job::Summarize(_)
         | Job::Preview { .. }
         | Job::PreviewPage { .. }
+        | Job::PreviewInput { .. }
         | Job::Open(_)
         | Job::ClosePreview
         | Job::Shutdown => None,
@@ -662,6 +694,7 @@ pub fn spawn_io(
                 events.clone(),
                 senders.clone(),
                 cfg.preview,
+                cfg.extensions.clone(),
                 stop.clone(),
             );
 
@@ -760,7 +793,10 @@ pub fn spawn_io(
                             }
                         }
                     }
-                    job @ (Job::Preview { .. } | Job::PreviewPage { .. } | Job::ClosePreview) => {
+                    job @ (Job::Preview { .. }
+                    | Job::PreviewPage { .. }
+                    | Job::PreviewInput { .. }
+                    | Job::ClosePreview) => {
                         // Obsolete requests are skipped by the preview worker.
                         if let Err(crossbeam_channel::TrySendError::Full(job)) =
                             preview_tx.try_send(job)
@@ -816,56 +852,73 @@ pub fn spawn_io(
         .expect("spawning the io thread")
 }
 
+/// Shared by the preview supervisor and the threadless UI fixture.
+pub fn perform_preview(
+    job: Job,
+    connection: &mut preview::connection::Connection,
+    cfg: &preview::PreviewConfig,
+    state: &Arc<RwLock<State>>,
+    stop: &AtomicBool,
+) -> Option<Done> {
+    if matches!(job, Job::ClosePreview) {
+        connection.close();
+        return None;
+    }
+    let (tab, path, generation, page, input) = match job {
+        Job::Preview {
+            tab,
+            path,
+            generation,
+        } => (tab, path, generation, 1, None),
+        Job::PreviewPage {
+            tab,
+            path,
+            generation,
+            page,
+        } => (tab, path, generation, page, None),
+        Job::PreviewInput {
+            tab,
+            path,
+            generation,
+            input,
+        } => (tab, path, generation, 1, Some(input)),
+        _ => return None,
+    };
+    let stale = || {
+        stop.load(std::sync::atomic::Ordering::Relaxed)
+            || is_stale_tab_preview(state, tab, generation)
+    };
+    let result = match input {
+        Some(input) => connection.input(&path, generation, input, cfg, &stale),
+        None => connection.build_scoped(&path, page, generation, cfg, &stale),
+    };
+    result.map(|preview| Done::Previewed {
+        tab,
+        path,
+        generation,
+        preview,
+    })
+}
+
 fn spawn_preview(
     jobs: crossbeam_channel::Receiver<Job>,
     state: Arc<RwLock<State>>,
     events: EventSink,
     senders: Senders,
     cfg: preview::PreviewConfig,
+    registry: preview::extensions::Registry,
     stop: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("starfold-preview".into())
         .spawn(move || {
-            let mut connection = preview::connection::Connection::default();
+            let mut connection = preview::connection::Connection::with_registry(registry);
             while let Ok(job) = jobs.recv() {
                 if stop.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                if matches!(job, Job::ClosePreview) {
-                    connection.close();
-                    continue;
-                }
-                let (tab, path, generation, page) = match job {
-                    Job::Preview {
-                        tab,
-                        path,
-                        generation,
-                    } => (tab, path, generation, 1),
-                    Job::PreviewPage {
-                        tab,
-                        path,
-                        generation,
-                        page,
-                    } => (tab, path, generation, page),
-                    _ => continue,
-                };
-                let stale = || {
-                    stop.load(std::sync::atomic::Ordering::Relaxed)
-                        || is_stale_tab_preview(&state, tab, generation)
-                };
-                if let Some(preview) = connection.build(&path, page, &cfg, &stale) {
-                    finish(
-                        Done::Previewed {
-                            tab,
-                            path,
-                            generation,
-                            preview,
-                        },
-                        &state,
-                        &events,
-                        &senders,
-                    );
+                if let Some(done) = perform_preview(job, &mut connection, &cfg, &state, &stop) {
+                    finish(done, &state, &events, &senders);
                 }
             }
         })

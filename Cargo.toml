@@ -2,7 +2,7 @@
 name = "starfold"
 version = "0.0.2"
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.92"
 description = "A stack-based terminal file manager in the STAR family"
 license = "MIT"
 readme = "README.md"
@@ -15,7 +15,13 @@ default = ["media"]
 media = ["starkit/media"]
 terminal-graphics = ["media", "starkit/terminal-graphics"]
 
+[workspace]
+members = ["extensions/protocol", "extensions/pdf", "extensions/video"]
+default-members = [".", "extensions/pdf", "extensions/video"]
+resolver = "2"
+
 [dependencies]
+starfold-preview-protocol = { version = "0.1", path = "extensions/protocol" }
 # The shared terminal foundation: paths, logging, atomic and private file
 # writes, theming, terminal setup with a panic hook, text entry, wrapping, the
 # key table and its help view, and the image pipeline, all of it already proven
@@ -35,7 +41,7 @@ terminal-graphics = ["media", "starkit/terminal-graphics"]
 # The `version` is not redundant with the tag: cargo-deny counts a dependency
 # with no version requirement as a wildcard and `wildcards = "deny"` refuses
 # it, whether or not the source is a git URL pinned to a tag.
-starkit = { git = "https://github.com/bstar/starkit", rev = "abfe005af82241f75d774a03fc10ae73e21e2ff6", version = "0.3", default-features = false, features = [
+starkit = { git = "https://github.com/bstar/starkit", rev = "bd4949ca970dfb109e8a14b07e617f62ad35ca63", version = "0.3", default-features = false, features = [
     "image",
     "bmp",
     "gif",
@@ -102,8 +108,6 @@ mime_guess = "2"
 # Format backends stay private to preview/archive adapters. Large raster
 # thumbnails can optionally use libvips' vipsthumbnail at runtime.
 lofty = "0.22"
-lopdf = { version = "0.42", default-features = false }
-pdf-extract = "0.12"
 mp4parse = "0.17"
 matroska-demuxer = "0.8"
 zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
@@ -126,6 +130,8 @@ sha2 = "0.10"
 
 
 [dev-dependencies]
+lopdf = { version = "0.42", default-features = false }
+pdf-extract = "0.12"
 # Anything that parses foreign input gets a property test, and so does every
 # piece of arithmetic that a hostile directory can drive: sizes, times, names.
 proptest = "1"

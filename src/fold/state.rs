@@ -722,6 +722,37 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
                 events: vec![Event::Queue(op)],
             }
         }
+        Command::PreviewAck { session, sequence } => {
+            if let Some((_, preview)) = &mut state.preview {
+                if let Some(info) = Arc::make_mut(preview)
+                    .extension_mut()
+                    .filter(|info| info.session == session)
+                {
+                    info.actions.retain(|action| action.sequence > sequence);
+                }
+            }
+            Effects::default()
+        }
+        Command::PreviewInput {
+            path,
+            generation,
+            input,
+        } => {
+            if generation != state.preview_generation
+                || !state.preview.as_ref().is_some_and(|(p, _)| *p == path)
+            {
+                return Effects::default();
+            }
+            Effects {
+                jobs: vec![Job::PreviewInput {
+                    tab: state.tabs.active().id,
+                    path,
+                    generation,
+                    input,
+                }],
+                events: vec![],
+            }
+        }
         Command::PreviewPage {
             path,
             generation,
@@ -2551,7 +2582,36 @@ fn done_previewed(
     if generation != state.preview_generation {
         return Effects::default();
     }
+    if let Some(new) = preview.extension_mut() {
+        if let Some(old) = state
+            .preview
+            .as_ref()
+            .and_then(|(_, p)| p.extension())
+            .filter(|old| old.session == new.session)
+        {
+            if old.actions.len() + new.actions.len() <= 256 {
+                let mut actions = old.actions.clone();
+                actions.append(&mut new.actions);
+                new.actions = actions;
+            } else {
+                return Effects {
+                    jobs: vec![],
+                    events: vec![Event::Note(Note::warning(
+                        "preview",
+                        "Preview input backlog exceeded; wait for controls to finish",
+                    ))],
+                };
+            }
+        }
+    }
     if let Preview::Document(new) = &mut preview {
+        if new.extension.is_some() {
+            state.preview = Some((path, Arc::new(preview)));
+            return Effects {
+                jobs: vec![],
+                events: vec![Event::Preview],
+            };
+        }
         if let Some((old_path, old)) = &state.preview {
             if *old_path == path {
                 if let Preview::Document(old) = old.as_ref() {
@@ -4027,6 +4087,90 @@ mod tests {
         );
         assert!(matches!(s.preview.as_ref().unwrap().1.as_ref(),
             Preview::Dir(tree) if tree.summary.files == 0 && tree.notice.as_deref() == Some("Tree notice")));
+    }
+
+    #[test]
+    fn extension_actions_survive_coalescing_and_acknowledge_only_consumed_sequences() {
+        use super::super::preview::{
+            extensions::{Action, Info},
+            model::Document,
+        };
+        use starfold_preview_protocol::MediaAction;
+        let mut state = state_at("/home");
+        let document = |sequence| {
+            let mut d = Document::new("Test media");
+            d.extension = Some(Box::new(Info {
+                provider: "test".into(),
+                revision: "1".into(),
+                session: 9,
+                sequence,
+                keys: vec![],
+                actions: vec![Action {
+                    sequence,
+                    action: MediaAction::PlayPause,
+                }],
+            }));
+            Preview::Document(d)
+        };
+        for sequence in [2, 3] {
+            apply(
+                &mut state,
+                Change::Done(Done::Previewed {
+                    tab: TabId(0),
+                    path: "/home/movie".into(),
+                    generation: 0,
+                    preview: document(sequence),
+                }),
+            );
+        }
+        assert_eq!(
+            state
+                .preview
+                .as_ref()
+                .unwrap()
+                .1
+                .extension()
+                .unwrap()
+                .actions
+                .len(),
+            2
+        );
+        apply(
+            &mut state,
+            Change::Command(Command::PreviewAck {
+                session: 8,
+                sequence: 3,
+            }),
+        );
+        assert_eq!(
+            state
+                .preview
+                .as_ref()
+                .unwrap()
+                .1
+                .extension()
+                .unwrap()
+                .actions
+                .len(),
+            2
+        );
+        apply(
+            &mut state,
+            Change::Command(Command::PreviewAck {
+                session: 9,
+                sequence: 2,
+            }),
+        );
+        let pending = &state
+            .preview
+            .as_ref()
+            .unwrap()
+            .1
+            .extension()
+            .unwrap()
+            .actions;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].sequence, 3);
     }
 
     #[test]
