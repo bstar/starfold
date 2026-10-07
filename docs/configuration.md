@@ -18,6 +18,8 @@ defaults. Editing one key never means writing the other six.
 | --- | --- |
 | `[ui] theme` | a theme id, or `"system"` to follow the desktop. Default `"catppuccin-mocha"`. See [Theming](#theming) |
 | `[ui] graphics` | how the preview draws a picture: `auto` asks the terminal, `kitty` insists on the kitty protocol, `blocks` (also spelled `halfblocks`) draws two pixels to a cell in any terminal at all, `off` draws no picture and leaves a name instead. Default `auto` |
+| `[ui] pane_corners` | graphical pane borders: `"rounded"` (default) or `"square"`. `"rigid"` also means square. Read from the client machine's config, including SSH sessions. Restart the graphical frontend after editing |
+| `[ui] pane_corner_radius` | rounded pane border radius in display pixels. Default `9`; `0` is square. Ignored when `pane_corners` is `"square"` |
 | `[ui] padding_x` / `padding_y` | blank columns and rows around the whole layout, for a terminal whose window has none. Default `0` |
 | `[ui] right_click` | accept physical right-click mouse actions. Default `false`; Ctrl+click works without this setting |
 | `[ui] show_hidden` | show dotfiles by default. Default `false`. `.` toggles it for the running session |

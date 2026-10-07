@@ -31,6 +31,10 @@ pub struct Ui {
     pub theme: String,
     /// `auto`, `kitty`, `blocks` or `off`.
     pub graphics: String,
+    /// Graphical pane border corners, read by the local frontend.
+    pub pane_corners: CornerStyle,
+    /// Rounded pane border radius in display pixels.
+    pub pane_corner_radius: u16,
     /// Blank columns and rows kept around the whole layout, for terminals
     /// whose window has no padding of its own.
     pub padding_x: u16,
@@ -59,6 +63,8 @@ impl Default for Ui {
         Self {
             theme: "catppuccin-mocha".into(),
             graphics: "auto".into(),
+            pane_corners: CornerStyle::default(),
+            pane_corner_radius: 9,
             padding_x: 0,
             padding_y: 0,
             right_click: true,
@@ -70,6 +76,15 @@ impl Default for Ui {
             preview_rows: 10,
             ops_rows: 6,
             max_entries: 50_000,
+        }
+    }
+}
+
+impl Ui {
+    pub fn pane_radius(&self) -> u16 {
+        match self.pane_corners {
+            CornerStyle::Rounded => self.pane_corner_radius,
+            CornerStyle::Square => 0,
         }
     }
 }
@@ -121,7 +136,7 @@ pub struct Preview {
     /// through the three while it is running.
     pub image_scale: Scale,
     /// Graphical video corners, applied by the local frontend even over SSH.
-    pub video_corners: VideoCorners,
+    pub video_corners: CornerStyle,
     /// Rounded video radius in display pixels; square corners ignore it.
     pub video_corner_radius: u16,
 }
@@ -139,7 +154,7 @@ impl Default for Preview {
             max_image_dimension: 4096,
             dir_budget: 20_000,
             image_scale: Scale::default(),
-            video_corners: VideoCorners::default(),
+            video_corners: CornerStyle::default(),
             video_corner_radius: 24,
         }
     }
@@ -147,7 +162,7 @@ impl Default for Preview {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum VideoCorners {
+pub enum CornerStyle {
     #[default]
     Rounded,
     #[serde(alias = "rigid")]
@@ -157,8 +172,8 @@ pub enum VideoCorners {
 impl Preview {
     pub fn video_radius(&self) -> u16 {
         match self.video_corners {
-            VideoCorners::Rounded => self.video_corner_radius,
-            VideoCorners::Square => 0,
+            CornerStyle::Rounded => self.video_corner_radius,
+            CornerStyle::Square => 0,
         }
     }
 }
@@ -354,6 +369,11 @@ const TEMPLATE: &str = r#"# STAR/FOLD configuration.
 theme = "catppuccin-mocha"
 # How pictures are drawn in the preview: auto, kitty, blocks, or off.
 graphics = "auto"
+# Graphical pane borders: rounded or square (rigid is also accepted).
+# Read from the client machine's config for SSH sessions. Restart to apply.
+pane_corners = "rounded"
+# Rounded radius in display pixels; ignored with square corners.
+pane_corner_radius = 9
 # Blank cells around the whole layout, for a terminal whose window has none.
 padding_x = 0
 padding_y = 0
@@ -477,6 +497,23 @@ mod tests {
             assert_eq!(toml::from_str::<Config>(&saved).unwrap(), config);
         }
         assert!(toml::from_str::<Config>("[preview]\nvideo_corners = 'unknown'").is_err());
+    }
+
+    #[test]
+    fn pane_corner_settings_round_trip_and_square_ignores_radius() {
+        assert_eq!(Config::default().ui.pane_radius(), 9);
+        for (style, radius) in [("rounded", 24), ("square", 0), ("rigid", 0)] {
+            let config: Config = toml::from_str(&format!(
+                "[ui]\npane_corners = '{style}'\npane_corner_radius = 24\n"
+            ))
+            .unwrap();
+            assert_eq!(config.ui.pane_radius(), radius);
+            assert_eq!(
+                toml::from_str::<Config>(&toml::to_string(&config).unwrap()).unwrap(),
+                config
+            );
+        }
+        assert!(toml::from_str::<Config>("[ui]\npane_corners = 'unknown'").is_err());
     }
 
     #[test]

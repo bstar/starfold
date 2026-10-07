@@ -148,6 +148,7 @@ fn ensure(name: &str, dir: Option<PathBuf>, attach_only: bool) -> Result<PathBuf
 fn presentation_options() -> Result<PresentationOptions> {
     let config = crate::config::Config::load(&crate::PATHS.config_file()?)?;
     Ok(PresentationOptions {
+        pane_corner_radius: config.ui.pane_radius(),
         video_corner_radius: config.preview.video_radius(),
     })
 }
