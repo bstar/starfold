@@ -41,7 +41,7 @@ starfold-preview-protocol = { version = "0.1", path = "extensions/protocol" }
 # The `version` is not redundant with the tag: cargo-deny counts a dependency
 # with no version requirement as a wildcard and `wildcards = "deny"` refuses
 # it, whether or not the source is a git URL pinned to a tag.
-starkit = { git = "https://github.com/bstar/starkit", rev = "2f45c8dbcc4ffe738c01514c31267a514c8a6d73", version = "0.3", default-features = false, features = [
+starkit = { git = "https://github.com/bstar/starkit", rev = "8bae5ffa7da54bdd65c922617c2d5c93de9038d6", version = "0.3", default-features = false, features = [
     "image",
     "bmp",
     "gif",
