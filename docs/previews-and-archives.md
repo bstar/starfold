@@ -67,8 +67,10 @@ Archive support is included in the ordinary `starfold` build and installation.
 Its extension provider runs in a supervised child of the same executable. FOLD owns navigation, selection,
 previews, staging and OPERATIONS. See [the archive extension contract](archive-extension.md).
 
-Enter an archive to browse it as a folder in either pane. Enter directories and
-nested archives normally; Back returns through their boundaries. Space marks
+Enter an archive to browse it as a folder in either pane.
+Archive Preview also offers **Browse**; click it or press Enter while Preview
+has focus to open the archive in the active pane. Space marks members there.
+Enter directories and nested archives normally; Back returns through their boundaries. Space marks
 individual members; yank/paste or Copy extracts the marked members into a
 filesystem pane. Directory copies preserve their structure, including empty
 archive directories. Selecting a member uses the ordinary preview providers;

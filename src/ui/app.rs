@@ -2365,7 +2365,7 @@ impl App {
             Action::Activate => match self.layout.focus() {
                 ModuleId::Stack => self.activate_entry(),
                 ModuleId::Operations => self.core.send(Command::Run),
-                ModuleId::Preview => {}
+                ModuleId::Preview => self.browse_archive_preview(),
             },
             Action::Back => {
                 if self.filter.is_some() {
@@ -3331,7 +3331,28 @@ impl App {
         }
     }
 
+    fn archive_preview_available(&self) -> bool {
+        matches!(self.view.preview.as_deref(), Some(Preview::Document(document))
+            if matches!(document.content, crate::fold::preview::model::Content::Archive(_)))
+            && self
+                .core
+                .state()
+                .cursor_entry()
+                .is_some_and(|entry| crate::fold::archive::Format::from_path(&entry.path).is_some())
+    }
+
+    fn browse_archive_preview(&mut self) {
+        if self.archive_preview_available() {
+            self.activate_entry();
+            self.layout.focus_set(ModuleId::Stack);
+            self.repaint = true;
+        }
+    }
+
     fn panel_words(&self, module: ModuleId) -> Vec<panels::Word> {
+        if module == ModuleId::Preview && self.archive_preview_available() {
+            return vec![panels::Word::BrowseArchive, panels::Word::Close];
+        }
         #[cfg(feature = "terminal-graphics")]
         if module == ModuleId::Stack && self.graphical.as_ref().is_some_and(|g| !g.cell_mode) {
             return panels::words(module)
@@ -3369,6 +3390,7 @@ impl App {
 
     fn word_click(&mut self, word: panels::Word) {
         match word {
+            panels::Word::BrowseArchive => self.browse_archive_preview(),
             panels::Word::AudioOutput(_) => {
                 #[cfg(feature = "terminal-graphics")]
                 self.toggle_audio_output();
@@ -4500,6 +4522,67 @@ mod tests {
         (app, fk, dir)
     }
 
+    #[test]
+    fn focused_archive_preview_opens_from_enter_and_browse_click() {
+        use std::io::Write;
+        for pointer in [false, true] {
+            let (mut app, fake, temp) = app();
+            let file = temp.path().join("book.zip");
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+            zip.start_file("hello.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"hello").unwrap();
+            zip.finish().unwrap();
+            app.core.send(Command::Push(temp.path().into()));
+            fake.pump();
+            // The fake controller cannot spawn main's private preview worker.
+            // Read the real provider directly, then supply its presentation.
+            let document = crate::fold::preview::providers::build(
+                &file,
+                b"PK\x03\x04",
+                1,
+                &app.cfg.core().preview,
+            )
+            .unwrap();
+            {
+                let mut state = fake.state_mut();
+                state.preview = Some((file, Arc::new(Preview::Document(document))));
+                state.version += 1;
+            }
+            app.refresh();
+            app.layout.preview_open = true;
+            app.layout.focus_set(ModuleId::Preview);
+            assert!(app.archive_preview_available());
+            let area = Rect::new(0, 0, 100, 40);
+            let mut buffer = Buffer::empty(area);
+            app.draw(area, &mut buffer);
+            assert!(dump(&buffer, area).contains("Browse"));
+            if pointer {
+                let rect = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Preview);
+                let (_, slot) = header::slots(rect, &app.panel_words(ModuleId::Preview))
+                    .into_iter()
+                    .find(|(word, _)| *word == panels::Word::BrowseArchive)
+                    .unwrap();
+                app.mouse(mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    slot.x,
+                    slot.y,
+                ));
+            } else {
+                app.key(code(KeyCode::Enter));
+            }
+            assert!(crate::fold::location::is_archive(
+                &app.core.state().active_frame().dir
+            ));
+            assert_eq!(app.layout.focus(), ModuleId::Stack);
+            fake.pump();
+            app.refresh();
+            assert_eq!(
+                app.core.state().cursor_entry().unwrap().display,
+                "hello.txt"
+            );
+        }
+    }
     #[test]
     fn archive_activation_enters_browser_before_audio_capabilities_arrive() {
         use std::io::Write;
