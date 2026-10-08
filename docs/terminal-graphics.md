@@ -335,6 +335,8 @@ controls retain separate click targets; tabs have no bottom underline.
 
 ## Native video Preview
 
+Preview shows an animated loading indicator while opening a movie and starting playback. Buffering is shown beside the timeline until playback resumes. These states appear in both graphical and cell modes; cell-mode letterboxing matches the surrounding preview pane.
+
 Select a video to get a bounded poster frame and metadata. Press **Enter** on
 the file or click **Play** in the Preview header to start playback. Audio starts at 80%. Header controls
 show the volume percentage and provide Play/Pause, mute, volume, Expand/Restore

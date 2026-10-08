@@ -42,6 +42,7 @@ pub(super) struct State {
     pub(super) audio_epoch: Option<u64>,
     video: Option<starkit::terminal_graphics::media::Host>,
     video_sequence: u64,
+    loading_phase: Option<usize>,
     video_unmuted_volume: Option<u8>,
     video_scrub: Option<VideoScrub>,
     video_path: Option<PathBuf>,
@@ -1000,6 +1001,7 @@ impl Controller for App {
             && self.preview_animation.is_some()
             && !self.native_animation_playback())
             || self.view.loading
+            || self.movie_loading_stage().is_some()
             || self.overlays.is_open()
             || self.places.is_some()
             || self.tab_picker.is_some()
@@ -1102,6 +1104,13 @@ impl Controller for App {
             starkit::chrome::frame::padding_scope(self.graphical.as_ref().unwrap().padded_chrome);
         App::tick(self);
         self.tick_video();
+        let phase = self
+            .movie_loading_stage()
+            .map(|_| (self.animation_started.elapsed().as_millis() / 120) as usize);
+        if self.graphical.as_ref().unwrap().loading_phase != phase {
+            self.graphical.as_mut().unwrap().loading_phase = phase;
+            self.repaint = true;
+        }
         if let Some(op) = self.pending_elevated_delete.take() {
             // No controlling TTY exists on a headless SSH host. -S uses stdin
             // while retaining sudo's parent-process timestamp scope, shared by
@@ -2458,6 +2467,61 @@ impl App {
         }
         self.repaint = true;
     }
+    fn movie_loading_stage(&self) -> Option<&'static str> {
+        if !self.layout.preview_open {
+            return None;
+        }
+        let state = self.graphical.as_ref()?;
+        if let Some(video) = &state.video {
+            return (video.buffering && !video.finished).then_some(if video.position > 0. {
+                "Buffering movie…"
+            } else {
+                "Starting playback…"
+            });
+        }
+        if matches!(self.view.preview.as_deref(), Some(Preview::Error(_))) {
+            return None;
+        }
+        if state.video_pending.is_some()
+            || state.direct_play.is_some()
+            || (self.view.preview.is_none()
+                && self.last_preview_for.as_ref().is_some_and(|path| {
+                    crate::fold::file_type::classify(path, &[])
+                        == crate::fold::file_type::FileType::Video
+                }))
+        {
+            return Some("Loading movie…");
+        }
+        if state.image.is_none()
+            && matches!(self.view.preview.as_deref(), Some(Preview::Video { .. }))
+        {
+            return Some("Preparing preview…");
+        }
+        None
+    }
+    pub(super) fn draw_movie_loading(&self, area: Rect, buf: &mut Buffer) {
+        let Some(stage) = self.movie_loading_stage() else {
+            return;
+        };
+        // Visible in the empty picture area until the client has a frame;
+        // the timeline status remains visible during later buffering too.
+        let body = panels::preview::content_rect(area);
+        if body.is_empty() {
+            return;
+        }
+        let style = Style::default()
+            .fg(panels::rgb(self.theme.accent))
+            .bg(panels::rgb(self.theme.panel_bg));
+        for y in body.y..body.bottom() {
+            buf.set_string(body.x, y, " ".repeat(usize::from(body.width)), style);
+        }
+        let text = starkit::text::truncate(
+            &format!("{} {stage}", self.unmount_spinner()),
+            usize::from(body.width),
+        );
+        let x = body.x + body.width.saturating_sub(starkit::wrap::width_of(&text)) / 2;
+        buf.set_string(x, body.y + body.height / 2, text, style);
+    }
     pub(super) fn video_words(&self) -> Option<Vec<panels::Word>> {
         let state = self.graphical.as_ref()?;
         if !state.video_capable
@@ -3588,6 +3652,7 @@ impl App {
             .then(|| Rect::new(rect.x, rect.bottom() - 2, rect.width.min(256), 2));
         rect.y += rect.height - if controls_rect.is_some() { 3 } else { 1 };
         rect.height = 1;
+        let spinner = self.unmount_spinner();
         let state = self.graphical.as_mut().unwrap();
         state.video_timeline = Some(rect);
         let position = state.video_scrub.as_ref().map_or_else(
@@ -3645,6 +3710,16 @@ impl App {
                 poster.height,
                 Self::video_stream_label(video)
             );
+            if video.buffering && !video.finished {
+                text = format!(
+                    "{spinner} {} · {text}",
+                    if video.position > 0. {
+                        "Buffering movie…"
+                    } else {
+                        "Starting playback…"
+                    }
+                );
+            }
             if let Some(warning) = &video.warning {
                 text.push_str(&format!(" · {warning}"));
             }
@@ -5101,6 +5176,75 @@ mod tests {
             .nodes
             .iter()
             .any(|n| matches!(n, Primitive::Text { text, .. } if text == "three")));
+    }
+
+    #[test]
+    fn movie_loading_indicator_covers_open_decode_buffering_and_errors() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        fake.pump();
+        app.refresh();
+        app.enable_graphical();
+        app.layout.preview_open = true;
+        app.graphical.as_mut().unwrap().cell_mode = true;
+        let path = fake.home().join("movie.mkv");
+        app.last_preview_for = Some(path.clone());
+        app.view.preview = None;
+        assert_eq!(app.movie_loading_stage(), Some("Loading movie…"));
+        let area = Rect::new(0, 0, 80, 16);
+        let mut buffer = Buffer::empty(area);
+        app.draw_movie_loading(area, &mut buffer);
+        assert!(buffer
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>()
+            .contains("Loading movie…"));
+        app.view.preview = Some(Arc::new(Preview::Video {
+            extension: None,
+            path: path.clone(),
+            poster: starkit::media::Poster {
+                pixels: Arc::new(RgbaImage::new(32, 24)),
+                duration: 60.,
+                width: 1920,
+                height: 1080,
+                audio: true,
+            },
+        }));
+        assert_eq!(app.movie_loading_stage(), Some("Preparing preview…"));
+        app.graphical.as_mut().unwrap().video = Some(starkit::terminal_graphics::media::Host::new(
+            path,
+            "video-test".into(),
+            17,
+            true,
+        ));
+        assert_eq!(app.movie_loading_stage(), Some("Starting playback…"));
+        {
+            let video = app.graphical.as_mut().unwrap().video.as_mut().unwrap();
+            video.position = 12.;
+        }
+        assert_eq!(app.movie_loading_stage(), Some("Buffering movie…"));
+        {
+            let video = app.graphical.as_mut().unwrap().video.as_mut().unwrap();
+            video.buffering = false;
+        }
+        assert_eq!(app.movie_loading_stage(), None);
+        {
+            let video = app.graphical.as_mut().unwrap().video.as_mut().unwrap();
+            video.buffering = true;
+            video.finished = true;
+        }
+        assert_eq!(app.movie_loading_stage(), None);
+        app.graphical.as_mut().unwrap().video = None;
+        app.view.preview = Some(Arc::new(Preview::Error("Cannot open movie".into())));
+        assert_eq!(app.movie_loading_stage(), None);
     }
 
     #[test]

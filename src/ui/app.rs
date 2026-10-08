@@ -3624,6 +3624,9 @@ impl App {
             panels::preview::render(regions.rect_of(ModuleId::Preview), buf, &mut pv, &mut bars)
         };
 
+        #[cfg(feature = "terminal-graphics")]
+        self.draw_movie_loading(regions.rect_of(ModuleId::Preview), buf);
+
         {
             let ov = self.operations_view();
             panels::operations::render(regions.rect_of(ModuleId::Operations), buf, &ov, &mut bars);
