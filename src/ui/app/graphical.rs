@@ -5262,6 +5262,13 @@ mod tests {
         let path = fake.home().join("movie.mkv");
         let mut metadata = crate::fold::preview::model::Document::new("Movie details");
         metadata.field("Title", "Private Resort (1985)");
+        metadata.field("Year", "1985");
+        metadata.field("Cast", "Rob Morrow, Johnny Depp");
+        metadata.image = Some(Arc::new(RgbaImage::from_pixel(
+            40,
+            60,
+            starkit::image::Rgba([10, 20, 30, 255]),
+        )));
         metadata.field("IMDb", "https://www.imdb.com/title/tt0089839/");
         metadata.notice = Some("Enter to play in Preview".into());
         app.view.cursor_path = Some(path.clone());
@@ -5278,15 +5285,31 @@ mod tests {
             },
         }));
         app.layout.preview_open = true;
-        let scene = Controller::scene(&mut app, Viewport::default());
-        assert!(scene
-            .spans
-            .iter()
-            .any(|s| s.text.contains("imdb.com/title/tt0089839")));
-        assert!(!scene
-            .components
-            .iter()
-            .any(|c| matches!(c, Component::Image { .. })));
+        for cell_mode in [true, false] {
+            app.graphical.as_mut().unwrap().cell_mode = cell_mode;
+            let scene = Controller::scene(&mut app, Viewport::default());
+            let text = scene
+                .spans
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<String>();
+            for detail in [
+                "Private Resort",
+                "1985",
+                "Johnny Depp",
+                "imdb.com/title/tt0089839",
+            ] {
+                assert!(
+                    text.contains(detail),
+                    "Poster suppressed {detail} in cell_mode={cell_mode}: {text}"
+                );
+            }
+            for component in &scene.components {
+                if let Component::Image { rect, .. } = component {
+                    assert!(rect.width <= 32, "Poster covers the movie details");
+                }
+            }
+        }
         assert_eq!(app.movie_loading_stage(), None);
         let height = app.layout.native_preview_rows;
         app.activate_video_entry(path);

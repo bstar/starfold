@@ -637,7 +637,7 @@ pub fn page_rows(page: &crate::fold::preview::model::Page, width: u16) -> usize 
 
 fn document_lines(d: &crate::fold::preview::model::Document, width: u16) -> Vec<String> {
     use crate::fold::preview::model::Content;
-    if d.image.is_some() {
+    if d.image.is_some() && d.kind != "Movie details" {
         return d
             .fields
             .iter()
