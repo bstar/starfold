@@ -369,16 +369,11 @@ pub fn render(
                 if d.kind == "Movie details" {
                     draw_meta(body, buf, v.theme, "IMDb · Movie details");
                     let (poster, details) = movie_card_rects(below_meta(body));
-                    let placement = render_image(
-                        poster,
-                        buf,
-                        v,
-                        image,
-                        image.width(),
-                        image.height(),
-                        "Poster",
-                    );
-                    for (i, line) in lines(preview, details.width)
+                    let placement =
+                        render_image(poster, buf, v, image, image.width(), image.height(), "");
+                    let rows = lines(preview, details.width);
+                    let technical = rows.iter().position(|row| row == "File details");
+                    for (i, line) in rows
                         .iter()
                         .skip(v.scroll)
                         .take(usize::from(details.height))
@@ -388,7 +383,15 @@ pub fn render(
                             details.x,
                             details.y + i as u16,
                             line,
-                            Style::default().fg(rgb(v.theme.row_fg)),
+                            if i + v.scroll == 0 {
+                                Style::default()
+                                    .fg(rgb(v.theme.accent))
+                                    .add_modifier(Modifier::BOLD)
+                            } else if technical.is_some_and(|row| i + v.scroll >= row) {
+                                Style::default().fg(rgb(v.theme.dim))
+                            } else {
+                                Style::default().fg(rgb(v.theme.row_fg))
+                            },
                         );
                     }
                     render_scrollbar(
@@ -591,7 +594,14 @@ pub fn movie_card_rects(content: Rect) -> (Rect, Rect) {
     let width = (content.width / 4).min(32);
     let gap = 3.min(content.width.saturating_sub(width));
     (
-        Rect { width, ..content },
+        // A standard 2:3 poster in cells roughly twice as tall as wide.
+        // Bound the image slot so a tall preview never centres it far below
+        // the first row of details.
+        Rect {
+            width,
+            height: content.height.min(width.saturating_mul(3) / 4),
+            ..content
+        },
         Rect {
             x: content.x + width + gap,
             width: content.width.saturating_sub(width + gap),
@@ -637,6 +647,9 @@ pub fn page_rows(page: &crate::fold::preview::model::Page, width: u16) -> usize 
 
 fn document_lines(d: &crate::fold::preview::model::Document, width: u16) -> Vec<String> {
     use crate::fold::preview::model::Content;
+    if d.kind == "Movie details" {
+        return movie_lines(d, width);
+    }
     if d.image.is_some() && d.kind != "Movie details" {
         return d
             .fields
@@ -701,6 +714,69 @@ fn document_lines(d: &crate::fold::preview::model::Document, width: u16) -> Vec<
         lines.push(n.clone());
     }
     lines
+}
+
+/// Human details first; container/codec facts remain available below them.
+fn movie_lines(d: &crate::fold::preview::model::Document, width: u16) -> Vec<String> {
+    let field = |label: &str| {
+        d.fields
+            .iter()
+            .find(|f| f.label == label)
+            .map(|f| f.value.as_str())
+    };
+    let mut rows = Vec::new();
+    if let Some(title) = field("Title") {
+        rows.push(title.to_string());
+    }
+    if let Some(year) = field("Year") {
+        rows.push(year.to_string());
+    }
+    rows.push(String::new());
+    let primary = [
+        "Cast",
+        "Genre",
+        "Director",
+        "Rating",
+        "Plot",
+        "Synopsis",
+        "Summary",
+        "Description",
+        "IMDb",
+    ];
+    for label in primary {
+        if let Some(value) = field(label) {
+            rows.push(format!("{label}: {value}"));
+        }
+    }
+    if let Some(notice) = &d.notice {
+        rows.push(String::new());
+        rows.push(notice.clone());
+    }
+    let technical: Vec<_> = d
+        .fields
+        .iter()
+        .filter(|f| f.label != "Title" && f.label != "Year" && !primary.contains(&f.label.as_str()))
+        .collect();
+    if !technical.is_empty() {
+        rows.push(String::new());
+        rows.push("File details".into());
+        rows.extend(
+            technical
+                .into_iter()
+                .map(|f| format!("{}: {}", f.label, f.value)),
+        );
+    }
+    rows.into_iter()
+        .flat_map(|row| {
+            if row.is_empty() {
+                return vec![row];
+            }
+            starkit::wrap::wrap(&row, width)
+                .iter()
+                .map(|r| r.drawn(&row).to_string())
+                .collect()
+        })
+        .collect()
 }
 
 pub(crate) fn dir_lines(tree: &Tree) -> Vec<String> {
@@ -849,8 +925,9 @@ fn render_image(
         draw_meta(pad_body(area), buf, v.theme, &meta);
         return None;
     }
+    let caption = !format.is_empty();
     let pic = Rect {
-        height: area.height - 1,
+        height: area.height - u16::from(caption),
         ..area
     };
     let meta_row = Rect {
@@ -903,7 +980,9 @@ fn render_image(
         None
     };
 
-    draw_meta(pad_body(meta_row), buf, v.theme, &meta);
+    if caption {
+        draw_meta(pad_body(meta_row), buf, v.theme, &meta);
+    }
     placement
 }
 
@@ -1401,14 +1480,34 @@ mod tests {
 mod movie_card_tests {
     use super::*;
     #[test]
+    fn movie_information_precedes_wrapped_technical_details() {
+        let mut d = crate::fold::preview::model::Document::new("Movie details");
+        d.field("Title", "Hang 'Em High");
+        d.field("Year", "1968");
+        d.field("Track 1", "Video · AVC");
+        d.field("Cast", "Clint Eastwood, Inger Stevens");
+        d.field("IMDb", "https://www.imdb.com/title/tt0061747/");
+        d.notice = Some("Enter to play in Preview".into());
+        let rows = movie_lines(&d, 80);
+        assert_eq!(rows[0], "Hang 'Em High");
+        assert_eq!(rows[1], "1968");
+        let technical = rows.iter().position(|r| r == "File details").unwrap();
+        assert!(rows.iter().position(|r| r.starts_with("Cast:")).unwrap() < technical);
+        assert!(rows.iter().position(|r| r.starts_with("Enter")).unwrap() < technical);
+        assert!(rows.iter().position(|r| r.starts_with("Track 1:")).unwrap() > technical);
+        assert!(movie_lines(&d, 24).iter().all(|r| width_of(r) <= 24));
+    }
+    #[test]
     fn poster_and_details_have_separate_bounded_regions() {
         for width in [60, 100, 200, 356] {
-            let content = Rect::new(3, 7, width, 18);
+            let content = Rect::new(3, 7, width, 80);
             let (poster, details) = movie_card_rects(content);
             assert_eq!(poster.x, content.x);
             assert!(poster.right() < details.x);
             assert_eq!(details.right(), content.right());
-            assert_eq!(details.height, poster.height);
+            assert_eq!(details.height, content.height);
+            assert_eq!(poster.y, details.y);
+            assert!(poster.height <= 24);
             assert!(poster.width <= 32 && details.width > poster.width);
         }
     }

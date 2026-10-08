@@ -693,7 +693,11 @@ impl App {
                 rect: rect.into(),
                 id: id.clone(),
                 png: Some(png.clone()),
-                zoom: state.image_zoom.unwrap_or(100),
+                zoom: if showing_details {
+                    100
+                } else {
+                    state.image_zoom.unwrap_or(100)
+                },
                 scale: match if showing_details {
                     crate::config::Scale::Smooth
                 } else {
