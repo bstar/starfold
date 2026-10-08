@@ -11,7 +11,9 @@ use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::{bounded, Receiver};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use starkit::chrome::{frame, header};
-use starkit::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use starkit::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use starkit::ratatui::buffer::Buffer;
 use starkit::ratatui::layout::Rect;
 use starkit::ratatui::style::{Color, Modifier, Style};
@@ -27,6 +29,8 @@ enum Output {
 
 pub struct Editor {
     pub path: PathBuf,
+    pub origin: Option<PathBuf>,
+    pub interacted: bool,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     writer: Box<dyn Write + Send>,
@@ -44,7 +48,12 @@ pub fn is_editable(entry: &Entry) -> bool {
     {
         return false;
     }
-    if entry.path.extension().is_none() {
+    if entry.path.extension().is_none()
+        || matches!(
+            crate::fold::file_type::classify(&entry.path, &[]),
+            crate::fold::file_type::FileType::Text | crate::fold::file_type::FileType::Code
+        )
+    {
         return true;
     }
     let mime = mime_guess::from_path(&entry.path)
@@ -131,6 +140,8 @@ impl Editor {
 
         Ok(Self {
             path,
+            origin: None,
+            interacted: false,
             master: pair.master,
             child,
             writer,
@@ -152,6 +163,7 @@ impl Editor {
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Result<()> {
+        self.interacted = true;
         let bytes = key_bytes(key, self.parser.screen().application_cursor());
         if !bytes.is_empty() {
             self.writer.write_all(&bytes).context("typing in editor")?;
@@ -160,7 +172,77 @@ impl Editor {
         Ok(())
     }
 
+    pub fn mouse(&mut self, event: MouseEvent, body: Rect) -> Result<()> {
+        use vt100::{MouseProtocolEncoding as Encoding, MouseProtocolMode as Mode};
+        let mode = self.parser.screen().mouse_protocol_mode();
+        if mode == Mode::None || !body.contains((event.column, event.row).into()) {
+            return Ok(());
+        }
+        let button = |b| match b {
+            MouseButton::Left => 0,
+            MouseButton::Middle => 1,
+            MouseButton::Right => 2,
+        };
+        let (mut code, released) = match event.kind {
+            MouseEventKind::Down(b) => (button(b), false),
+            MouseEventKind::Up(b) if mode != Mode::Press => (button(b), true),
+            MouseEventKind::Drag(b) if matches!(mode, Mode::ButtonMotion | Mode::AnyMotion) => {
+                (button(b) + 32, false)
+            }
+            MouseEventKind::Moved if mode == Mode::AnyMotion => (35, false),
+            MouseEventKind::ScrollUp => (64, false),
+            MouseEventKind::ScrollDown => (65, false),
+            _ => return Ok(()),
+        };
+        if event.modifiers.contains(KeyModifiers::SHIFT) {
+            code += 4;
+        }
+        if event.modifiers.contains(KeyModifiers::ALT) {
+            code += 8;
+        }
+        if event.modifiers.contains(KeyModifiers::CONTROL) {
+            code += 16;
+        }
+        let x = event.column - body.x + 1;
+        let y = event.row - body.y + 1;
+        let bytes = match self.parser.screen().mouse_protocol_encoding() {
+            Encoding::Sgr => {
+                format!("\x1b[<{code};{x};{y}{}", if released { 'm' } else { 'M' }).into_bytes()
+            }
+            encoding => {
+                if released {
+                    code = 3;
+                }
+                let values = [code + 32, u32::from(x) + 32, u32::from(y) + 32];
+                let mut bytes = b"\x1b[M".to_vec();
+                for value in values {
+                    if encoding == Encoding::Default {
+                        if value > 255 {
+                            return Ok(());
+                        }
+                        bytes.push(value as u8);
+                    } else {
+                        let mut utf8 = [0; 4];
+                        bytes.extend_from_slice(
+                            char::from_u32(value)
+                                .unwrap_or(' ')
+                                .encode_utf8(&mut utf8)
+                                .as_bytes(),
+                        );
+                    }
+                }
+                bytes
+            }
+        };
+        if !matches!(event.kind, MouseEventKind::Moved) {
+            self.interacted = true;
+        }
+        self.writer.write_all(&bytes)?;
+        self.writer.flush().context("sending editor pointer input")
+    }
+
     pub fn paste(&mut self, text: &str) -> Result<()> {
+        self.interacted = true;
         if self.parser.screen().bracketed_paste() {
             self.writer.write_all(b"\x1b[200~")?;
         }
@@ -383,6 +465,12 @@ mod tests {
         std::fs::write(dir.path().join("note.txt"), b"hello").unwrap();
         std::fs::write(dir.path().join("blob.bin"), b"\0").unwrap();
         std::fs::write(dir.path().join("Makefile"), b"all:\n").unwrap();
+        for name in ["game.cfg", "GAME.CFG", "service.conf", "settings.ini"] {
+            std::fs::write(dir.path().join(name), b"setting=value\n").unwrap();
+            assert!(is_editable(&crate::fold::entry::stat(
+                &dir.path().join(name)
+            )));
+        }
         assert!(is_editable(&crate::fold::entry::stat(
             &dir.path().join("note.txt")
         )));

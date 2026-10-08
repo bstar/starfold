@@ -191,7 +191,7 @@ impl App {
         self.seen_version = u64::MAX;
         self.repaint = true;
     }
-    fn change_tab(&mut self, command: Command) {
+    pub(super) fn change_tab(&mut self, command: Command) {
         let old = self.core.state().tabs.active().id;
         let context = self.take_tab_ui();
         self.tab_ui.insert(old, context);
@@ -377,6 +377,28 @@ impl App {
                 }
             }
             TabAction::Close(id) => {
+                let pinned = if id == self.core.state().tabs.active().id {
+                    self.editor
+                        .as_ref()
+                        .is_some_and(|e| e.origin.is_some() && e.interacted)
+                } else {
+                    self.tab_ui
+                        .get(&id)
+                        .and_then(|c| c.editor.as_ref())
+                        .is_some_and(|e| e.origin.is_some() && e.interacted)
+                };
+                if pinned {
+                    if id != self.core.state().tabs.active().id {
+                        self.change_tab(Command::SwitchTab(id));
+                    }
+                    self.layout.focus_set(ModuleId::Preview);
+                    self.note = Some((
+                        "Save or discard and exit the archive editor first".into(),
+                        NoteLevel::Warning,
+                        Instant::now(),
+                    ));
+                    return;
+                }
                 let dirty = {
                     let state = self.core.state();
                     state
@@ -474,6 +496,15 @@ impl App {
             self.audio_tab = Some(self.core.state().tabs.active().id);
             self.layout.audio_active = true;
         }
+    }
+    pub(super) fn parked_archive_editor(&self) -> Option<TabId> {
+        self.tab_ui.iter().find_map(|(id, context)| {
+            context
+                .editor
+                .as_ref()
+                .filter(|e| e.origin.is_some() && e.interacted)
+                .map(|_| *id)
+        })
     }
     pub(super) fn poll_parked_editors(&mut self) {
         for (id, context) in &mut self.tab_ui {

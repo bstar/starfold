@@ -199,10 +199,99 @@ fn build_file(path: &Path, full_len: u64, cfg: &PreviewConfig, cancel: &AtomicBo
     }
 
     if is_binary(&head) {
+        if super::archive::service::inspect(path).is_ok() {
+            if let Ok(document) = providers::archive_document(path, cfg) {
+                return Preview::Document(document);
+            }
+        }
         return Preview::Document(providers::metadata(path));
     }
 
     text_preview(&head, bytes_capped, full_len, cfg.max_lines)
+}
+
+/// Give unrecognized archive members a useful bounded binary view while keeping
+/// recognized image, text, document and media decoders unchanged.
+pub fn archive_member_preview(
+    mut preview: Preview,
+    local: &Path,
+    key: &Path,
+    cfg: &PreviewConfig,
+) -> Preview {
+    let Preview::Document(document) = &mut preview else {
+        return preview;
+    };
+    if document.kind == "File metadata"
+        && matches!(document.content, model::Content::Metadata)
+        && document.notice.is_none()
+    {
+        let limit = cfg
+            .max_bytes
+            .min(4096)
+            .min((cfg.max_lines as u64).saturating_mul(16));
+        let mut bytes = Vec::new();
+        let result = File::open(local).and_then(|file| file.take(limit).read_to_end(&mut bytes));
+        if let Err(error) = result {
+            return Preview::Error(error.to_string());
+        }
+        if is_binary(&bytes) {
+            use std::fmt::Write;
+            let mut text = String::new();
+            for (row, chunk) in bytes.chunks(16).enumerate() {
+                let _ = write!(text, "{:08x}  ", row * 16);
+                for i in 0..16 {
+                    if let Some(byte) = chunk.get(i) {
+                        let _ = write!(text, "{byte:02x} ");
+                    } else {
+                        text.push_str("   ");
+                    }
+                    if i == 7 {
+                        text.push(' ');
+                    }
+                }
+                text.push_str(" | ");
+                for byte in chunk {
+                    text.push(if byte.is_ascii_graphic() || *byte == b' ' {
+                        char::from(*byte)
+                    } else {
+                        '.'
+                    });
+                }
+                text.push('\n');
+            }
+            document.kind = "Binary data".into();
+            document.content = model::Content::Pages(vec![model::Page {
+                number: 1,
+                text,
+                truncated: std::fs::metadata(local).is_ok_and(|m| m.len() > bytes.len() as u64),
+            }]);
+        }
+    }
+    // Scratch-file timestamps and modes describe extraction, not the member.
+    document
+        .fields
+        .retain(|f| f.label != "Modified" && f.label != "Permissions");
+    if let Ok(crate::fold::location::Location::Archive {
+        source,
+        member: Some(member),
+        ..
+    }) = crate::fold::location::Location::from_key(key)
+    {
+        document.field("Archive", source.file.display());
+        document.field("Member", member.name.display());
+    }
+    preview
+}
+
+/// A content check prevents a misleading text suffix from opening binary data in an editor.
+pub fn is_editable_content(path: &Path, head: &[u8]) -> bool {
+    !text::is_binary(head)
+        && matches!(
+            super::file_type::classify(path, head),
+            super::file_type::FileType::Text
+                | super::file_type::FileType::Code
+                | super::file_type::FileType::Binary
+        )
 }
 
 #[cfg(test)]

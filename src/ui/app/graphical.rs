@@ -2750,7 +2750,11 @@ impl App {
             self.video_transport_action(&action, value);
         }
         if let Some(pending) = self.graphical.as_ref().unwrap().video_pending.clone() {
-            if !self.layout.preview_open || self.view.cursor_path.as_ref() != Some(&pending) {
+            let cursor_matches = self.view.cursor_path.as_ref().is_some_and(|cursor| {
+                cursor == &pending
+                    || self.core.state().archive_materialized.get(cursor) == Some(&pending)
+            });
+            if !self.layout.preview_open || !cursor_matches {
                 self.graphical.as_mut().unwrap().video_pending = None;
             } else if matches!(self.view.preview.as_deref(), Some(Preview::Video { path, .. }) if path == &pending)
             {
@@ -4009,6 +4013,48 @@ mod tests {
         assert!(app.resume_video.is_none());
         assert!(app.graphical.as_ref().unwrap().direct_play.is_none());
         assert!(app.note.as_ref().unwrap().0.contains("Movie not found"));
+    }
+
+    #[test]
+    fn archive_video_pending_tracks_member_identity() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            core,
+            cfg,
+            dir.path().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.layout.preview_open = true;
+        let local = dir.path().join("movie.mkv");
+        let key = crate::fold::location::Location::Archive {
+            source: crate::fold::location::ArchiveSource {
+                file: dir.path().join("movies.zip"),
+                nested: vec![],
+            },
+            directory: PathBuf::new(),
+            member: Some(crate::fold::location::Member {
+                index: 0,
+                name: "movie.mkv".into(),
+            }),
+        }
+        .key();
+        fake.state_mut()
+            .archive_materialized
+            .insert(key.clone(), local.clone());
+        app.view.cursor_path = Some(key);
+        app.graphical.as_mut().unwrap().video_pending = Some(local.clone());
+        app.tick_video();
+        assert_eq!(
+            app.graphical.as_ref().unwrap().video_pending.as_ref(),
+            Some(&local)
+        );
+        app.view.cursor_path = Some(dir.path().join("other.txt"));
+        app.tick_video();
+        assert!(app.graphical.as_ref().unwrap().video_pending.is_none());
     }
 
     #[test]

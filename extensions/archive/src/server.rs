@@ -22,6 +22,9 @@ pub fn serve_stdio() -> anyhow::Result<()> {
         &Reply::Hello {
             version: VERSION,
             capabilities: [
+                "inspect",
+                "zip_replace",
+                "zip_convert",
                 "index",
                 "member_read",
                 "extract",
@@ -54,6 +57,43 @@ pub fn serve_stdio() -> anyhow::Result<()> {
     });
     let result = (|| -> anyhow::Result<()> {
         match request {
+            Request::ConvertToZip {
+                source,
+                output,
+                password,
+            } => {
+                crate::native::convert_to_zip(&source, &output, password.as_deref(), &progress)?;
+            }
+            Request::Inspect { source } => {
+                let inspection = crate::native::inspect(&source)?;
+                let bytes = serde_json::to_vec(&inspection)?;
+                let mut out = std::io::stdout().lock();
+                send(
+                    &mut out,
+                    &Reply::Data {
+                        length: bytes.len() as u32,
+                    },
+                )?;
+                out.write_all(&bytes)?;
+            }
+            Request::RebuildEdited {
+                source,
+                output,
+                changes,
+                additions,
+                replacements,
+                password,
+            } => {
+                crate::native::rebuild_edited(
+                    &source,
+                    &output,
+                    &changes,
+                    &additions,
+                    &replacements,
+                    password.as_deref(),
+                    &progress,
+                )?;
+            }
             Request::List {
                 source,
                 limit,

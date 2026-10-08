@@ -26,6 +26,7 @@ pub struct Target {
     pub create_dir: PathBuf,
     /// Edit appears only for regular, text-like files.
     pub editable: bool,
+    pub archive_writable: Option<bool>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -127,19 +128,26 @@ impl Menu {
                 !matches!(
                     a,
                     Action::Move
-                        | Action::Edit
                         | Action::CreateFile
                         | Action::CreateDirectory
                         | Action::Compress
                         | Action::Extract
                 )
             });
+            if target.archive_writable == Some(false) {
+                actions.retain(|a| !matches!(a, Action::Edit | Action::Rename | Action::Delete));
+            }
             actions.extend([Action::ArchiveTest, Action::ArchiveUnlock]);
             if let Ok(crate::fold::location::Location::Archive { source, .. }) =
                 crate::fold::location::Location::from_key(&target.create_dir)
             {
-                if source.nested.is_empty() && Format::from_path(&source.file) == Some(Format::Zip)
-                {
+                if target.archive_writable.unwrap_or_else(|| {
+                    Format::from_path(&source.file) == Some(Format::Zip)
+                        && source
+                            .nested
+                            .iter()
+                            .all(|m| Format::from_path(&m.name) == Some(Format::Zip))
+                }) {
                     actions.extend([
                         Action::ArchiveSave,
                         Action::ArchiveSaveAs,
@@ -228,6 +236,7 @@ impl Menu {
                 destination: PathBuf::new(),
                 create_dir: PathBuf::new(),
                 editable: false,
+                archive_writable: None,
             },
             #[cfg(test)]
             actions: vec![Action::Copy, Action::Move],
@@ -603,6 +612,7 @@ mod tests {
             destination: "/tmp".into(),
             create_dir: "/tmp".into(),
             editable: false,
+            archive_writable: None,
         }
     }
     #[test]

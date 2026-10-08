@@ -63,6 +63,7 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 /// dispatcher in `ui/app.rs` is a `match` on meaning, not on input.
 #[derive(Debug, Clone)]
 pub enum Command {
+    SyncArchiveEdits,
     LoadPlaces(PathBuf),
     RefreshPlaces,
     UnmountPlace {

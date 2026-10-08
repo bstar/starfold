@@ -92,6 +92,7 @@ impl App {
                 destination: dir.clone(),
                 create_dir: dir,
                 editable: false,
+                archive_writable: None,
             },
             (x, y),
         );
@@ -173,8 +174,9 @@ impl App {
                 directory: entry.is_dir_like(),
                 sources,
                 destination,
-                create_dir,
+                create_dir: create_dir.clone(),
                 editable: crate::ui::editor::is_editable(entry),
+                archive_writable: state.listings.get(&create_dir).map(|l| l.archive_writable),
             }
         } else {
             drop(state);
@@ -191,6 +193,45 @@ impl App {
         action: overlays::context::Action,
     ) {
         use overlays::context::{Action as A, Request};
+        if matches!(
+            action,
+            A::ArchiveSave | A::ArchiveDiscard | A::ArchiveSaveAs
+        ) {
+            if let Some(id) = self.parked_archive_editor() {
+                self.change_tab(Command::SwitchTab(id));
+                self.layout.focus_set(ModuleId::Preview);
+                self.note = Some((
+                    "Save or discard and exit this tab’s archive editor first".into(),
+                    NoteLevel::Warning,
+                    Instant::now(),
+                ));
+                return;
+            }
+            if self
+                .editor
+                .as_ref()
+                .is_some_and(|e| e.origin.is_some() && e.interacted)
+            {
+                self.note = Some((
+                    "Save or discard and exit the editor first".into(),
+                    NoteLevel::Warning,
+                    Instant::now(),
+                ));
+                self.layout.focus_set(ModuleId::Preview);
+                return;
+            }
+            if self.editor_transition(preview_extensions::EditorTransition::Context(
+                target.clone(),
+                action,
+            )) {
+                return;
+            }
+            if self.editor.as_ref().is_some_and(|e| e.origin.is_some()) {
+                self.finish_archive_editor();
+            }
+            self.core.send(Command::SyncArchiveEdits);
+            self.core.send(Command::ClosePreview);
+        }
         match action {
             A::Tabs => self.open_tab_picker(None),
             A::NextTheme => self.act(Action::NextTheme),
@@ -294,7 +335,7 @@ impl App {
                 })
             }
             A::ArchiveSaveAs => {
-                let destination = crate::fold::location::Location::from_key(&target.create_dir)
+                let mut destination = crate::fold::location::Location::from_key(&target.create_dir)
                     .ok()
                     .and_then(|l| {
                         if let crate::fold::location::Location::Archive { source, .. } = l {
@@ -314,6 +355,9 @@ impl App {
                         }
                     })
                     .unwrap_or_default();
+                if target.archive_writable == Some(false) {
+                    destination.set_extension("zip");
+                }
                 self.overlays.open_destination(Request {
                     archive_options: Default::default(),
                     kind: OpKind::ArchiveSave,

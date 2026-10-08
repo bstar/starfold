@@ -18,6 +18,7 @@ pub enum Format {
     TarZst,
     TarXz,
     TarBz2,
+    TarLz4,
     SevenZip,
     Rar,
     Native,
@@ -32,6 +33,7 @@ impl Format {
             (".tzst", Self::TarZst),
             (".tar.xz", Self::TarXz),
             (".txz", Self::TarXz),
+            (".tar.lz4", Self::TarLz4),
             (".tar.bz2", Self::TarBz2),
             (".tbz2", Self::TarBz2),
             (".tar", Self::Tar),
@@ -82,7 +84,10 @@ impl Format {
         .map(|(_, f)| f)
     }
     pub fn writable(self) -> bool {
-        !matches!(self, Self::Rar | Self::TarXz | Self::TarBz2 | Self::Native)
+        !matches!(
+            self,
+            Self::Rar | Self::TarXz | Self::TarBz2 | Self::TarLz4 | Self::Native
+        )
     }
 }
 
@@ -129,8 +134,35 @@ pub struct Change {
     pub index: usize,
     pub name: Option<PathBuf>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Replacement {
+    pub index: usize,
+    pub from: PathBuf,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Inspection {
+    pub format: Format,
+    pub editable: bool,
+    pub encrypted: bool,
+}
 #[derive(Serialize, Deserialize)]
 pub enum Request {
+    Inspect {
+        source: PathBuf,
+    },
+    ConvertToZip {
+        source: PathBuf,
+        output: PathBuf,
+        password: Option<String>,
+    },
+    RebuildEdited {
+        source: PathBuf,
+        output: PathBuf,
+        changes: Vec<Change>,
+        additions: Vec<Item>,
+        replacements: Vec<Replacement>,
+        password: Option<String>,
+    },
     List {
         source: PathBuf,
         limit: usize,

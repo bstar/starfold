@@ -43,6 +43,21 @@ pub fn detect(path: &Path) -> anyhow::Result<Format> {
     if h.starts_with(b"Rar!\x1a\x07") {
         return Ok(Format::Rar);
     }
+    if h.starts_with(&[0x1f, 0x8b]) {
+        return Ok(Format::TarGz);
+    }
+    if h.starts_with(b"BZh") {
+        return Ok(Format::TarBz2);
+    }
+    if h.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0]) {
+        return Ok(Format::TarXz);
+    }
+    if h.starts_with(&[0x04, 0x22, 0x4d, 0x18]) || h.starts_with(&[0x02, 0x21, 0x4c, 0x18]) {
+        return Ok(Format::TarLz4);
+    }
+    if h.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
+        return Ok(Format::TarZst);
+    }
     if h.get(257..262) == Some(b"ustar") {
         return Ok(Format::Tar);
     }

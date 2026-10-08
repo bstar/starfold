@@ -14,6 +14,7 @@ zip = { version = "4.6", default-features = false, features = ["deflate-flate2-z
 tar = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 lzma-rust2 = "0.21"
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame", "safe-encode", "safe-decode"] }
 bzip2 = "0.6"
 ruzstd = "0.9"
 zstd = { version = "0.13", default-features = false }

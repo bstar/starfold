@@ -18,6 +18,8 @@ struct Index {
     source: PathBuf,
     entries: Arc<Vec<super::Entry>>,
     stamp: (u64, Option<SystemTime>, u64, u64, i64, i64),
+    container_stamp: (u64, Option<SystemTime>, u64, u64, i64, i64),
+    inspection: Option<starfold_archive_protocol::Inspection>,
 }
 #[derive(Default)]
 struct Cache {
@@ -58,18 +60,22 @@ fn stamp(path: &Path) -> anyhow::Result<(u64, Option<SystemTime>, u64, u64, i64,
     ))
 }
 fn index(source: &ArchiveSource) -> anyhow::Result<Index> {
+    super::edit::recover(source)?;
+    super::edit::check_source(source)?;
     let current = stamp(&source.file)?;
+    let path = container_path(source)?;
+    let container_stamp = stamp(&path)?;
     if let Some(cached) = cache()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .indexes
         .get(source)
-        .filter(|i| i.stamp == current)
+        .filter(|i| i.stamp == current && i.container_stamp == container_stamp)
         .cloned()
     {
         return Ok(cached);
     }
-    let path = container_path(source)?;
+    let inspection = super::service::inspect(&path).ok();
     let (entries, partial) =
         super::service::list_password(&path, MAX_ENTRIES, password_for(source).as_deref())?;
     anyhow::ensure!(!partial, "Archive exceeds the member limit");
@@ -82,6 +88,8 @@ fn index(source: &ArchiveSource) -> anyhow::Result<Index> {
         source: path,
         entries: Arc::new(entries),
         stamp: current,
+        container_stamp,
+        inspection,
     };
     let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
     let index_bytes = |idx: &Index| {
@@ -200,10 +208,11 @@ pub fn read(key: &Path, cfg: &ListConfig) -> Listing {
             dir: key.into(),
             entries,
             truncated,
-            error: None,
+            error: super::edit::recovery_notice(&source),
             dir_mtime: index.stamp.1,
             space: crate::fold::places::filesystem_space(&source.file),
             archive_changes: super::edit::pending(key),
+            archive_writable: super::edit::validate(&source).is_ok(),
         })
     })();
     result.unwrap_or_else(|e| Listing::error(key, e.to_string()))
@@ -661,6 +670,10 @@ pub fn materialize_cancellable(
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         result
     })
+}
+
+pub fn writable(source: &ArchiveSource) -> anyhow::Result<bool> {
+    Ok(index(source)?.inspection.is_some_and(|i| i.editable))
 }
 
 #[cfg(test)]

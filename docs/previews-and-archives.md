@@ -55,7 +55,9 @@ they never overwrite an existing name.
 
 Open, Preview, Edit and Rename apply to the clicked entry. Edit appears for
 regular text-like files and links to them; it runs `$VISUAL`, then `$EDITOR`,
-or `vi` when neither is set, inside the Preview panel. Save and quit with that
+or `vi` when neither is set, inside the Preview panel. Configuration files such
+as `.cfg`, `.conf` and `.ini` are editable text. Open/Enter uses the desktop
+association; choose Edit to use the terminal editor. Save and quit with that
 editor's own keys. When it exits, STAR/FOLD refreshes the listing and preview.
 Copy, Move, Delete,
 Compress and Extract apply to the marked set if the clicked entry is marked;
@@ -68,6 +70,12 @@ Its extension provider runs in a supervised child of the same executable. FOLD o
 previews, staging and OPERATIONS. See [the archive extension contract](archive-extension.md).
 
 Enter an archive to browse it as a folder in either pane.
+While browsing inside an archive, select a member to use the ordinary text,
+image, document or media preview. Only that member is materialized into private
+scratch storage; the whole archive is not extracted. Unrecognized binary members
+show a hex and readable-byte view of up to 4 KiB, bounded further by the preview
+limits. This does not decode proprietary game resource formats.
+
 Archive Preview also offers **Browse**; click it or press Enter while Preview
 has focus to open the archive in the active pane. Space marks members there.
 Enter directories and nested archives normally; Back returns through their boundaries. Space marks
@@ -80,7 +88,7 @@ extension on the host; selected files can be streamed out through Kitty drag.
 
 ### ZIP changes
 
-In a top-level ZIP, copy/paste or drop into the archive stages additions or replacements.
+In a writable ZIP, including ZIPs nested inside ZIPs, copy/paste or drop into the archive stages additions or replacements.
 SSH imports receive into private staging first. Move into a ZIP is disabled:
 save the copied members before removing their originals.
 Rename and Delete stage changes too. Existing members use the normal conflict
@@ -90,9 +98,31 @@ changes** restores the original view. Quit, tab close and Back out of the archiv
 ask before abandoning pending changes; saving must finish before continuing.
 Save failures keep both the original and the pending edits.
 
-Other formats and nested archives are read-only. **Save archive as…** copies a
-nested archive to its own file; a top-level ZIP with edits saves its rebuilt
-contents to the chosen new path. This action does not convert archive formats.
+Select a text/configuration member to load the configured Preview editor.
+Editor saves update a private working copy and stage an exact header replacement;
+they do not modify the original ZIP. The Preview Neovim provider retains its
+normal configuration and dirty-buffer Save/Discard/Cancel controls. Other terminal
+editors use `$VISUAL`, then `$EDITOR`, then `vi`. An untouched editor follows
+selection; after input it stays pinned until you exit it. Tabs retain these live
+sessions. Exit generic editors before saving/discarding their archive.
+
+Nested ZIP editing requires every containing archive to be writable ZIP. **Save
+archive** rebuilds the affected chain and publishes it atomically at the outermost
+ZIP, including staged parent and sibling changes. Cancellation, codec failure,
+insufficient space and a changed source leave the original and staged edits intact.
+**Save archive as…** publishes the chosen ZIP subtree to a separate ZIP. Read-only
+formats can be converted to ZIP with this action; their original remains unchanged.
+Members in a read-only chain show bounded text without starting an editor. Extract
+those members before editing them.
+
+Saved staging survives application restart in private `archive-edits` cache
+folders. Reopening an unchanged archive restores its pending edits. If the source
+changed, the pane retains a warning with the recovery folder rather than applying
+stale header identities. Unsaved editor buffers cannot be recovered after a crash.
+
+Encrypted ZIP replacements preserve AES strength. Legacy ZipCrypto replacements
+are upgraded to AES-256; added members in an encrypted ZIP require the session
+password and remain encrypted. Unchanged members retain their compressed bytes.
 **Test archive** checks member decoding; **Unlock archive…** supplies a password
 for this session. Passwords are masked and sent through private stdin, never
 command arguments or operation logs. Password support depends on the codec;
@@ -109,13 +139,16 @@ Operations start immediately, report progress, and support cancellation.
 
 | Formats | Browse / selective copy | Create | Staged editing |
 | --- | --- | --- | --- |
-| ZIP / CBZ | Yes | ZIP | Top-level ZIP / CBZ |
+| ZIP / CBZ | Yes | ZIP | Writable ZIP chains |
 | tar, tar.gz, tar.zst | Yes | Yes | — |
-| tar.xz, tar.bz2 | Yes | — | — |
+| tar.xz, tar.bz2, tar.lz4 | Yes | — | — |
 | 7z, RAR / CBR | Yes | 7z | — |
 | CAB, ISO, DMG, XAR, AR, DEB, RPM, disk/container formats | Native codec fallback | — | — |
 | SIT, SITX, SEA, other legacy formats | XAD/unar fallback | — | — |
 | gzip, bzip2, XZ, Zstandard and supported numbered volumes | Native codec fallback | — | — |
+
+See the [format verification matrix](archive-formats.md) for tested fixtures and
+remaining coverage gaps.
 
 Native coverage depends on the archive's actual structure and available engines;
 recognizing a suffix does not guarantee every format variant. Codec failures

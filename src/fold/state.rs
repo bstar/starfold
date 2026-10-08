@@ -70,6 +70,7 @@ pub struct State {
     /// rather than trusted.
     pub preview: Option<(PathBuf, Arc<Preview>)>,
     pub archive_materialized: HashMap<PathBuf, PathBuf>,
+    pub archive_editable: std::collections::HashSet<PathBuf>,
     pub sort: SortOrder,
     /// Commander panes keep independent ordering from Fold and each other.
     pub pane_sorts: [SortOrder; 2],
@@ -139,6 +140,7 @@ impl State {
             queue: Queue::new(),
             preview: None,
             archive_materialized: HashMap::new(),
+            archive_editable: Default::default(),
             sort: cfg.list.sort,
             pane_sorts: [cfg.list.sort; 2],
             show_hidden: cfg.list.show_hidden,
@@ -628,6 +630,10 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::MarkAll => cmd_mark_all(state),
         Command::InvertMarks => cmd_invert_marks(state),
         Command::ClearMarks => cmd_clear_marks(state),
+        Command::SyncArchiveEdits => Effects {
+            jobs: vec![Job::SyncArchiveEdits],
+            events: vec![],
+        },
         Command::UnlockArchive { location, options } => Effects {
             jobs: vec![Job::UnlockArchive { location, options }],
             events: vec![],
@@ -1192,14 +1198,34 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
             result,
         } => done_created(state, path, kind, origin, result),
         Done::Summarized { dir, summary } => done_summarized(state, dir, summary),
+        Done::ArchiveOpened { path, location } => {
+            if state.cursor_entry().is_some_and(|e| e.path == path) {
+                push_dir(state, location)
+            } else {
+                Effects::default()
+            }
+        }
+        Done::ArchiveEditsSynced { directories, error } => Effects {
+            jobs: directories.into_iter().map(Job::List).collect(),
+            events: error
+                .into_iter()
+                .map(|e| Event::Note(Note::error("archive editor", e)))
+                .collect(),
+        },
         Done::ArchivePreviewed {
             tab,
             path,
             local,
+            editable,
             generation,
             preview,
         } => {
             if tab == state.tabs.active().id && generation == state.preview_generation {
+                if editable {
+                    state.archive_editable.insert(path.clone());
+                } else {
+                    state.archive_editable.remove(&path);
+                }
                 state.archive_materialized.insert(path.clone(), local);
                 done_previewed(state, path, generation, preview)
             } else {
@@ -3003,6 +3029,14 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
             }
         }
 
+        if matches!(op.kind, OpKind::ArchiveSave | OpKind::ArchiveDiscard)
+            && op.status == OpStatus::Done
+        {
+            state.archive_materialized.clear();
+            state.archive_editable.clear();
+            state.preview = None;
+            state.preview_generation += 1;
+        }
         if let Some(dest) = &op.dest {
             touch_dirs.insert(dest.clone());
             if matches!(op.kind, OpKind::Compress(_) | OpKind::Extract) {
@@ -3358,6 +3392,7 @@ mod tests {
             dir_mtime: None,
             space: None,
             archive_changes: 0,
+            archive_writable: false,
         }
     }
 

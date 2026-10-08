@@ -47,6 +47,9 @@ One process handles one request and then exits. Requests are:
 | Create | create | New private archive, using Options |
 | Extract | extract | New private output directory |
 | Rebuild | zip_edit | ZIP header changes and staged additions |
+| Inspect | inspect | Bounded JSON Inspection in Data: detected format, editable, encrypted |
+| RebuildEdited | zip_replace | ZIP changes, additions and exact-ordinal file replacements |
+| ConvertToZip | zip_convert | Convert a readable archive into a private ZIP |
 | Test | test | Decode and validate every regular member |
 
 Replies may include Progress(byte count), Done, or Error(message). Data(length)
@@ -74,3 +77,21 @@ Linux protocol and controller tests exercise round trips, passwords, volumes,
 header identity, nested browsing, selective copies, traversal rejection,
 source changes and ZIP save/discard. macOS packaging and physical SSH drag
 interaction require testing on their respective machines.
+
+## Editing and publication
+
+These requests are additive version-1 capabilities. Older providers can still
+browse; missing inspection/edit capabilities leave the chain read-only. The host
+never assumes editability from the filename. `Replacement` identifies an exact
+source header ordinal and a private regular-file snapshot. Editing is supported
+only when every container is ZIP; the host rebuilds nested containers from the
+leaves and atomically publishes the outermost output after checking fingerprints.
+Save As converts other readable formats into ZIP. Expansion, count, free-space,
+cancellation and destination checks apply to conversion too.
+
+The host journals completed editor saves and structural edits in private cache
+storage without recording passwords. Recovery validates source fingerprints and
+snapshot containment; conflicting sources retain a visible recovery warning.
+The extension never launches editors or draws UI. Native codec fallback discards
+failed extraction attempts before exposing bytes, and resolves the same unique
+member identity between engines. AppleDouble entries retain their original names.

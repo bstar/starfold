@@ -257,3 +257,122 @@ fn seven_zip_duplicate_names_are_read_by_exact_header_identity() {
         b"second"
     );
 }
+
+#[test]
+fn content_inspection_and_encrypted_exact_member_replacement() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = create(
+        temp.path(),
+        Format::Zip,
+        Options {
+            password: Some("secret-password".into()),
+            ..Default::default()
+        },
+        "encrypted.zip",
+    );
+    let renamed = temp.path().join("renamed.data");
+    std::fs::copy(&source, &renamed).unwrap();
+    let (_, bytes) = request(Request::Inspect {
+        source: renamed.clone(),
+    })
+    .unwrap();
+    let inspection: starfold_archive_protocol::Inspection = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(inspection.format, Format::Zip);
+    assert!(inspection.editable && inspection.encrypted);
+    let (entries, _) = request(Request::List {
+        source: renamed.clone(),
+        limit: 100,
+        password: Some("secret-password".into()),
+    })
+    .unwrap();
+    let index = entries.iter().position(|e| !e.directory).unwrap();
+    let replacement = temp.path().join("replacement.cfg");
+    std::fs::write(&replacement, b"edited=yes\n").unwrap();
+    let output = temp.path().join("edited.zip");
+    request(Request::RebuildEdited {
+        source: renamed.clone(),
+        output: output.clone(),
+        changes: vec![],
+        additions: vec![],
+        replacements: vec![starfold_archive_protocol::Replacement {
+            index,
+            from: replacement.clone(),
+        }],
+        password: Some("secret-password".into()),
+    })
+    .unwrap();
+    assert!(request(Request::Read {
+        source: output.clone(),
+        index,
+        password: None
+    })
+    .is_err());
+    assert!(request(Request::Read {
+        source: output.clone(),
+        index,
+        password: Some("wrong".into())
+    })
+    .is_err());
+    assert_eq!(
+        request(Request::Read {
+            source: output,
+            index,
+            password: Some("secret-password".into())
+        })
+        .unwrap()
+        .1,
+        b"edited=yes\n"
+    );
+    assert!(request(Request::RebuildEdited {
+        source: renamed,
+        output: temp.path().join("no-password.zip"),
+        changes: vec![],
+        additions: vec![],
+        replacements: vec![starfold_archive_protocol::Replacement {
+            index,
+            from: replacement
+        }],
+        password: None
+    })
+    .is_err());
+}
+
+#[test]
+fn read_only_save_as_conversion_creates_zip_without_changing_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = create(
+        temp.path(),
+        Format::TarGz,
+        Options::default(),
+        "readonly.tar.gz",
+    );
+    let original = std::fs::read(&source).unwrap();
+    let output = temp.path().join("converted.zip");
+    request(Request::ConvertToZip {
+        source: source.clone(),
+        output: output.clone(),
+        password: None,
+    })
+    .unwrap();
+    assert_eq!(std::fs::read(source).unwrap(), original);
+    let (entries, _) = request(Request::List {
+        source: output.clone(),
+        limit: 100,
+        password: None,
+    })
+    .unwrap();
+    let i = entries
+        .iter()
+        .position(|e| e.name == "folder/source.txt")
+        .unwrap();
+    assert_eq!(
+        request(Request::Read {
+            source: output,
+            index: i,
+            password: None
+        })
+        .unwrap()
+        .1,
+        b"extension member data"
+    );
+}

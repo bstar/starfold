@@ -325,6 +325,16 @@ filesystem IO. Member indices distinguish duplicate archive headers. Rendering
 uses display paths. Archive edit scratch state is worker-owned; UI decisions use
 `Listing::archive_changes`, and all updates still fold through `state::apply`.
 ZIP Save must retain pending changes and the original when rebuilding fails.
+Editable archive members use a private working copy distinct from materialization
+caches. Completed editor writes are snapshotted and journaled; Save archive
+publishes the affected writable ZIP chain at its outermost container. Keep
+configured editor behavior, dirty-buffer transitions and generic-editor pinning.
+Never start interactive editors for members in a read-only chain. Recovery
+manifests contain no passwords and must validate source identity and snapshot
+containment. Missing codec inspection capabilities imply read-only, not suffix-
+based permission to edit. `scripts/test-archive-matrix.py` records verified
+fixtures; untested suffixes are not a support guarantee.
+
 
 Archive destinations must be disjoint from their sources in both directions:
 overwriting a directory containing the source archive would delete it during

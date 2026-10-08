@@ -31,6 +31,9 @@ pub fn request(
     mut data: Option<&mut dyn Write>,
 ) -> anyhow::Result<Option<(Vec<Entry>, bool)>> {
     let required = match &request {
+        Request::ConvertToZip { .. } => "zip_convert",
+        Request::Inspect { .. } => "inspect",
+        Request::RebuildEdited { .. } => "zip_replace",
         Request::List { .. } => "index",
         Request::Read { .. } => "member_read",
         Request::Create { .. } => "create",
@@ -40,7 +43,7 @@ pub fn request(
     };
     let baseline = progress.done();
     let deadline = std::time::Instant::now()
-        + if matches!(&request, Request::List { .. }) {
+        + if matches!(&request, Request::List { .. } | Request::Inspect { .. }) {
             Duration::from_secs(60)
         } else {
             Duration::from_secs(24 * 60 * 60)
@@ -241,4 +244,17 @@ pub fn create(
         None,
     )
     .map(|_| ())
+}
+
+pub fn inspect(path: &Path) -> anyhow::Result<starfold_archive_protocol::Inspection> {
+    let mut bytes = Vec::new();
+    request(
+        Request::Inspect {
+            source: path.into(),
+        },
+        &Progress::new(0),
+        Some(&mut bytes),
+    )?;
+    anyhow::ensure!(bytes.len() <= 4096, "Invalid archive inspection");
+    Ok(serde_json::from_slice(&bytes)?)
 }

@@ -70,6 +70,7 @@ pub struct Listing {
     /// listing worker so a slow mounted volume never stalls drawing.
     pub space: Option<(u64, u64)>,
     pub archive_changes: usize,
+    pub archive_writable: bool,
 }
 
 impl Listing {
@@ -82,6 +83,7 @@ impl Listing {
             dir_mtime: None,
             space: None,
             archive_changes: 0,
+            archive_writable: false,
         }
     }
 }
@@ -132,6 +134,7 @@ pub fn read(dir: &Path, cfg: &ListConfig) -> Listing {
         dir_mtime,
         space: None,
         archive_changes: 0,
+        archive_writable: false,
     }
 }
 

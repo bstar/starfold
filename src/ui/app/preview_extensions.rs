@@ -7,6 +7,10 @@ pub(super) enum EditorTransition {
     Action(Action),
     Tab(crate::ui::tabs::Action),
     Activate,
+    Context(
+        crate::ui::overlays::context::Target,
+        crate::ui::overlays::context::Action,
+    ),
 }
 impl App {
     fn preview_extension(&self) -> Option<&crate::fold::preview::extensions::Info> {
@@ -60,6 +64,7 @@ impl App {
             EditorTransition::Action(action) => self.act(action),
             EditorTransition::Tab(action) => self.tab_action(action),
             EditorTransition::Activate => self.activate_entry(),
+            EditorTransition::Context(target, action) => self.context_action(target, action),
         }
     }
     pub(super) fn editor_transition_pump(&mut self) {
@@ -569,6 +574,68 @@ mod editor_tests {
         app.layout.focus_set(ModuleId::Stack);
         Some((app, fake, path))
     }
+    #[test]
+    fn archive_selection_loads_real_editor_and_save_stages_before_publication() {
+        use std::io::{Read, Write};
+        let Some((mut app, fake, _)) = editor_fixture() else {
+            return;
+        };
+        let file = fake.home().join("editable.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+        zip.start_file("settings.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"original\n").unwrap();
+        zip.finish().unwrap();
+        let original = std::fs::read(&file).unwrap();
+        let root = crate::fold::location::Location::Filesystem(file.clone())
+            .enter_archive()
+            .unwrap()
+            .key();
+        app.core.send(Command::Push(root.clone()));
+        fake.pump();
+        app.refresh();
+        let member = app.core.state().active_listing().unwrap().entries[0]
+            .path
+            .clone();
+        select(&mut app, &member);
+        app.core.send(Command::Preview(member.clone()));
+        fake.pump();
+        app.refresh();
+        settle(&mut app, &fake, |app| app.extension_interactive());
+        assert_eq!(app.core.state().preview.as_ref().unwrap().0, member);
+        edit(&mut app, &fake);
+        for c in ":w".chars() {
+            app.extension_input(Input::Key { key: c.to_string() });
+        }
+        app.extension_input(Input::Key {
+            key: "enter".into(),
+        });
+        settle(&mut app, &fake, |app| {
+            !app.extension_dirty()
+                && app.extension_editor_inputs.is_empty()
+                && app.extension_editor_inflight.is_none()
+        });
+        app.core.send(Command::SyncArchiveEdits);
+        fake.pump();
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+        assert!(crate::fold::archive::edit::pending(&root) > 0);
+        app.layout.focus_set(ModuleId::Stack);
+        app.key(KeyEvent::new(
+            KeyCode::Char('s'),
+            starkit::crossterm::event::KeyModifiers::CONTROL,
+        ));
+        fake.pump();
+        let mut published = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
+        let mut text = String::new();
+        published
+            .by_name("settings.txt")
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "changed original\n");
+        assert_eq!(crate::fold::archive::edit::pending(&root), 0);
+    }
+
     #[test]
     fn editor_drag_coalesces_positions_without_losing_gesture_boundaries() {
         let Some((mut app, fake, _)) = editor_fixture() else {

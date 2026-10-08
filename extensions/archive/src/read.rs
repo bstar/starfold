@@ -13,9 +13,10 @@ fn tar_reader(path: &Path, format: Format) -> anyhow::Result<Box<dyn Read>> {
         Format::Tar => Box::new(f),
         Format::TarGz => Box::new(flate2::read::MultiGzDecoder::new(f)),
         Format::TarXz => Box::new(lzma_rust2::XzReader::new(f, true)),
+        Format::TarLz4 => Box::new(lz4_flex::frame::FrameDecoder::new(f)),
         Format::TarBz2 => Box::new(bzip2::read::MultiBzDecoder::new(f)),
         Format::TarZst => Box::new(ruzstd::decoding::StreamingDecoder::new(f)?),
-        _ => unreachable!(),
+        _ => anyhow::bail!("This format requires a native archive codec"),
     })
 }
 fn entry(name: &str, bytes: u64, directory: bool) -> ArchiveEntry {

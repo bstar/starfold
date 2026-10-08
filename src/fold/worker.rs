@@ -127,6 +127,7 @@ impl Senders {
 /// rather than overwriting the newer one.
 #[derive(Debug, Clone)]
 pub enum Job {
+    SyncArchiveEdits,
     UnlockArchive {
         location: PathBuf,
         options: starfold_archive_protocol::Options,
@@ -222,10 +223,19 @@ pub enum Job {
 /// notification would be a second writer.
 #[derive(Debug, Clone)]
 pub enum Done {
+    ArchiveOpened {
+        path: PathBuf,
+        location: PathBuf,
+    },
+    ArchiveEditsSynced {
+        directories: Vec<PathBuf>,
+        error: Option<String>,
+    },
     ArchivePreviewed {
         tab: super::tab::TabId,
         path: PathBuf,
         local: PathBuf,
+        editable: bool,
         generation: u64,
         preview: Preview,
     },
@@ -400,6 +410,8 @@ pub fn finish(done: Done, state: &Arc<RwLock<State>>, events: &EventSink, sender
 /// still worth a line in the status bar, and a stale preview job (superseded
 /// by a newer generation before it was even picked up) is worth neither a
 /// `Done` nor a `Note`.
+// Keep the worker’s owned result inline; all variants share one dispatch path.
+#[allow(clippy::large_enum_variant)]
 pub enum IoOutcome {
     Done(Done),
     Note(Note),
@@ -419,6 +431,18 @@ pub fn perform_io(
     cancel: &AtomicBool,
 ) -> IoOutcome {
     match job {
+        Job::SyncArchiveEdits => {
+            let result = super::archive::edit::sync_working();
+            let (sources, error) = match result {
+                Ok(s) => (s, None),
+                Err(e) => (vec![], Some(e.to_string())),
+            };
+            let directories = {
+                let state = state.read().unwrap_or_else(|e| e.into_inner());
+                state.listings.keys().filter(|key| matches!(super::location::Location::from_key(key),Ok(super::location::Location::Archive{source,..}) if sources.iter().any(|changed|changed.file==source.file && changed.nested.starts_with(&source.nested)))).cloned().collect()
+            };
+            IoOutcome::Done(Done::ArchiveEditsSynced { directories, error })
+        }
         Job::UnlockArchive { location, options } => {
             if let Ok(super::location::Location::Archive { source, .. }) =
                 super::location::Location::from_key(&location)
@@ -573,6 +597,16 @@ pub fn perform_io(
             } else {
                 path.clone()
             };
+            if super::archive::service::inspect(&resolved).is_ok() {
+                if let Ok(location) =
+                    super::location::Location::from_key(&path).and_then(|l| l.enter_archive())
+                {
+                    return IoOutcome::Done(Done::ArchiveOpened {
+                        path,
+                        location: location.key(),
+                    });
+                }
+            }
             match open::open_external(&resolved, &cfg.open) {
                 Ok(()) => IoOutcome::None,
                 Err(e) => IoOutcome::Note(Note::error(
@@ -736,6 +770,7 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
         | Job::PreviewInput { .. }
         | Job::Open(_)
         | Job::ClosePreview
+        | Job::SyncArchiveEdits
         | Job::Shutdown => None,
     }
 }
@@ -985,7 +1020,75 @@ pub fn perform_preview(
             });
         }
         match super::archive::browser::materialize_cancellable(&path, &stale) {
-            Ok(file) => file,
+            Ok(file) => {
+                use std::io::Read;
+                let mut head = [0; 512];
+                let n = std::fs::File::open(&file)
+                    .and_then(|mut f| f.read(&mut head))
+                    .unwrap_or(0);
+                let text_member = super::preview::is_editable_content(&path, &head[..n]);
+                if text_member
+                    && super::archive::edit::validate(&match super::location::Location::from_key(
+                        &path,
+                    )
+                    .ok()?
+                    {
+                        super::location::Location::Archive { source, .. } => source,
+                        _ => unreachable!(),
+                    })
+                    .is_ok()
+                {
+                    match super::archive::edit::working_copy(&path, &file) {
+                        Ok(p) => p,
+                        Err(error) => {
+                            return Some(Done::Previewed {
+                                tab,
+                                path,
+                                generation,
+                                preview: Preview::Error(error.to_string()),
+                            })
+                        }
+                    }
+                } else if text_member {
+                    // A configured editor must never modify a read-only
+                    // extraction cache. Show bounded text without starting
+                    // an interactive provider; extraction remains available.
+                    let mut document =
+                        super::preview::model::Document::new("Archive member · read-only");
+                    document.notice = Some("Extract this member to edit it".into());
+                    let mut bytes = Vec::new();
+                    if let Ok(input) = std::fs::File::open(&file) {
+                        let _ = input.take(cfg.max_bytes).read_to_end(&mut bytes);
+                    }
+                    document.content =
+                        super::preview::model::Content::Pages(vec![super::preview::model::Page {
+                            number: 1,
+                            text: String::from_utf8_lossy(&bytes)
+                                .lines()
+                                .take(cfg.max_lines)
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                            truncated: std::fs::metadata(&file)
+                                .is_ok_and(|m| m.len() > bytes.len() as u64),
+                        }]);
+                    let preview = preview::archive_member_preview(
+                        Preview::Document(document),
+                        &file,
+                        &path,
+                        cfg,
+                    );
+                    return Some(Done::ArchivePreviewed {
+                        tab,
+                        path,
+                        local: file,
+                        editable: false,
+                        generation,
+                        preview,
+                    });
+                } else {
+                    file
+                }
+            }
             Err(error) => {
                 return Some(Done::Previewed {
                     tab,
@@ -1004,8 +1107,10 @@ pub fn perform_preview(
     };
     result.map(|preview| {
         if super::location::is_archive(&path) {
+            let preview = preview::archive_member_preview(preview, &resolved, &path, cfg);
             Done::ArchivePreviewed {
                 tab,
+                editable: super::archive::edit::is_working(&path),
                 path,
                 local: resolved,
                 generation,

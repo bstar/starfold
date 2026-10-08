@@ -141,25 +141,28 @@ fn xad_list(path: &Path) -> anyhow::Result<Vec<Entry>> {
         .get("lsarContents")
         .and_then(|v| v.as_array())
         .ok_or_else(|| anyhow::anyhow!("Invalid XAD archive index"))?;
+    let flag = |entry: &serde_json::Value, key: &str| {
+        entry
+            .get(key)
+            .and_then(|v| v.as_bool().or_else(|| v.as_u64().map(|n| n != 0)))
+            .unwrap_or(false)
+    };
     contents
         .iter()
         .map(|entry| {
+            // Expose AppleDouble headers under their original archive names,
+            // rather than aliasing a resource fork onto its data-fork ordinal.
+            let entry = entry.get("MacOriginalDictionary").unwrap_or(entry);
             let name = entry
                 .get("XADFileName")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Archive entry has no name"))?;
             crate::safe_path(name)?;
-            anyhow::ensure!(
-                entry.get("XADIsLink").and_then(|v| v.as_bool()) != Some(true),
-                "Archive links are unsupported"
-            );
+            anyhow::ensure!(!flag(entry, "XADIsLink"), "Archive links are unsupported");
             Ok(Entry {
                 name: name.into(),
                 bytes: entry.get("XADFileSize").and_then(|v| v.as_u64()),
-                directory: entry
-                    .get("XADIsDirectory")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
+                directory: flag(entry, "XADIsDirectory"),
             })
         })
         .collect()
@@ -173,6 +176,20 @@ pub fn list(
         if let Ok(result) = crate::list(path, limit) {
             return Ok(result);
         }
+    }
+    if crate::detect(path).ok() == Some(Format::TarLz4) {
+        return Ok((
+            vec![Entry {
+                name: path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                bytes: None,
+                directory: false,
+            }],
+            false,
+        ));
     }
     let mut entries = seven_list(path, password).or_else(|seven| {
         xad_list(path).map_err(|xad| anyhow::anyhow!("Cannot index archive: {seven}; {xad}"))
@@ -194,6 +211,25 @@ pub fn copy_member(
             return crate::copy_member(path, index, out, password);
         }
     }
+    if crate::detect(path).ok() == Some(Format::TarLz4)
+        && crate::list(path, crate::MAX_ENTRIES).is_err()
+    {
+        anyhow::ensure!(index == 0, "Archive member disappeared");
+        let mut input = lz4_flex::frame::FrameDecoder::new(std::fs::File::open(path)?);
+        let mut remaining = crate::MAX_OUTPUT;
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            let n = input.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            anyhow::ensure!(n as u64 <= remaining, "Expansion limit exceeded");
+            out.write_all(&buffer[..n])?;
+            remaining -= n as u64;
+        }
+        return Ok(());
+    }
+    let mut fallback_name = None;
     if let Ok(entries) = seven_list(path, password) {
         let selected = entries
             .get(index)
@@ -203,6 +239,7 @@ pub fn copy_member(
             entries.iter().filter(|e| e.name == selected.name).count() == 1,
             "Duplicate native archive member names require indexed decoding"
         );
+        fallback_name = Some(selected.name.clone());
         let mut command = Command::new(tool("7zz"));
         command
             .args(["x", "-so", "-spd", "--"])
@@ -223,27 +260,89 @@ pub fn copy_member(
             drop(child.stdin.take());
         }
         let mut output = child.stdout.take().unwrap();
-        std::io::copy(&mut output, out)?;
-        let result = child.wait_with_output()?;
-        anyhow::ensure!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        return Ok(());
+        let mut errors = child.stderr.take().unwrap();
+        let mut staged = tempfile::tempfile()?;
+        let result = std::thread::scope(|scope| -> anyhow::Result<bool> {
+            let stderr = scope.spawn(move || {
+                let mut bytes = vec![];
+                let mut chunk = [0; 8192];
+                loop {
+                    let n = errors.read(&mut chunk)?;
+                    if n == 0 {
+                        break;
+                    }
+                    if bytes.len() < 1024 * 1024 {
+                        let available = (1024 * 1024 - bytes.len()).min(n);
+                        bytes.extend_from_slice(&chunk[..available]);
+                    }
+                }
+                Ok::<_, std::io::Error>(bytes)
+            });
+            let copied = std::io::copy(
+                &mut output.by_ref().take(crate::MAX_OUTPUT + 1),
+                &mut staged,
+            );
+            if copied
+                .as_ref()
+                .map_or(true, |size| *size > crate::MAX_OUTPUT)
+            {
+                let _ = child.kill();
+            }
+            let status = child.wait();
+            let errors = stderr
+                .join()
+                .map_err(|_| anyhow::anyhow!("Native codec stderr reader failed"))??;
+            let size = copied?;
+            let status = status?;
+            anyhow::ensure!(
+                size <= crate::MAX_OUTPUT,
+                "Archive expansion limit exceeded"
+            );
+            if !status.success() && password.is_some() {
+                anyhow::bail!("{}", String::from_utf8_lossy(&errors));
+            }
+            Ok(status.success())
+        })?;
+        if result {
+            use std::io::{Seek, SeekFrom};
+            staged.seek(SeekFrom::Start(0))?;
+            std::io::copy(&mut staged, out)?;
+            return Ok(());
+        }
     }
     anyhow::ensure!(
         password.is_none(),
         "Encrypted legacy archives require a compatible password-capable codec"
     );
     let entries = xad_list(path)?;
+    let index = if let Some(name) = fallback_name {
+        let matching: Vec<_> = entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.name == name && !e.directory)
+            .collect();
+        anyhow::ensure!(
+            matching.len() == 1,
+            "Native fallback cannot resolve the exact archive member"
+        );
+        matching[0].0
+    } else {
+        index
+    };
     let selected = entries
         .get(index)
         .ok_or_else(|| anyhow::anyhow!("Archive member disappeared"))?;
     let folder = tempfile::tempdir()?;
     let mut command = Command::new(tool("unar"));
     command
-        .args(["-quiet", "-no-directory", "-indexes", "-output-directory"])
+        .args([
+            "-quiet",
+            "-no-directory",
+            "-forks",
+            "hidden",
+            "-indexes",
+            "-output-directory",
+        ])
         .arg(folder.path())
         .arg("--")
         .arg(path)
@@ -261,7 +360,10 @@ pub fn extract(
     password: Option<&str>,
     progress: &Progress,
 ) -> anyhow::Result<()> {
-    if password.is_none() && crate::list(path, crate::MAX_ENTRIES).is_ok() {
+    if password.is_none()
+        && crate::detect(path).ok() != Some(Format::Native)
+        && crate::list(path, crate::MAX_ENTRIES).is_ok()
+    {
         return crate::extract(path, output, progress);
     }
     let (entries, partial) = list(path, crate::MAX_ENTRIES, password)?;
@@ -426,6 +528,26 @@ pub fn create(
     }
     Ok(())
 }
+pub fn inspect(path: &Path) -> anyhow::Result<starfold_archive_protocol::Inspection> {
+    let format = crate::detect(path).unwrap_or(Format::Native);
+    // Verify native candidates; a renamed executable is not necessarily an archive.
+    if format == Format::Native {
+        list(path, 1, None)?;
+    }
+    let mut encrypted = false;
+    if format == Format::Zip {
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(path)?)?;
+        for i in 0..zip.len() {
+            encrypted |= zip.by_index_raw(i)?.encrypted();
+        }
+    }
+    Ok(starfold_archive_protocol::Inspection {
+        format,
+        editable: format == Format::Zip,
+        encrypted,
+    })
+}
+
 pub fn rebuild(
     source: &Path,
     output: &Path,
@@ -433,7 +555,35 @@ pub fn rebuild(
     additions: &[Item],
     progress: &Progress,
 ) -> anyhow::Result<()> {
+    rebuild_edited(source, output, changes, additions, &[], None, progress)
+}
+
+pub fn rebuild_edited(
+    source: &Path,
+    output: &Path,
+    changes: &[Change],
+    additions: &[Item],
+    replacements: &[starfold_archive_protocol::Replacement],
+    password: Option<&str>,
+    progress: &Progress,
+) -> anyhow::Result<()> {
     let mut original = zip::ZipArchive::new(std::fs::File::open(source)?)?;
+    let mut identities = std::collections::HashSet::new();
+    for replacement in replacements {
+        anyhow::ensure!(
+            replacement.index < original.len() && identities.insert(replacement.index),
+            "Invalid or duplicate replacement member"
+        );
+        let meta = std::fs::symlink_metadata(&replacement.from)?;
+        anyhow::ensure!(
+            meta.is_file() && meta.len() <= crate::MAX_OUTPUT,
+            "Invalid replacement file"
+        );
+    }
+    let any_encrypted =
+        (0..original.len()).try_fold(false, |encrypted, i| -> anyhow::Result<bool> {
+            Ok(encrypted || original.by_index_raw(i)?.encrypted())
+        })?;
     let out = std::fs::OpenOptions::new()
         .write(true)
         .read(true)
@@ -466,6 +616,29 @@ pub fn rebuild(
         {
             continue;
         }
+        if let Some(replacement) = replacements.iter().find(|r| r.index == index) {
+            anyhow::ensure!(
+                !file.is_dir(),
+                "Cannot replace a directory with editor contents"
+            );
+            let mut options = file.options();
+            if file.encrypted() {
+                let password = password.ok_or_else(|| {
+                    anyhow::anyhow!("Unlock this ZIP before saving encrypted members")
+                })?;
+                // Preserve AES strength; upgrading legacy ZipCrypto to AES keeps edits encrypted.
+                let mode = aes_strength(file.extra_data()).unwrap_or(zip::AesMode::Aes256);
+                options = options.with_aes_encryption(mode, password);
+                drop(file);
+                original.by_index_decrypt(index, password.as_bytes())?;
+            } else {
+                drop(file);
+            }
+            writer.start_file(name, options)?;
+            let n = std::io::copy(&mut std::fs::File::open(&replacement.from)?, &mut writer)?;
+            progress.add(n);
+            continue;
+        }
         let size = file.compressed_size();
         writer.raw_copy_file_rename(file, name)?;
         progress.add(size);
@@ -473,8 +646,15 @@ pub fn rebuild(
     for item in additions {
         let name = item.to.as_ref().unwrap().to_string_lossy();
         crate::safe_path(&name)?;
-        let options = zip::write::SimpleFileOptions::default()
+        let mut options = zip::write::SimpleFileOptions::default()
+            .large_file(matches!(item.kind, ItemKind::File(n) if n >= u32::MAX as u64))
             .compression_method(zip::CompressionMethod::Deflated);
+        if any_encrypted {
+            options = options.with_aes_encryption(
+                zip::AesMode::Aes256,
+                password.ok_or_else(|| anyhow::anyhow!("Unlock this ZIP before adding members"))?,
+            );
+        }
         match item.kind {
             ItemKind::Dir => writer.add_directory(name, options)?,
             ItemKind::File(_) => {
@@ -488,6 +668,25 @@ pub fn rebuild(
     writer.finish()?.sync_all()?;
     Ok(())
 }
+fn aes_strength(extra: Option<&[u8]>) -> Option<zip::AesMode> {
+    let mut extra = extra?;
+    while extra.len() >= 4 {
+        let id = u16::from_le_bytes([extra[0], extra[1]]);
+        let len = u16::from_le_bytes([extra[2], extra[3]]) as usize;
+        let data = extra.get(4..4 + len)?;
+        if id == 0x9901 && data.len() >= 7 {
+            return match data[4] {
+                1 => Some(zip::AesMode::Aes128),
+                2 => Some(zip::AesMode::Aes192),
+                3 => Some(zip::AesMode::Aes256),
+                _ => None,
+            };
+        }
+        extra = &extra[4 + len..];
+    }
+    None
+}
+
 pub fn test(path: &Path, password: Option<&str>, progress: &Progress) -> anyhow::Result<()> {
     let (entries, partial) = list(path, crate::MAX_ENTRIES, password)?;
     anyhow::ensure!(!partial, "Archive exceeds test limit");
@@ -518,4 +717,90 @@ pub fn test(path: &Path, password: Option<&str>, progress: &Progress) -> anyhow:
         }
     }
     Ok(())
+}
+
+/// Conversion is private and bounded; the host owns final publication.
+pub fn convert_to_zip(
+    source: &Path,
+    output: &Path,
+    password: Option<&str>,
+    progress: &Progress,
+) -> anyhow::Result<()> {
+    let scratch = tempfile::tempdir_in(output.parent().unwrap_or(Path::new(".")))?;
+    let (entries, partial) = list(source, crate::MAX_ENTRIES, password)?;
+    anyhow::ensure!(!partial, "Conversion exceeds entry limit");
+    let total = entries
+        .iter()
+        .filter_map(|e| e.bytes)
+        .fold(0u64, u64::saturating_add);
+    anyhow::ensure!(
+        total <= crate::MAX_OUTPUT,
+        "Conversion exceeds expansion limit"
+    );
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(scratch.path().as_os_str().as_bytes())?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } == 0 {
+        let stat = unsafe { stat.assume_init() };
+        // statvfs counters differ in width between Linux and macOS.
+        #[allow(clippy::unnecessary_cast)]
+        let free = (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64);
+        anyhow::ensure!(
+            total.saturating_mul(2) <= free,
+            "Not enough free space to convert this archive"
+        );
+    }
+    let extracted = scratch.path().join("contents");
+    std::fs::create_dir(&extracted)?;
+    extract(source, &extracted, password, progress)?;
+    fn gather(
+        root: &Path,
+        path: &Path,
+        items: &mut Vec<Item>,
+        bytes: &mut u64,
+        depth: usize,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            depth <= 64 && items.len() < crate::MAX_ENTRIES,
+            "Conversion exceeds tree limits"
+        );
+        let metadata = std::fs::symlink_metadata(path)?;
+        let relative = path.strip_prefix(root)?.to_path_buf();
+        if metadata.is_dir() {
+            if !relative.as_os_str().is_empty() {
+                items.push(Item {
+                    from: path.into(),
+                    to: Some(relative),
+                    kind: ItemKind::Dir,
+                });
+            }
+            for child in std::fs::read_dir(path)? {
+                gather(root, &child?.path(), items, bytes, depth + 1)?;
+            }
+        } else {
+            anyhow::ensure!(metadata.is_file(), "Conversion does not follow links");
+            *bytes = bytes
+                .checked_add(metadata.len())
+                .ok_or_else(|| anyhow::anyhow!("Conversion size overflow"))?;
+            anyhow::ensure!(*bytes <= crate::MAX_OUTPUT, "Conversion exceeds size limit");
+            items.push(Item {
+                from: path.into(),
+                to: Some(relative),
+                kind: ItemKind::File(metadata.len()),
+            });
+        }
+        Ok(())
+    }
+    let mut items = vec![];
+    gather(&extracted, &extracted, &mut items, &mut 0, 0)?;
+    create(
+        Format::Zip,
+        output,
+        &items,
+        &Options {
+            password: password.map(str::to_owned),
+            ..Default::default()
+        },
+        progress,
+    )
 }
