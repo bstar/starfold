@@ -591,7 +591,7 @@ pub fn lines(preview: &Preview, width: u16) -> Vec<String> {
 
 /// Shared cell geometry for the movie poster and text in both frontends.
 pub fn movie_card_rects(content: Rect) -> (Rect, Rect) {
-    let width = (content.width / 4).min(32);
+    let width = (content.width / 3).min(64);
     let gap = 3.min(content.width.saturating_sub(width));
     (
         // A standard 2:3 poster in cells roughly twice as tall as wide.
@@ -1507,8 +1507,8 @@ mod movie_card_tests {
             assert_eq!(details.right(), content.right());
             assert_eq!(details.height, content.height);
             assert_eq!(poster.y, details.y);
-            assert!(poster.height <= 24);
-            assert!(poster.width <= 32 && details.width > poster.width);
+            assert!(poster.height <= 48);
+            assert!(poster.width <= 64 && details.width > poster.width);
         }
     }
 }

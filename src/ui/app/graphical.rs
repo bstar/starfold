@@ -5310,7 +5310,7 @@ mod tests {
             }
             for component in &scene.components {
                 if let Component::Image { rect, .. } = component {
-                    assert!(rect.width <= 32, "Poster covers the movie details");
+                    assert!(rect.width <= 64, "Poster covers the movie details");
                 }
             }
         }
