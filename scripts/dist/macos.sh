@@ -22,8 +22,6 @@ bin="${CARGO_TARGET_DIR:-target}/aarch64-apple-darwin/release/starfold"
 # helpers so future updates/rollbacks cannot select stale adjacent providers.
 gzip -n -c "$(dirname "$bin")/starfold-preview-pdf" > "$work/pdf.gz"
 gzip -n -c "$(dirname "$bin")/starfold-preview-video" > "$work/video.gz"
-gzip -n -c "$(dirname "$bin")/starfold-archive" > "$work/archive.gz"
-export STARFOLD_BUNDLE_ARCHIVE="$work/archive.gz"
 export STARFOLD_BUNDLE_PREVIEW_PDF="$work/pdf.gz"
 export STARFOLD_BUNDLE_PREVIEW_VIDEO="$work/video.gz"
 cargo build -p starfold --release --locked --target aarch64-apple-darwin "${build_args[@]}"

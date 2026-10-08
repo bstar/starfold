@@ -24,6 +24,11 @@ use clap::Parser as _;
 use paths::PATHS;
 
 fn main() -> Result<()> {
+    if std::env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new("--archive-extension-stdio"))
+    {
+        return starfold_archive::serve_stdio();
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--bundled-amp-version"))
     {
         anyhow::ensure!(

@@ -150,6 +150,7 @@
 
             # freedesktop assets, which mean nothing on macOS.
             postInstall = ''
+              wrapProgram $out/bin/starfold --set STARFOLD_ARCHIVE_7ZZ ${pkgsFor._7zz}/bin/7zz --set STARFOLD_ARCHIVE_UNAR ${pkgsFor.unar}/bin/unar --set STARFOLD_ARCHIVE_LSAR ${pkgsFor.unar}/bin/lsar
               wrapProgram $out/bin/starfold-archive --set STARFOLD_ARCHIVE_7ZZ ${pkgsFor._7zz}/bin/7zz --set STARFOLD_ARCHIVE_UNAR ${pkgsFor.unar}/bin/unar --set STARFOLD_ARCHIVE_LSAR ${pkgsFor.unar}/bin/lsar
               install -Dm644 NOTICE $out/share/doc/starfold/NOTICE
               cp -R documentation $out/share/doc/starfold/

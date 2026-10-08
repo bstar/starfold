@@ -1,3 +1,5 @@
+mod server;
+pub use server::serve_stdio;
 pub mod native;
 pub mod progress;
 mod rar;

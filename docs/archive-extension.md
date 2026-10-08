@@ -1,6 +1,6 @@
 # Archive extension protocol
 
-The default extension is `starfold-archive`, built from `extensions/archive`.
+Archive support ships inside `starfold`, using the extension in `extensions/archive`.
 `extensions/archive-protocol` is its independent Rust contract. It has no UI,
 terminal or FOLD dependencies, so another application or codec provider can use
 this boundary. FOLD remains responsible for panes, previews and transactional
@@ -10,13 +10,16 @@ a private output selected by the host.
 ## Build and discovery
 
 ```sh
-nix develop -c cargo build --release --workspace
+nix develop -c cargo build --release -p starfold
 ```
 
-FOLD discovers the helper beside its executable. Test binaries use the parent
-of `target/{debug,release}/deps`. macOS standalone distributions embed a matching
-compressed helper for the single-executable updater. A bundled helper takes
-precedence over an adjacent one. An explicit executable override is available:
+The default provider runs from the same executable in the private
+`--archive-extension-stdio` child mode. No adjacent archive helper or separate
+installation is required, including after a single-executable update. The codec
+implementation remains an independent extension crate with a versioned wire
+contract and isolated process lifetime. The optional `starfold-archive --stdio`
+executable exposes the same provider for other consumers.
+An explicit executable override is available:
 
 ```sh
 STARFOLD_ARCHIVE_EXTENSION=/absolute/path/to/provider starfold

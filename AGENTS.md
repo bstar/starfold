@@ -308,14 +308,14 @@ normal camera photos.
 
 `fold::archive` is independent of preview presentation. It owns typed archive
 locations, cached listings, private member materialization, ZIP edit staging and
-transactional publication. All codecs live in `extensions/archive`; FOLD links
-only `starfold-archive-protocol`. `archive::service` supervises the separate
-`starfold-archive --stdio` executable through versioned length-prefixed JSON and
-bounded binary chunks. Never move archive codecs back into the host or restore
-`--archive-worker`. Build all default workspace members so the helper matches.
-Bundled macOS updates carry a matching compressed archive extension; that takes
-precedence over adjacent helpers. Explicit `STARFOLD_ARCHIVE_EXTENSION` overrides
-it. Native 7-Zip and XAD/unar tools are configured by the package/devshell.
+transactional publication. All codecs live in `extensions/archive`. Its library
+is built into `starfold`, which starts its own private
+`--archive-extension-stdio` mode in a supervised child process. Do not put codec
+logic in UI/controller code. Building/installing the ordinary FOLD executable
+must provide archive browsing without an adjacent helper. The independent
+`starfold-archive --stdio` executable remains available for other consumers and
+unit-test harnesses. `STARFOLD_ARCHIVE_EXTENSION` overrides the built-in provider.
+Native 7-Zip and XAD/unar tools are configured by the package/devshell.
 Linux extension processes share a 768 MiB address-space ceiling; cancellation
 kills/reaps their process groups.
 

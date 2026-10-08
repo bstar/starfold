@@ -21,6 +21,7 @@ default-members = [".", "extensions/pdf", "extensions/video", "extensions/nvim",
 resolver = "2"
 
 [dependencies]
+starfold-archive = { version = "0.1", path = "extensions/archive" }
 starfold-archive-protocol = { version = "0.1", path = "extensions/archive-protocol" }
 starfold-preview-protocol = { version = "0.1", path = "extensions/protocol" }
 # The shared terminal foundation: paths, logging, atomic and private file

@@ -63,8 +63,8 @@ otherwise they apply only to that entry, preserving unrelated marks.
 
 ## Archive workspace extension
 
-`starfold-archive` is a separate executable, built with the default workspace.
-Archive codecs are linked into that extension. FOLD owns navigation, selection,
+Archive support is included in the ordinary `starfold` build and installation.
+Its extension provider runs in a supervised child of the same executable. FOLD owns navigation, selection,
 previews, staging and OPERATIONS. See [the archive extension contract](archive-extension.md).
 
 Enter an archive to browse it as a folder in either pane. Enter directories and

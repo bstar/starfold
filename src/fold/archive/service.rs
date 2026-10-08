@@ -1,4 +1,4 @@
-//! Versioned executable archive extension client. No codecs are linked into FOLD.
+//! Supervised archive extension client. The default provider ships inside FOLD.
 use super::{Entry, Format};
 use crate::fold::ops::progress::Progress;
 use starfold_archive_protocol::{receive, send, Reply, Request, VERSION};
@@ -45,22 +45,24 @@ pub fn request(
         } else {
             Duration::from_secs(24 * 60 * 60)
         };
-    let path = if let Some(explicit) = std::env::var_os("STARFOLD_ARCHIVE_EXTENSION") {
-        PathBuf::from(explicit)
+    let mut command = if let Some(explicit) = std::env::var_os("STARFOLD_ARCHIVE_EXTENSION") {
+        let mut command = Command::new(explicit);
+        command.arg("--stdio");
+        command
     } else {
-        static BUNDLED: std::sync::OnceLock<Result<Option<PathBuf>, String>> =
-            std::sync::OnceLock::new();
-        BUNDLED
-            .get_or_init(|| {
-                crate::bundled_preview::executable("archive").map_err(|e| e.to_string())
-            })
-            .clone()
-            .map_err(anyhow::Error::msg)?
-            .unwrap_or_else(executable)
+        let current = std::env::current_exe()?;
+        // Unit-test harnesses cannot enter main's private provider mode.
+        if cfg!(test) {
+            let mut command = Command::new(executable());
+            command.arg("--stdio");
+            command
+        } else {
+            let mut command = Command::new(current);
+            command.arg("--archive-extension-stdio");
+            command
+        }
     };
-    let mut command = Command::new(path);
     command
-        .arg("--stdio")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -68,7 +70,7 @@ pub fn request(
     command.process_group(0);
     let mut child = command.spawn().map_err(|e| {
         anyhow::anyhow!(
-            "Archive extension unavailable: {e}. Build/install starfold-archive beside starfold."
+            "Archive extension unavailable: {e}. Check the configured archive provider or rebuild starfold."
         )
     })?;
     let stop = Arc::new(AtomicBool::new(false));
