@@ -398,6 +398,15 @@ impl App {
         let Some(entry) = state.cursor_entry() else {
             return;
         };
+        // Archive navigation is authoritative even before the audio helper's
+        // supported-extension handshake has completed.
+        if (entry.kind == EntryKind::File || entry.link_kind == Some(EntryKind::File))
+            && crate::fold::archive::Format::from_path(&entry.path).is_some()
+        {
+            drop(state);
+            self.core.send(Command::Enter);
+            return;
+        }
         let activation_path = if crate::fold::location::is_archive(&entry.path)
             && entry.kind == EntryKind::File
             && crate::fold::archive::Format::from_path(&entry.path).is_none()
@@ -4491,6 +4500,32 @@ mod tests {
         (app, fk, dir)
     }
 
+    #[test]
+    fn archive_activation_enters_browser_before_audio_capabilities_arrive() {
+        use std::io::Write;
+        let (mut app, fake, temp) = app();
+        let file = temp.path().join("book.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+        zip.start_file("hello.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"hello").unwrap();
+        zip.finish().unwrap();
+        app.core.send(Command::Push(temp.path().into()));
+        fake.pump();
+        app.refresh();
+        assert_eq!(app.audio.supports(&file), None);
+        app.activate_entry();
+        assert!(crate::fold::location::is_archive(
+            &app.core.state().active_frame().dir
+        ));
+        assert_eq!(app.audio_generation, 0);
+        fake.pump();
+        app.refresh();
+        assert_eq!(
+            app.core.state().cursor_entry().unwrap().display,
+            "hello.txt"
+        );
+    }
     #[test]
     fn archive_delete_keeps_original_and_quit_waits_for_save() {
         use std::io::Write;
