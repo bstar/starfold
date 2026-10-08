@@ -61,34 +61,79 @@ Copy, Move, Delete,
 Compress and Extract apply to the marked set if the clicked entry is marked;
 otherwise they apply only to that entry, preserving unrelated marks.
 
-Compression opens a destination archive field. The suffix selects ZIP, tar,
-tar.gz, tar.zst or 7z; Tab cycles them. Extraction opens a destination field,
-defaulting to a folder named after the archive. For multiple archives, choose a
-parent folder and each archive gets its own named folder and operation row.
-Enter **queues** the operation. Run it from OPERATIONS using the normal controls.
+## Archive workspace extension
 
-| Format | Preview / extract | Create |
-| --- | --- | --- |
-| ZIP | Yes | Yes |
-| tar, tar.gz, tar.zst | Yes | Yes |
-| tar.xz, tar.bz2 | Yes | No |
-| 7z | Yes | Yes |
-| RAR | Yes | No |
+`starfold-archive` is a separate executable, built with the default workspace.
+Archive codecs are linked into that extension. FOLD owns navigation, selection,
+previews, staging and OPERATIONS. See [the archive extension contract](archive-extension.md).
 
-Extraction currently accepts unencrypted, single-volume archives containing
-regular files and directories. Links, device nodes, unsafe member paths and
-7z deletion entries are rejected. Limits are 100,000 members and 64 GiB of
-extracted data per operation. Compression rejects links/special files too.
-ZIP creation uses Deflate, gzip and Zstandard use fast compression, and 7z uses
-the backend's default LZMA2 settings. The initial implementation normalizes
-permissions; it is not a backup tool for exact permissions, xattrs or timestamps.
+Enter an archive to browse it as a folder in either pane. Enter directories and
+nested archives normally; Back returns through their boundaries. Space marks
+individual members; yank/paste or Copy extracts the marked members into a
+filesystem pane. Directory copies preserve their structure, including empty
+archive directories. Selecting a member uses the ordinary preview providers;
+only that member is materialized in private scratch storage. Filename and
+bounded text search also work within the archive. Remote sessions run the
+extension on the host; selected files can be streamed out through Kitty drag.
 
-Output is staged privately beside the destination. Existing destinations use
-the queue's conflict controls; Overwrite replaces the entire destination folder
-for extraction rather than merging. Cancellation or failure removes staged output.
-The source archive is retained. If publishing and restoring an overwritten
-output both fail, the error identifies the recovery directory retaining the old
-output. Required RARLAB notices are in `LICENSES/UnRAR.txt`.
+### ZIP changes
+
+In a top-level ZIP, copy/paste or drop into the archive stages additions or replacements.
+SSH imports receive into private staging first. Move into a ZIP is disabled:
+save the copied members before removing their originals.
+Rename and Delete stage changes too. Existing members use the normal conflict
+choices. The original ZIP remains unchanged until **Save ZIP changes** in the
+Archive menu, or **Ctrl+S**. The footer reports pending changes. **Discard ZIP
+changes** restores the original view. Quit, tab close and Back out of the archive
+ask before abandoning pending changes; saving must finish before continuing.
+Save failures keep both the original and the pending edits.
+
+Other formats and nested archives are read-only. **Save archive as…** copies a
+nested archive to its own file; a top-level ZIP with edits saves its rebuilt
+contents to the chosen new path. This action does not convert archive formats.
+**Test archive** checks member decoding; **Unlock archive…** supplies a password
+for this session. Passwords are masked and sent through private stdin, never
+command arguments or operation logs. Password support depends on the codec;
+encrypted legacy XAD archives currently report a clear unsupported error.
+
+### Compression
+
+Compress opens a destination and options dialog. The suffix selects ZIP, tar,
+tar.gz, tar.zst or 7z; Tab cycles them. Use Up/Down to choose fields, Space to
+change an option, and Enter or the Create button to start. Presets are Store,
+Fast, Balanced and Maximum. ZIP/7z additionally support passwords and split
+volumes. The Mac metadata option excludes `.DS_Store`, `._*` and `__MACOSX`.
+Operations start immediately, report progress, and support cancellation.
+
+| Formats | Browse / selective copy | Create | Staged editing |
+| --- | --- | --- | --- |
+| ZIP / CBZ | Yes | ZIP | Top-level ZIP / CBZ |
+| tar, tar.gz, tar.zst | Yes | Yes | — |
+| tar.xz, tar.bz2 | Yes | — | — |
+| 7z, RAR / CBR | Yes | 7z | — |
+| CAB, ISO, DMG, XAR, AR, DEB, RPM, disk/container formats | Native codec fallback | — | — |
+| SIT, SITX, SEA, other legacy formats | XAD/unar fallback | — | — |
+| gzip, bzip2, XZ, Zstandard and supported numbered volumes | Native codec fallback | — | — |
+
+Native coverage depends on the archive's actual structure and available engines;
+recognizing a suffix does not guarantee every format variant. Codec failures
+remain visible in the pane or OPERATIONS. Missing volumes must be supplied beside
+the first volume. Duplicate ZIP and 7z names have distinct member identities for
+selective reads; duplicate destination names require separate copies/renaming.
+ZIP's writer rejects duplicate names when saving a rebuild and retains the original.
+
+Limits are 100,000 indexed members, eight nested archive levels, and 64 GiB of
+expanded data per operation. Links, special files, hostile member paths and 7z
+anti-items are rejected. Indexing has a 60-second deadline; cancellation kills
+and reaps the extension and its native child processes. Preview scratch files
+are cached under a byte/count budget and removed when the process exits.
+
+Output is staged privately beside its destination. Existing destinations use
+OPERATIONS conflict controls; whole-archive extraction replaces the destination
+folder when Overwrite is chosen. ZIP Save preserves unmodified compressed
+members and the archive comment, checks source identity again before publication,
+and publishes the result atomically. Compression normalizes permissions and is
+not a backup tool for preserving xattrs, ownership or every timestamp.
 
 ## Performance checks
 

@@ -312,6 +312,10 @@ pub struct App {
     filter: Option<TextInput>,
     g_pending: bool,
     d_pending: bool,
+    archive_activation: Option<PathBuf>,
+    archive_transition: Option<Action>,
+    archive_close_tab: Option<crate::fold::tab::TabId>,
+    archive_resolution: Option<(crate::fold::ops::OpId, Action)>,
     note: Option<(String, NoteLevel, Instant)>,
     view: ViewData,
     seen_version: u64,
@@ -394,6 +398,23 @@ impl App {
         let Some(entry) = state.cursor_entry() else {
             return;
         };
+        let activation_path = if crate::fold::location::is_archive(&entry.path)
+            && entry.kind == EntryKind::File
+            && crate::fold::archive::Format::from_path(&entry.path).is_none()
+        {
+            if let Some(local) = state.archive_materialized.get(&entry.path) {
+                local.clone()
+            } else {
+                let key = entry.path.clone();
+                drop(state);
+                self.archive_activation = Some(key.clone());
+                self.core.send(Command::Preview(key));
+                self.layout.preview_open = true;
+                return;
+            }
+        } else {
+            entry.path.clone()
+        };
         #[cfg(feature = "terminal-graphics")]
         if self
             .graphical
@@ -403,7 +424,7 @@ impl App {
             && crate::fold::file_type::classify(&entry.path, &[])
                 == crate::fold::file_type::FileType::Video
         {
-            let path = entry.path.clone();
+            let path = activation_path.clone();
             drop(state);
             self.activate_video_entry(path);
             return;
@@ -416,8 +437,12 @@ impl App {
             self.core.send(Command::Enter);
             return;
         }
-        let path = entry.path.clone();
-        let candidates = audio_candidates(&state);
+        let path = activation_path;
+        let candidates = if crate::fold::location::is_archive(&entry.path) {
+            vec![path.clone()]
+        } else {
+            audio_candidates(&state)
+        };
         drop(state);
         self.audio_generation = self.audio_generation.wrapping_add(1);
         self.audio_activation = self.audio_generation;
@@ -935,6 +960,10 @@ impl App {
             filter: None,
             g_pending: false,
             d_pending: false,
+            archive_activation: None,
+            archive_transition: None,
+            archive_close_tab: None,
+            archive_resolution: None,
             note: None,
             update_notices: crate::updates::Notices::start(),
             pending_update_notices: std::collections::VecDeque::new(),
@@ -1778,13 +1807,22 @@ impl App {
                 .as_ref()
                 .map_or_else(|| active.dir.clone(), |search| search.root.clone()),
             home: state.home.clone(),
-            location: home_relative(
-                state
-                    .search
-                    .as_ref()
-                    .map_or(active.dir.as_path(), |search| search.root.as_path()),
-                &state.home,
-            ),
+            location: {
+                let mut location = home_relative(
+                    state
+                        .search
+                        .as_ref()
+                        .map_or(active.dir.as_path(), |search| search.root.as_path()),
+                    &state.home,
+                );
+                if let Some(listing) = listing.filter(|l| l.archive_changes > 0) {
+                    location.push_str(&format!(
+                        " · {} pending · Ctrl+S save",
+                        listing.archive_changes
+                    ));
+                }
+                location
+            },
             preview_name,
             preview,
             ops,
@@ -1882,6 +1920,20 @@ impl App {
 
     pub fn key(&mut self, k: KeyEvent) {
         self.refresh();
+        if !self.overlays.is_open()
+            && self.editor.is_none()
+            && k.code == KeyCode::Char('s')
+            && k.modifiers
+                .contains(starkit::crossterm::event::KeyModifiers::CONTROL)
+            && crate::fold::location::is_archive(&self.view.active_dir)
+        {
+            self.core.send(Command::QueueOperation {
+                kind: OpKind::ArchiveSave,
+                sources: vec![self.view.active_dir.clone()],
+                dest: None,
+            });
+            return;
+        }
         if !self.overlays.is_open() {
             if let Some(action) = keymap::resolve_configured(k, &self.cfg.ui.shortcuts) {
                 if matches!(
@@ -2068,6 +2120,22 @@ impl App {
             Answer::Drop(kind) => self.dnd_choose(kind),
             Answer::Context(target, action) => self.context_action(target, action),
             Answer::Operation(r) => {
+                if r.kind == OpKind::ArchiveTest && r.archive_options.password.is_some() {
+                    self.core.send(Command::UnlockArchive {
+                        location: r.destination,
+                        options: r.archive_options,
+                    });
+                    return;
+                }
+                if let OpKind::Compress(format) = r.kind {
+                    self.core.send(Command::QueueArchive {
+                        format,
+                        sources: r.sources,
+                        destination: r.destination,
+                        options: r.archive_options,
+                    });
+                    return;
+                }
                 if r.kind == OpKind::Extract && r.sources.len() > 1 {
                     for source in r.sources {
                         let folder = crate::fold::archive::destination(&source);
@@ -2087,12 +2155,44 @@ impl App {
             }
             Answer::Consumed => return,
             Answer::Closed => {
+                self.archive_transition = None;
+                self.archive_close_tab = None;
                 self.extension_editor_transition = None;
                 self.extension_transition_wait = false;
                 self.extension_resolving_changes = false;
                 self.dnd_cancel_choice();
             }
-            Answer::EditorChanges(save) => self.editor_resolve_changes(save),
+            Answer::EditorChanges(save) => {
+                if let Some(action) = self.archive_transition.take() {
+                    let key = {
+                        let state = self.core.state();
+                        state
+                            .listings
+                            .values()
+                            .find(|l| l.archive_changes > 0)
+                            .map(|l| l.dir.clone())
+                    };
+                    if let Some(key) = key {
+                        self.core.send(Command::QueueOperation {
+                            kind: if save {
+                                OpKind::ArchiveSave
+                            } else {
+                                OpKind::ArchiveDiscard
+                            },
+                            sources: vec![key],
+                            dest: None,
+                        });
+                        let id = self.core.state().queue.iter().last().map(|op| op.id);
+                        if let Some(id) = id {
+                            self.archive_resolution = Some((id, action));
+                        }
+                    } else {
+                        self.act(action);
+                    }
+                } else {
+                    self.editor_resolve_changes(save);
+                }
+            }
             Answer::Confirmed(pending) => self.on_confirmed(pending),
             Answer::RetryFailedDelete(paths) => {
                 self.overlays
@@ -2150,7 +2250,19 @@ impl App {
             Pending::QueueDelete(sources) => self.core.send(Command::QueueDeleteSources(sources)),
             Pending::ClearQueue => self.core.send(Command::ClearQueue),
             Pending::CancelRunning(op) => self.core.send(Command::StopActive(op)),
-            Pending::Quit => self.quit = true,
+            Pending::Quit => {
+                if self
+                    .core
+                    .state()
+                    .listings
+                    .values()
+                    .any(|l| l.archive_changes > 0)
+                {
+                    self.act(Action::Quit);
+                } else {
+                    self.quit = true;
+                }
+            }
             Pending::CloseTab(id) => {
                 self.finish_tab_close(id);
             }
@@ -2159,6 +2271,32 @@ impl App {
 
     /// One action -- the single place a key or a click becomes a change.
     fn act(&mut self, a: Action) {
+        if matches!(a, Action::Quit | Action::CloseTab | Action::Pop) {
+            let dirty = {
+                let state = self.core.state();
+                let leaving = if a == Action::Pop {
+                    matches!(crate::fold::location::Location::from_key(&state.active_frame().dir),Ok(crate::fold::location::Location::Archive {directory,member:None,..}) if directory.as_os_str().is_empty())
+                } else {
+                    true
+                };
+                if leaving {
+                    state
+                        .listings
+                        .values()
+                        .find(|l| l.archive_changes > 0)
+                        .and_then(|l| crate::fold::location::Location::from_key(&l.dir).ok())
+                        .map(|l| l.display())
+                } else {
+                    None
+                }
+            };
+            if let Some(name) = dirty {
+                self.archive_transition = Some(a);
+                self.overlays.open_unsaved(name);
+                return;
+            }
+        }
+
         if matches!(
             a,
             Action::Quit
@@ -2174,7 +2312,10 @@ impl App {
         match a {
             Action::NewTab => self.tab_action(super::tabs::Action::New),
             Action::CloseTab => {
-                let id = self.core.state().tabs.active().id;
+                let id = self
+                    .archive_close_tab
+                    .take()
+                    .unwrap_or_else(|| self.core.state().tabs.active().id);
                 self.tab_action(super::tabs::Action::Close(id));
             }
             Action::NextTab => self.cycle_tab(1),
@@ -3434,6 +3575,46 @@ impl App {
     // -- drawing --------------------------------------------------------
 
     pub fn draw(&mut self, area: Rect, buf: &mut Buffer) {
+        if let Some((id, action)) = self.archive_resolution {
+            let status = self
+                .core
+                .state()
+                .queue
+                .iter()
+                .find(|op| op.id == id)
+                .map(|op| op.status);
+            match status {
+                Some(OpStatus::Done) => {
+                    let dirty = self
+                        .core
+                        .state()
+                        .listings
+                        .values()
+                        .any(|l| l.archive_changes > 0);
+                    if !dirty {
+                        self.archive_resolution = None;
+                        self.act(action);
+                    }
+                }
+                Some(OpStatus::Failed | OpStatus::Cancelled) => {
+                    self.archive_resolution = None;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(key) = self.archive_activation.clone() {
+            let state = self.core.state();
+            let ready = state.archive_materialized.contains_key(&key);
+            let still_selected = state.cursor_entry().is_some_and(|e| e.path == key);
+            drop(state);
+            if !still_selected {
+                self.archive_activation = None;
+            } else if ready {
+                self.archive_activation = None;
+                self.activate_entry();
+            }
+        }
         let bg = Style::default()
             .bg(panels::rgb(self.theme.bg))
             .fg(panels::rgb(self.theme.fg));
@@ -3905,6 +4086,9 @@ fn level_name(dir: &std::path::Path, home: &std::path::Path) -> String {
 
 /// The active directory, with the home prefix replaced by `~`.
 fn home_relative(dir: &std::path::Path, home: &std::path::Path) -> String {
+    if crate::fold::location::is_archive(dir) {
+        return crate::fold::location::display(dir);
+    }
     if dir == home {
         return "~".to_string();
     }
@@ -4253,6 +4437,9 @@ fn running_verb_lower(kind: OpKind) -> &'static str {
         OpKind::Rename => "renaming",
         OpKind::Compress(_) => "compressing",
         OpKind::Extract => "extracting",
+        OpKind::ArchiveSave => "saving archive",
+        OpKind::ArchiveDiscard => "discarding edits",
+        OpKind::ArchiveTest => "testing archive",
     }
 }
 
@@ -4264,6 +4451,9 @@ fn running_verb_upper(kind: OpKind) -> &'static str {
         OpKind::Rename => "RENAMING",
         OpKind::Compress(_) => "COMPRESSING",
         OpKind::Extract => "EXTRACTING",
+        OpKind::ArchiveSave => "SAVING ARCHIVE",
+        OpKind::ArchiveDiscard => "DISCARDING EDITS",
+        OpKind::ArchiveTest => "TESTING ARCHIVE",
     }
 }
 
@@ -4299,6 +4489,52 @@ mod tests {
         let cfg_path = dir.path().join("config.toml");
         let app = App::new(core, cfg, cfg_path, None, Graphics::disabled());
         (app, fk, dir)
+    }
+
+    #[test]
+    fn archive_delete_keeps_original_and_quit_waits_for_save() {
+        use std::io::Write;
+        let (mut app, fake, temp) = app();
+        fake.pump();
+        let file = temp.path().join("book.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+        for name in ["one.txt", "two.txt"] {
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"hello").unwrap();
+        }
+        writer.finish().unwrap();
+        let original = std::fs::read(&file).unwrap();
+        let root = crate::fold::location::Location::Filesystem(file.clone())
+            .enter_archive()
+            .unwrap()
+            .key();
+        app.core.send(Command::Push(root.clone()));
+        fake.pump();
+        app.refresh();
+        let selected = app.core.state().cursor_entry().unwrap().path.clone();
+        app.request_delete(vec![selected], true);
+        assert!(
+            matches!(app.overlays.current(),Some(Overlay::Confirm(c)) if c.title=="remove from ZIP")
+        );
+        app.key(key('y'));
+        fake.pump();
+        app.refresh();
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+        assert!(app.core.state().listings[&root].archive_changes > 0);
+        app.act(Action::Quit);
+        assert!(!app.quit);
+        assert!(matches!(app.overlays.current(), Some(Overlay::Unsaved(_))));
+        app.key(key('s'));
+        assert!(!app.quit);
+        fake.pump();
+        let area = Rect::new(0, 0, 100, 30);
+        app.refresh();
+        app.draw(area, &mut Buffer::empty(area));
+        assert!(app.quit);
+        let archive = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
+        assert_eq!(archive.len(), 1);
     }
 
     #[cfg(feature = "terminal-graphics")]

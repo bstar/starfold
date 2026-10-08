@@ -16,11 +16,12 @@ media = ["starkit/media"]
 terminal-graphics = ["media", "starkit/terminal-graphics"]
 
 [workspace]
-members = ["extensions/protocol", "extensions/pdf", "extensions/video", "extensions/nvim"]
-default-members = [".", "extensions/pdf", "extensions/video", "extensions/nvim"]
+members = ["extensions/protocol", "extensions/pdf", "extensions/video", "extensions/nvim", "extensions/archive", "extensions/archive-protocol"]
+default-members = [".", "extensions/pdf", "extensions/video", "extensions/nvim", "extensions/archive"]
 resolver = "2"
 
 [dependencies]
+starfold-archive-protocol = { version = "0.1", path = "extensions/archive-protocol" }
 starfold-preview-protocol = { version = "0.1", path = "extensions/protocol" }
 # The shared terminal foundation: paths, logging, atomic and private file
 # writes, theming, terminal setup with a panic hook, text entry, wrapping, the
@@ -110,17 +111,10 @@ mime_guess = "2"
 lofty = "0.22"
 mp4parse = "0.17"
 matroska-demuxer = "0.8"
-zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-tar = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-lzma-rust2 = "0.21"
-bzip2 = "0.6"
-ruzstd = "0.9"
 # Pinned: adapter compensates for 0.20.2 empty-entry anti-bit encoding.
-sevenz-rust2 = "=0.20.2"
 # RARLAB engine is compiled into the executable, not an external command.
 # The GPL Rust port is intentionally not used; see LICENSES/UnRAR.txt.
-unrar_sys = "0.5.8"
 tempfile = "3"
 xattr = "1"
 libc = "0.2"
@@ -130,6 +124,7 @@ sha2 = "0.10"
 
 
 [dev-dependencies]
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 lopdf = { version = "0.42", default-features = false }
 pdf-extract = "0.12"
 # Anything that parses foreign input gets a property test, and so does every

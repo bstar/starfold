@@ -795,23 +795,46 @@ fn breadcrumb_slots(
     path: &std::path::Path,
     home: &std::path::Path,
 ) -> Vec<(Rect, String, PathBuf)> {
-    let (mut target, first, rest) = if let Ok(rest) = path.strip_prefix(home) {
-        (home.to_path_buf(), "~".to_owned(), rest)
+    let mut parts = if crate::fold::location::is_archive(path) {
+        let mut locations = vec![];
+        let mut location = crate::fold::location::Location::from_key(path).ok();
+        while let Some(current) = location {
+            let key = current.key();
+            let label = if key == home {
+                "~".into()
+            } else {
+                key.file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "/".into())
+            };
+            locations.push((label, key.clone()));
+            if key == home {
+                break;
+            }
+            location = current.parent();
+        }
+        locations.reverse();
+        locations
     } else {
-        (
-            PathBuf::from("/"),
-            "/".to_owned(),
-            path.strip_prefix("/").unwrap_or(path),
-        )
+        let (mut target, first, rest) = if let Ok(rest) = path.strip_prefix(home) {
+            (home.to_path_buf(), "~".to_owned(), rest)
+        } else {
+            (
+                PathBuf::from("/"),
+                "/".to_owned(),
+                path.strip_prefix("/").unwrap_or(path),
+            )
+        };
+        let mut parts = vec![(first, target.clone())];
+        for part in rest.components() {
+            target.push(part.as_os_str());
+            parts.push((
+                part.as_os_str().to_string_lossy().into_owned(),
+                target.clone(),
+            ));
+        }
+        parts
     };
-    let mut parts = vec![(first, target.clone())];
-    for part in rest.components() {
-        target.push(part.as_os_str());
-        parts.push((
-            part.as_os_str().to_string_lossy().into_owned(),
-            target.clone(),
-        ));
-    }
     let width = |parts: &[(String, PathBuf)]| -> usize {
         parts
             .iter()
@@ -829,11 +852,11 @@ fn breadcrumb_slots(
         collapsed = true;
     }
     if collapsed && area.width > 4 {
-        let parent = parts[0]
-            .1
-            .parent()
-            .unwrap_or(std::path::Path::new("/"))
-            .to_path_buf();
+        let parent = crate::fold::location::Location::from_key(&parts[0].1)
+            .ok()
+            .and_then(|l| l.parent())
+            .map(|l| l.key())
+            .unwrap_or_else(|| std::path::PathBuf::from("/"));
         parts.insert(0, ("…".into(), parent));
     }
     let mut x = area.x;
@@ -4815,6 +4838,7 @@ mod tests {
                 };
                 app.overlays
                     .open_destination(crate::ui::overlays::context::Request {
+                        archive_options: Default::default(),
                         kind,
                         sources: vec![source.clone()],
                         destination: dest.clone(),

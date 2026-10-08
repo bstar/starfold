@@ -65,7 +65,11 @@ impl Watch {
 }
 
 fn mtime_of(dir: &Path) -> Option<SystemTime> {
-    std::fs::metadata(dir).ok()?.modified().ok()
+    let physical = match super::location::Location::from_key(dir).ok()? {
+        super::location::Location::Archive { source, .. } => source.file,
+        super::location::Location::Filesystem(path) => path,
+    };
+    std::fs::metadata(physical).ok()?.modified().ok()
 }
 
 #[cfg(test)]

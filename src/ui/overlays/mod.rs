@@ -153,7 +153,7 @@ impl Overlays {
     pub fn graphical_rect(&self, area: Rect) -> Option<Rect> {
         Some(match self.current.as_ref()? {
             Overlay::Context(menu) | Overlay::Drop(menu) => menu.popup.root_rect(area),
-            Overlay::Destination(_) => context::Destination::rect(area),
+            Overlay::Destination(d) => d.bounds(area),
             Overlay::Help { .. } => help_rect(area),
             Overlay::Failure(_) | Overlay::Update(_) => failure::rect(area),
             Overlay::Confirm(prompt) => confirm::layout(area, prompt)?.rect,
@@ -317,7 +317,11 @@ impl Overlays {
             }
             Some(Overlay::Destination(form)) => {
                 form.error = None;
-                &mut form.input
+                if form.field == 3 {
+                    &mut form.password
+                } else {
+                    &mut form.input
+                }
             }
             Some(Overlay::ConflictRename(sequence)) => {
                 sequence.form.error = None;
@@ -565,7 +569,7 @@ impl Overlays {
         // Route visible footer actions through the same validation and state
         // transitions as keys. No duplicate operation/confirmation logic.
         let footer = match self.current.as_ref().unwrap() {
-            Overlay::Destination(d) => Some((context::Destination::rect(area), d.footer())),
+            Overlay::Destination(d) => Some((d.bounds(area), d.footer())),
             Overlay::Rename(_) | Overlay::ConflictRename(_) => {
                 Some((rename::rect(area), rename::FOOTER))
             }
@@ -599,9 +603,12 @@ impl Overlays {
                 super::popup::Answer::Dismissed => (true, Answer::Closed),
                 _ => (false, Answer::Consumed),
             },
-            Overlay::Destination(_) => {
-                if inside(context::Destination::rect(area), x, y) {
-                    (false, Answer::Consumed)
+            Overlay::Destination(d) => {
+                if inside(d.bounds(area), x, y) {
+                    match d.click(area, x, y) {
+                        Some(r) => (true, Answer::Operation(r)),
+                        None => (false, Answer::Consumed),
+                    }
                 } else {
                     (true, Answer::Closed)
                 }
@@ -963,6 +970,7 @@ mod tests {
             ] {
                 o.current = Some(Overlay::Destination(context::Destination::new(
                     context::Request {
+                        archive_options: Default::default(),
                         kind,
                         sources: vec!["/src/a.txt".into()],
                         destination: "/dest".into(),

@@ -30,6 +30,9 @@ pub enum OpKind {
     Rename,
     Compress(super::archive::Format),
     Extract,
+    ArchiveSave,
+    ArchiveDiscard,
+    ArchiveTest,
 }
 
 /// How a delete removes a file. Decided once, at plan time, from
@@ -105,6 +108,7 @@ pub struct Item {
 /// conflict found along the way.
 #[derive(Debug, Clone, Default)]
 pub struct Plan {
+    pub archive_options: starfold_archive_protocol::Options,
     pub sources: Vec<PathBuf>,
     /// `dest/` for a copy or move, the rename target for a rename, and an
     /// empty path for a delete, which has nowhere to go.
@@ -165,6 +169,7 @@ pub enum OpStatus {
 
 /// One entry in the queue: what to do, to which files, and how it is going.
 pub struct Op {
+    pub archive_options: starfold_archive_protocol::Options,
     pub origin_tab: Option<super::tab::TabId>,
     pub origin_name: String,
     pub id: OpId,
@@ -226,12 +231,18 @@ impl Op {
                 OpKind::Rename => "RENAME",
                 OpKind::Compress(_) => "COMPRESS",
                 OpKind::Extract => "EXTRACT",
+                OpKind::ArchiveSave => "SAVE ARCHIVE",
+                OpKind::ArchiveDiscard => "DISCARD ZIP CHANGES",
+                OpKind::ArchiveTest => "TEST ARCHIVE",
             }
         };
         let count = self.sources.len();
         let noun = if count == 1 { "item" } else { "items" };
         match &self.dest {
-            Some(dest) => format!("{verb} {count} {noun} \u{2192} {}", dest.display()),
+            Some(dest) => format!(
+                "{verb} {count} {noun} \u{2192} {}",
+                crate::fold::location::display(dest)
+            ),
             None => format!("{verb} {count} {noun}"),
         }
     }
@@ -270,6 +281,7 @@ impl Queue {
         let id = OpId(self.next_id);
         self.next_id += 1;
         self.ops.push(Op {
+            archive_options: Default::default(),
             origin_tab: None,
             origin_name: String::new(),
             id,
@@ -402,6 +414,7 @@ mod tests {
 
     fn op(id: u64, status: OpStatus) -> Op {
         Op {
+            archive_options: Default::default(),
             origin_tab: None,
             origin_name: String::new(),
             id: OpId(id),

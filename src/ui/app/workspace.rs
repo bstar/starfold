@@ -377,6 +377,21 @@ impl App {
                 }
             }
             TabAction::Close(id) => {
+                let dirty = {
+                    let state = self.core.state();
+                    state
+                        .listings
+                        .values()
+                        .find(|l| l.archive_changes > 0)
+                        .map(|l| crate::fold::location::display(&l.dir))
+                };
+                if let Some(name) = dirty {
+                    self.archive_transition = Some(Action::CloseTab);
+                    self.archive_close_tab = Some(id);
+                    self.overlays.open_unsaved(name);
+                    return;
+                }
+
                 if self.core.state().tabs.tabs.len() == 1 {
                     self.core.send(Command::CloseTab(id));
                     return;

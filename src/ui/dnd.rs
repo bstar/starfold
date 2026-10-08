@@ -305,7 +305,62 @@ pub fn stream_offer(
     progress: Arc<Progress>,
     output: crossbeam_channel::Sender<Outgoing>,
 ) -> io::Result<()> {
-    let mut total = 0u64;
+    let mut private = vec![];
+    let mut materialized = vec![];
+    for source in sources {
+        if crate::fold::location::is_archive(&source) {
+            let location =
+                crate::fold::location::Location::from_key(&source).map_err(io::Error::other)?;
+            if matches!(
+                location,
+                crate::fold::location::Location::Archive {
+                    member: Some(_),
+                    ..
+                }
+            ) {
+                materialized.push(
+                    crate::fold::archive::browser::materialize(&source, &progress)
+                        .map_err(io::Error::other)?,
+                );
+            } else {
+                let stage = tempfile::tempdir()?;
+                let name = source
+                    .file_name()
+                    .ok_or_else(|| io::Error::other("Archive directory has no name"))?
+                    .to_os_string();
+                let root = matches!(location,crate::fold::location::Location::Archive {directory,..} if directory.as_os_str().is_empty());
+                let destination = if root {
+                    let folder = stage.path().join(&name);
+                    fs::create_dir(&folder)?;
+                    folder
+                } else {
+                    stage.path().to_path_buf()
+                };
+                let plan = crate::fold::archive::browser::plan_copy(&[source], &destination)
+                    .map_err(io::Error::other)?;
+                let result = crate::fold::ops::exec::run(
+                    crate::fold::ops::OpKind::Copy,
+                    &plan,
+                    crate::fold::ops::ConflictPolicy::Ask,
+                    &Default::default(),
+                    &progress,
+                );
+                if !result.failed.is_empty() || result.cancelled {
+                    return Err(io::Error::other("Archive export failed or was cancelled"));
+                }
+                materialized.push(if root {
+                    destination
+                } else {
+                    stage.path().join(&name)
+                });
+                private.push(stage);
+            }
+        } else {
+            materialized.push(source);
+        }
+    }
+    let sources = materialized;
+    let mut total = progress.done();
     for source in &sources {
         total = total.saturating_add(tree_bytes(source)?);
     }
@@ -455,9 +510,17 @@ impl Remote {
         progress: Arc<Progress>,
         skip: &[usize],
     ) -> io::Result<Self> {
+        let archive_parent = crate::fold::location::Location::from_key(dest)
+            .ok()
+            .and_then(|location| match location {
+                crate::fold::location::Location::Archive { source, .. } => {
+                    source.file.parent().map(Path::to_path_buf)
+                }
+                _ => None,
+            });
         let stage = tempfile::Builder::new()
             .prefix(".starfold-drop-")
-            .tempdir_in(dest)?;
+            .tempdir_in(archive_parent.as_deref().unwrap_or(dest))?;
         let mut roots = Vec::new();
         let mut waiting = VecDeque::new();
         for (i, source) in paths.iter().enumerate() {

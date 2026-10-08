@@ -88,6 +88,8 @@ rest of it.
   Edit runs the terminal editor in Preview. Physical right-click is enabled by default
   and can be disabled in configuration.
   Archive jobs appear in OPERATIONS.
+  Archives open as navigable folders through the separate `starfold-archive` extension,
+  with selective extraction, ZIP staging and compression options.
   See [previews and archives](docs/previews-and-archives.md).
 - **Recursive filename and content search.** Press F3 or Ctrl+F to search below
   the active directory; Tab in the prompt switches modes. Content results show

@@ -80,7 +80,12 @@ pub struct Identity {
 
 impl Identity {
     pub fn of(path: &Path) -> std::io::Result<Self> {
-        let meta = fs::symlink_metadata(path)?;
+        let physical =
+            match super::location::Location::from_key(path).map_err(std::io::Error::other)? {
+                super::location::Location::Archive { source, .. } => source.file,
+                super::location::Location::Filesystem(path) => path,
+            };
+        let meta = fs::symlink_metadata(physical)?;
         Ok(Self {
             dev: meta.dev(),
             ino: meta.ino(),
@@ -107,6 +112,9 @@ pub fn scan_mode(
     include_hidden: bool,
     progress: &Progress,
 ) -> Found {
+    if super::location::is_archive(root) {
+        return scan_archive(root, query, mode, include_hidden, progress);
+    }
     let needle = query.to_lowercase();
     let mut entries = Vec::new();
     let mut identities = HashMap::new();
@@ -288,6 +296,117 @@ pub fn scan_mode(
         status,
         errors,
     }
+}
+
+fn scan_archive(
+    root: &Path,
+    query: &str,
+    mode: Mode,
+    include_hidden: bool,
+    progress: &Progress,
+) -> Found {
+    let mut found = Found {
+        entries: vec![],
+        identities: HashMap::new(),
+        excerpts: HashMap::new(),
+        skipped_binary: 0,
+        skipped_large: 0,
+        status: Status::Complete,
+        errors: vec![],
+    };
+    let rows = match super::archive::browser::indexed_members(root) {
+        Ok(rows) => rows,
+        Err(e) => {
+            found.status = Status::Partial;
+            found.errors.push(e.to_string());
+            return found;
+        }
+    };
+    let needle = query.to_lowercase();
+    let mut bytes = 0;
+    for (key, entry) in rows {
+        if progress.cancel.load(Ordering::Relaxed) {
+            found.status = Status::Cancelled;
+            break;
+        }
+        if !include_hidden
+            && Path::new(&entry.name)
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+        {
+            continue;
+        }
+        progress.visited.fetch_add(1, Ordering::Relaxed);
+        let matched = if mode == Mode::Names {
+            entry.name.to_lowercase().contains(&needle)
+        } else {
+            let size = entry.bytes.unwrap_or(MAX_FILE_BYTES + 1);
+            if size > MAX_FILE_BYTES {
+                found.skipped_large += 1;
+                continue;
+            }
+            if bytes + size > MAX_TOTAL_BYTES {
+                found.status = Status::Limited;
+                break;
+            }
+            bytes += size;
+            let stale = || progress.cancel.load(Ordering::Relaxed);
+            match super::archive::browser::materialize_cancellable(&key, &stale)
+                .map_err(std::io::Error::other)
+                .and_then(fs::read)
+            {
+                Ok(data) => match std::str::from_utf8(&data) {
+                    Ok(text) if !text.contains('\0') => {
+                        if let Some(line) =
+                            text.lines().find(|l| l.to_lowercase().contains(&needle))
+                        {
+                            found
+                                .excerpts
+                                .insert(key.clone(), line.chars().take(160).collect());
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    _ => {
+                        found.skipped_binary += 1;
+                        false
+                    }
+                },
+                Err(e) => {
+                    note_error(&mut found.errors, &key, &e);
+                    false
+                }
+            }
+        };
+        if matched {
+            if let Ok(identity) = Identity::of(&key) {
+                found.identities.insert(key.clone(), identity);
+            }
+            found.entries.push(Entry {
+                path: key,
+                display: entry.name,
+                kind: super::entry::EntryKind::File,
+                link_kind: None,
+                len: entry.bytes.unwrap_or(0),
+                modified: None,
+                created: None,
+                accessed: None,
+                mode: 0,
+                executable: false,
+                hidden: false,
+            });
+            if found.entries.len() >= MAX_RESULTS {
+                found.status = Status::Limited;
+                break;
+            }
+        }
+    }
+    found.entries.sort_by_key(|e| e.display.to_lowercase());
+    if found.status == Status::Complete && (!found.errors.is_empty() || found.skipped_large > 0) {
+        found.status = Status::Partial;
+    }
+    found
 }
 
 enum ContentMatch {

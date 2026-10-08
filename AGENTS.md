@@ -28,7 +28,7 @@ built executable; a debug/test build does not update the user's command.
 Restart running STAR/FOLD instances when desktop testing requires the new
 binary, since existing processes keep the old executable loaded.
 
-There are no separately installed system libraries. `unrar_sys` compiles the bundled RARLAB C++ engine using the compiler in the flake; CI supplies the native C++ toolchain. Its notice is installed from `LICENSES/UnRAR.txt`. `libbz2-rs-sys` is pure Rust despite its name. That is worth stating for a program that
+The archive extension uses native 7-Zip and XAD/unar tools for additional formats. `unrar_sys` compiles the bundled RARLAB C++ engine using the compiler in the flake; CI supplies the native C++ toolchain. Zstandard creation uses bundled `zstd-sys`; its compiler comes from the same build toolchain. The UnRAR notice is installed from `LICENSES/UnRAR.txt`. `libbz2-rs-sys` is pure Rust despite its name. That is worth stating for a program that
 deletes to the trash and draws pictures: trash is the freedesktop
 specification, in pure Rust, on Linux, and `NSFileManager` through the `objc2`
 bindings on macOS — Rust bindings to a system framework, with no `-sys` crate
@@ -306,13 +306,25 @@ It runs with a deadline and its output is decoded under the bounded preview
 size. Ordinary images decode in process, so the helper is not needed for
 normal camera photos.
 
-`fold::archive` is independent of preview presentation. It owns archive entries,
-formats, validation and codec adapters. `archive::operation` plans source trees
-and owns private staging/publishing; `archive::connection` supervises codecs in
-`starfold --archive-worker`, reports progress, and terminates on cancellation.
-Failed or cancelled work cannot publish partial archives/extractions. Codec
-processes share a 768 MiB resource ceiling from `fold::process`. RAR uses bundled
-native UnRAR: the considered Rust port also had GPL terms, so it is not linked.
+`fold::archive` is independent of preview presentation. It owns typed archive
+locations, cached listings, private member materialization, ZIP edit staging and
+transactional publication. All codecs live in `extensions/archive`; FOLD links
+only `starfold-archive-protocol`. `archive::service` supervises the separate
+`starfold-archive --stdio` executable through versioned length-prefixed JSON and
+bounded binary chunks. Never move archive codecs back into the host or restore
+`--archive-worker`. Build all default workspace members so the helper matches.
+Bundled macOS updates carry a matching compressed archive extension; that takes
+precedence over adjacent helpers. Explicit `STARFOLD_ARCHIVE_EXTENSION` overrides
+it. Native 7-Zip and XAD/unar tools are configured by the package/devshell.
+Linux extension processes share a 768 MiB address-space ceiling; cancellation
+kills/reaps their process groups.
+
+Existing PathBuf controller APIs carry opaque archive location keys; these are
+identities, never filesystem paths. Decode `fold::location::Location` before
+filesystem IO. Member indices distinguish duplicate archive headers. Rendering
+uses display paths. Archive edit scratch state is worker-owned; UI decisions use
+`Listing::archive_changes`, and all updates still fold through `state::apply`.
+ZIP Save must retain pending changes and the original when rebuilding fails.
 
 Archive destinations must be disjoint from their sources in both directions:
 overwriting a directory containing the source archive would delete it during

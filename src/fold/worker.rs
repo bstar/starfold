@@ -127,6 +127,10 @@ impl Senders {
 /// rather than overwriting the newer one.
 #[derive(Debug, Clone)]
 pub enum Job {
+    UnlockArchive {
+        location: PathBuf,
+        options: starfold_archive_protocol::Options,
+    },
     ClosePreview,
     LoadPlaces(PathBuf),
     RefreshPlaces,
@@ -183,6 +187,7 @@ pub enum Job {
     },
     /// Expand an op's sources, total their bytes, and find conflicts.
     Plan {
+        archive_options: starfold_archive_protocol::Options,
         op: OpId,
         kind: OpKind,
         sources: Vec<PathBuf>,
@@ -217,6 +222,13 @@ pub enum Job {
 /// notification would be a second writer.
 #[derive(Debug, Clone)]
 pub enum Done {
+    ArchivePreviewed {
+        tab: super::tab::TabId,
+        path: PathBuf,
+        local: PathBuf,
+        generation: u64,
+        preview: Preview,
+    },
     StartupListed {
         requested: PathBuf,
         listing: Listing,
@@ -280,6 +292,13 @@ pub enum Done {
 /// their ordinary listing error instead of silently changing destination.
 pub fn read_startup(location: StartupLocation, cfg: &ListConfig) -> Done {
     let requested = location.path;
+    if super::location::is_archive(&requested) {
+        return Done::StartupListed {
+            listing: listing::read(&requested, cfg),
+            requested,
+            notice: None,
+        };
+    }
     let (actual, notice) = if let Some(fallback) = location.fallback {
         if requested.is_dir() {
             (
@@ -306,7 +325,9 @@ pub fn read_startup(location: StartupLocation, cfg: &ListConfig) -> Done {
         )
     };
     let mut listing = listing::read(&actual, cfg);
-    listing.space = places::filesystem_space(&actual);
+    if !super::location::is_archive(&actual) {
+        listing.space = places::filesystem_space(&actual);
+    }
     Done::StartupListed {
         requested,
         listing,
@@ -398,6 +419,18 @@ pub fn perform_io(
     cancel: &AtomicBool,
 ) -> IoOutcome {
     match job {
+        Job::UnlockArchive { location, options } => {
+            if let Ok(super::location::Location::Archive { source, .. }) =
+                super::location::Location::from_key(&location)
+            {
+                super::archive::browser::unlock(
+                    source.file.clone(),
+                    options.password.unwrap_or_default(),
+                );
+                super::archive::browser::invalidate(&source);
+            }
+            IoOutcome::Done(Done::Listed(listing::read(&location, &cfg.list)))
+        }
         Job::LoadPlaces(path) => IoOutcome::Done(Done::PlacesLoaded {
             bookmarks: places::load_bookmarks(&path),
             locations: places::discover_locations(),
@@ -414,7 +447,9 @@ pub fn perform_io(
         }),
         Job::List(dir) => {
             let mut listing = listing::read(&dir, &cfg.list);
-            listing.space = places::filesystem_space(&dir);
+            if !super::location::is_archive(&dir) {
+                listing.space = places::filesystem_space(&dir);
+            }
             IoOutcome::Done(Done::Listed(listing))
         }
         Job::Search {
@@ -452,7 +487,11 @@ pub fn perform_io(
                 max_entries: cfg.preview.dir_budget,
                 max_depth: 64,
             };
-            let summary = summary::summarize(&dir, &budget, cancel);
+            let summary = if super::location::is_archive(&dir) {
+                super::archive::browser::summary(&dir).unwrap_or_default()
+            } else {
+                summary::summarize(&dir, &budget, cancel)
+            };
             IoOutcome::Done(Done::Summarized { dir, summary })
         }
         Job::Preview {
@@ -525,13 +564,23 @@ pub fn perform_io(
                 preview,
             })
         }
-        Job::Open(path) => match open::open_external(&path, &cfg.open) {
-            Ok(()) => IoOutcome::None,
-            Err(e) => IoOutcome::Note(Note::error(
-                "open",
-                format!("opening {}: {e}", path.display()),
-            )),
-        },
+        Job::Open(path) => {
+            let resolved = if super::location::is_archive(&path) {
+                match super::archive::browser::materialize(&path, &Progress::new(0)) {
+                    Ok(p) => p,
+                    Err(e) => return IoOutcome::Note(Note::error("archive", e.to_string())),
+                }
+            } else {
+                path.clone()
+            };
+            match open::open_external(&resolved, &cfg.open) {
+                Ok(()) => IoOutcome::None,
+                Err(e) => IoOutcome::Note(Note::error(
+                    "open",
+                    format!("opening {}: {e}", path.display()),
+                )),
+            }
+        }
         // Not io work: `spawn_io`'s loop handles `Shutdown` and forwards
         // `Plan`/`Run` to the ops queue before this is ever called. Kept
         // here, rather than assumed away, so this match stays exhaustive if
@@ -571,6 +620,13 @@ fn validate_search_sources_for_run(
 pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
     match job {
         Job::CheckImport { op, sources, dest } => {
+            if super::location::is_archive(&dest) {
+                return Some(Done::ImportChecked {
+                    op,
+                    result: super::archive::edit::import_conflicts(&sources, &dest)
+                        .map_err(|error| error.to_string()),
+                });
+            }
             let result = sources
                 .iter()
                 .map(|source| {
@@ -598,11 +654,23 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
             sources,
             dest,
             expected,
+            archive_options,
         } => {
             let result = validate_search_sources_for_run(&expected)
                 .map_err(|(_, e)| e)
                 .and_then(|_| {
-                    ops::plan::plan(kind, &sources, dest.as_deref()).map_err(|e| e.to_string())
+                    ops::plan::plan(kind, &sources, dest.as_deref())
+                        .map(|mut plan| {
+                            if matches!(kind, ops::OpKind::Compress(_))
+                                && (archive_options.password.is_some()
+                                    || archive_options.volume_bytes.is_some())
+                            {
+                                plan.total_bytes = plan.total_bytes.saturating_mul(2);
+                            }
+                            plan.archive_options = archive_options;
+                            plan
+                        })
+                        .map_err(|e| e.to_string())
                 });
             Some(Done::Planned { op, result })
         }
@@ -655,7 +723,8 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
         }),
         // Not ops work: `spawn_ops`'s loop forwards everything else before
         // this is called.
-        Job::LoadPlaces(_)
+        Job::UnlockArchive { .. }
+        | Job::LoadPlaces(_)
         | Job::RefreshPlaces
         | Job::SaveBookmarks { .. }
         | Job::List(_)
@@ -888,15 +957,68 @@ pub fn perform_preview(
         stop.load(std::sync::atomic::Ordering::Relaxed)
             || is_stale_tab_preview(state, tab, generation)
     };
-    let result = match input {
-        Some(input) => connection.input(&path, generation, input, cfg, &stale),
-        None => connection.build_scoped(&path, page, generation, cfg, &stale),
+    let resolved = if super::location::is_archive(&path) {
+        if matches!(
+            super::location::Location::from_key(&path),
+            Ok(super::location::Location::Archive { member: None, .. })
+        ) {
+            let listing =
+                super::archive::browser::read(&path, &super::listing::ListConfig::default());
+            let mut document = super::preview::model::Document::new("Archive folder");
+            document.content = super::preview::model::Content::Archive(
+                listing
+                    .entries
+                    .iter()
+                    .map(|e| super::archive::Entry {
+                        name: e.display.clone(),
+                        bytes: Some(e.len),
+                        directory: e.kind == super::entry::EntryKind::Dir,
+                    })
+                    .collect(),
+            );
+            document.notice = listing.error;
+            return Some(Done::Previewed {
+                tab,
+                path,
+                generation,
+                preview: Preview::Document(document),
+            });
+        }
+        match super::archive::browser::materialize_cancellable(&path, &stale) {
+            Ok(file) => file,
+            Err(error) => {
+                return Some(Done::Previewed {
+                    tab,
+                    path,
+                    generation,
+                    preview: Preview::Error(error.to_string()),
+                })
+            }
+        }
+    } else {
+        path.clone()
     };
-    result.map(|preview| Done::Previewed {
-        tab,
-        path,
-        generation,
-        preview,
+    let result = match input {
+        Some(input) => connection.input(&resolved, generation, input, cfg, &stale),
+        None => connection.build_scoped(&resolved, page, generation, cfg, &stale),
+    };
+    result.map(|preview| {
+        if super::location::is_archive(&path) {
+            Done::ArchivePreviewed {
+                tab,
+                path,
+                local: resolved,
+                generation,
+                preview,
+            }
+        } else {
+            Done::Previewed {
+                tab,
+                path,
+                generation,
+                preview,
+            }
+        }
     })
 }
 
@@ -1001,6 +1123,7 @@ mod tests {
         let expected = vec![(path.clone(), identity)];
         let planned = perform_ops(
             Job::Plan {
+                archive_options: Default::default(),
                 op: OpId(1),
                 kind: OpKind::Delete(ops::DeleteHow::Permanent),
                 sources: vec![path.clone()],
@@ -1218,6 +1341,7 @@ mod tests {
         assert_eq!(ops_rx.try_iter().count(), 0);
 
         senders.dispatch(Job::Plan {
+            archive_options: Default::default(),
             op: OpId(0),
             kind: OpKind::Copy,
             sources: vec!["/a".into()],

@@ -46,6 +46,11 @@ pub enum Action {
     Delete,
     Compress,
     Extract,
+    ArchiveSave,
+    ArchiveSaveAs,
+    ArchiveDiscard,
+    ArchiveTest,
+    ArchiveUnlock,
 }
 impl Action {
     fn label(self) -> &'static str {
@@ -67,6 +72,11 @@ impl Action {
             Self::Delete => "Delete",
             Self::Compress => "Compress…",
             Self::Extract => "Extract…",
+            Self::ArchiveSave => "Save ZIP changes",
+            Self::ArchiveSaveAs => "Save archive as…",
+            Self::ArchiveDiscard => "Discard ZIP changes",
+            Self::ArchiveTest => "Test archive",
+            Self::ArchiveUnlock => "Unlock archive…",
         }
     }
 }
@@ -111,6 +121,36 @@ impl Menu {
         {
             actions.push(Action::Extract);
         }
+        let archive_location = crate::fold::location::is_archive(&target.create_dir);
+        if archive_location {
+            actions.retain(|a| {
+                !matches!(
+                    a,
+                    Action::Move
+                        | Action::Edit
+                        | Action::CreateFile
+                        | Action::CreateDirectory
+                        | Action::Compress
+                        | Action::Extract
+                )
+            });
+            actions.extend([Action::ArchiveTest, Action::ArchiveUnlock]);
+            if let Ok(crate::fold::location::Location::Archive { source, .. }) =
+                crate::fold::location::Location::from_key(&target.create_dir)
+            {
+                if source.nested.is_empty() && Format::from_path(&source.file) == Some(Format::Zip)
+                {
+                    actions.extend([
+                        Action::ArchiveSave,
+                        Action::ArchiveSaveAs,
+                        Action::ArchiveDiscard,
+                    ]);
+                } else {
+                    actions.retain(|a| !matches!(a, Action::Rename | Action::Delete));
+                    actions.push(Action::ArchiveSaveAs);
+                }
+            }
+        }
         actions.push(Action::Tabs);
         let action = |a: Action| Entry::action(a.label(), a);
         let mut entries = Vec::new();
@@ -127,22 +167,34 @@ impl Menu {
                 Action::Rename,
                 Action::CopyCurrentPath,
             ] {
-                entries.push(action(a));
+                if actions.contains(&a) {
+                    entries.push(action(a));
+                }
             }
             entries.push(Entry::Separator);
         } else {
             entries.push(action(Action::CopyCurrentPath));
             entries.push(Entry::Separator);
         }
-        entries.push(Entry::submenu(
-            "New",
-            vec![action(Action::CreateFile), action(Action::CreateDirectory)],
-        ));
-        let archive = [Action::Compress, Action::Extract]
-            .into_iter()
-            .filter(|a| actions.contains(a))
-            .map(action)
-            .collect::<Vec<_>>();
+        if !archive_location {
+            entries.push(Entry::submenu(
+                "New",
+                vec![action(Action::CreateFile), action(Action::CreateDirectory)],
+            ));
+        }
+        let archive = [
+            Action::Compress,
+            Action::Extract,
+            Action::ArchiveSave,
+            Action::ArchiveSaveAs,
+            Action::ArchiveDiscard,
+            Action::ArchiveTest,
+            Action::ArchiveUnlock,
+        ]
+        .into_iter()
+        .filter(|a| actions.contains(a))
+        .map(action)
+        .collect::<Vec<_>>();
         if !archive.is_empty() {
             entries.push(Entry::submenu("Archive", archive));
         }
@@ -207,26 +259,72 @@ impl Menu {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
+    pub archive_options: starfold_archive_protocol::Options,
     pub kind: OpKind,
     pub sources: Vec<PathBuf>,
     pub destination: PathBuf,
 }
-#[derive(Debug)]
 pub struct Destination {
     pub request: Request,
     pub input: TextInput,
     pub error: Option<String>,
+    pub field: usize,
+    pub password: TextInput,
+}
+impl std::fmt::Debug for Destination {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Destination")
+            .field("request", &self.request)
+            .field("field", &self.field)
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
 }
 impl Destination {
     pub fn new(request: Request) -> Self {
-        let input = TextInput::single().with_text(request.destination.to_string_lossy());
+        let input =
+            TextInput::single().with_text(crate::fold::location::display(&request.destination));
+        let field = if request.kind == OpKind::ArchiveTest {
+            3
+        } else {
+            0
+        };
         Self {
             request,
             input,
             error: None,
+            field,
+            password: TextInput::single(),
         }
     }
     pub fn handle(&mut self, k: KeyEvent) -> Option<Request> {
+        if self.request.kind == OpKind::ArchiveTest {
+            if self.password.handle(k) == Edit::Submit {
+                let mut r = self.request.clone();
+                r.archive_options.password = Some(self.password.text().into());
+                return Some(r);
+            }
+            return None;
+        }
+        let compress = matches!(self.request.kind, OpKind::Compress(_));
+        if compress && matches!(k.code, KeyCode::Up | KeyCode::Down) {
+            self.field = if k.code == KeyCode::Up {
+                (self.field + 6) % 7
+            } else {
+                (self.field + 1) % 7
+            };
+            return None;
+        }
+        if compress && self.field > 0 && k.code != KeyCode::Enter && k.code != KeyCode::Tab {
+            if self.field == 3 {
+                self.password.handle(k);
+                return None;
+            }
+            if matches!(k.code, KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right) {
+                self.cycle_field();
+            }
+            return None;
+        }
         if k.code == KeyCode::Tab && matches!(self.request.kind, OpKind::Compress(_)) {
             let formats = [
                 ("zip", Format::Zip),
@@ -255,7 +353,11 @@ impl Destination {
             }
             let mut r = self.request.clone();
             let path = PathBuf::from(text);
-            r.destination = if path.is_absolute() {
+            r.destination = if crate::fold::location::is_archive(&r.destination)
+                && text == crate::fold::location::display(&r.destination)
+            {
+                r.destination.clone()
+            } else if path.is_absolute() {
                 path
             } else {
                 r.destination
@@ -272,13 +374,100 @@ impl Destination {
                     }
                 }
             }
+            if compress {
+                r.archive_options = self.request.archive_options.clone();
+                r.archive_options.password =
+                    (!self.password.text().is_empty()).then(|| self.password.text().to_string());
+                if (r.archive_options.password.is_some()
+                    || r.archive_options.volume_bytes.is_some())
+                    && !matches!(r.kind, OpKind::Compress(Format::Zip | Format::SevenZip))
+                {
+                    self.error = Some("Passwords and split volumes require ZIP or 7z".into());
+                    return None;
+                }
+            }
             return Some(r);
+        }
+        None
+    }
+    pub fn bounds(&self, area: Rect) -> Rect {
+        if matches!(self.request.kind, OpKind::Compress(_)) {
+            overlay::rect(area, (38, 82), 13, 3, Anchor::Centre)
+        } else {
+            Self::rect(area)
+        }
+    }
+    fn cycle_field(&mut self) {
+        use starfold_archive_protocol::Preset;
+        match self.field {
+            1 => {
+                let _ = self.handle(KeyEvent::new(
+                    KeyCode::Tab,
+                    starkit::crossterm::event::KeyModifiers::NONE,
+                ));
+            }
+            2 => {
+                self.request.archive_options.preset = match self.request.archive_options.preset {
+                    Preset::Store => Preset::Fast,
+                    Preset::Fast => Preset::Balanced,
+                    Preset::Balanced => Preset::Maximum,
+                    Preset::Maximum => Preset::Store,
+                }
+            }
+            4 => {
+                let sizes = [
+                    None,
+                    Some(100 * 1024 * 1024),
+                    Some(700 * 1024 * 1024),
+                    Some(2 * 1024 * 1024 * 1024),
+                    Some(4 * 1024 * 1024 * 1024),
+                ];
+                let index = sizes
+                    .iter()
+                    .position(|v| *v == self.request.archive_options.volume_bytes)
+                    .unwrap_or(0);
+                self.request.archive_options.volume_bytes = sizes[(index + 1) % sizes.len()];
+            }
+            5 => {
+                self.request.archive_options.exclude_mac_metadata =
+                    !self.request.archive_options.exclude_mac_metadata
+            }
+            _ => {}
+        }
+    }
+    pub fn click(&mut self, area: Rect, x: u16, y: u16) -> Option<Request> {
+        let r = self.bounds(area);
+        let row = y.saturating_sub(r.y + 1);
+        if x <= r.x || x >= r.right().saturating_sub(1) {
+            return None;
+        }
+        if matches!(self.request.kind, OpKind::Compress(_)) {
+            if let Some(index) = [0, 2, 3, 4, 5, 6, 8]
+                .iter()
+                .position(|offset| *offset == row)
+            {
+                self.field = index;
+                if index == 6 {
+                    return self.handle(KeyEvent::new(
+                        KeyCode::Enter,
+                        starkit::crossterm::event::KeyModifiers::NONE,
+                    ));
+                }
+                self.cycle_field();
+            }
+        } else if row == r.height.saturating_sub(3) {
+            return self.handle(KeyEvent::new(
+                KeyCode::Enter,
+                starkit::crossterm::event::KeyModifiers::NONE,
+            ));
         }
         None
     }
     pub fn footer(&self) -> &'static str {
         match self.request.kind {
-            OpKind::Compress(_) => "enter start · tab format · esc cancel",
+            OpKind::Compress(_) => {
+                "enter start · ↑/↓ field · space change · tab format · esc cancel"
+            }
             OpKind::Move => "enter move · esc cancel",
             OpKind::Copy => "enter copy · esc cancel",
             _ => "enter start · esc cancel",
@@ -288,10 +477,12 @@ impl Destination {
         overlay::rect(area, (24, 76), 6, 3, Anchor::Centre)
     }
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, t: &Theme) -> Option<(u16, u16)> {
-        let r = Self::rect(area);
+        let r = self.bounds(area);
         let title = match self.request.kind {
             OpKind::Compress(_) => "compress — destination archive",
             OpKind::Extract => "extract — destination folder",
+            OpKind::ArchiveTest => "archive password",
+            OpKind::ArchiveSave => "save archive as",
             OpKind::Copy => "copy — destination folder",
             _ => "move — destination folder",
         };
@@ -308,11 +499,73 @@ impl Destination {
         if inner.width == 0 || inner.height == 0 {
             return None;
         }
+        if self.request.kind == OpKind::ArchiveTest {
+            let text = "•".repeat(self.password.text().chars().count());
+            buf.set_string(
+                inner.x,
+                inner.y,
+                fit(&text, inner.width),
+                Style::default().fg(rgb(t.row_fg)),
+            );
+            return Some((
+                inner.x
+                    + text
+                        .chars()
+                        .count()
+                        .min(inner.width.saturating_sub(1) as usize) as u16,
+                inner.y,
+            ));
+        }
         let caret = self.input.render(
             Rect::new(inner.x, inner.y, inner.width, 1),
             buf,
             Style::default().fg(rgb(t.row_fg)),
         );
+        if matches!(self.request.kind, OpKind::Compress(_)) {
+            let o = &self.request.archive_options;
+            let format = Format::from_path(std::path::Path::new(self.input.text()));
+            let labels = [
+                format!("Format        {:?}", format.unwrap_or(Format::Zip)),
+                format!("Compression   {:?}", o.preset),
+                format!(
+                    "Password      {}",
+                    if self.password.text().is_empty() {
+                        "off".into()
+                    } else {
+                        "•".repeat(self.password.text().chars().count())
+                    }
+                ),
+                format!(
+                    "Split volumes {}",
+                    o.volume_bytes
+                        .map(crate::fold::format::size)
+                        .unwrap_or_else(|| "off".into())
+                ),
+                format!(
+                    "Mac metadata  {}",
+                    if o.exclude_mac_metadata {
+                        "exclude"
+                    } else {
+                        "include"
+                    }
+                ),
+                "[ Create archive ]".into(),
+            ];
+            for (i, (row, label)) in [2, 3, 4, 5, 6, 8].into_iter().zip(labels).enumerate() {
+                if row < inner.height {
+                    buf.set_string(
+                        inner.x,
+                        inner.y + row,
+                        fit(&label, inner.width),
+                        Style::default().fg(rgb(if self.field == i + 1 {
+                            t.accent
+                        } else {
+                            t.row_fg
+                        })),
+                    );
+                }
+            }
+        }
         if let Some(e) = &self.error {
             if inner.height > 1 {
                 buf.set_string(
@@ -323,7 +576,17 @@ impl Destination {
                 );
             }
         }
-        caret
+        if matches!(self.request.kind, OpKind::Compress(_)) && self.field == 3 {
+            Some((
+                inner.x
+                    + 14
+                    + (self.password.text().chars().count() as u16)
+                        .min(inner.width.saturating_sub(15)),
+                inner.y + 4,
+            ))
+        } else {
+            caret
+        }
     }
 }
 
@@ -359,6 +622,7 @@ mod tests {
     #[test]
     fn format_cycle_changes_suffix_and_queued_format() {
         let mut d = Destination::new(Request {
+            archive_options: Default::default(),
             kind: OpKind::Compress(Format::Zip),
             sources: vec!["a".into()],
             destination: "/tmp/a.zip".into(),

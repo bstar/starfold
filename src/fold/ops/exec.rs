@@ -47,7 +47,23 @@ pub fn run_with_names(
     progress: &Progress,
     rename_targets: &[(PathBuf, PathBuf)],
 ) -> Outcome {
+    if crate::fold::location::is_archive(&plan.dest)
+        || matches!(
+            kind,
+            OpKind::ArchiveSave | OpKind::ArchiveDiscard | OpKind::ArchiveTest
+        )
+        || plan
+            .sources
+            .iter()
+            .any(|s| crate::fold::location::is_archive(s))
+            && matches!(kind, OpKind::Rename | OpKind::Delete(_))
+    {
+        return crate::fold::archive::edit::run(kind, plan, policy, progress, rename_targets);
+    }
     match kind {
+        OpKind::ArchiveSave | OpKind::ArchiveDiscard | OpKind::ArchiveTest => {
+            unreachable!("handled above")
+        }
         OpKind::Copy | OpKind::Move => {
             run_copy_move(kind, plan, policy, options, progress, rename_targets)
         }
@@ -241,7 +257,23 @@ fn copy_file_staged_inner(
     progress: &Progress,
     mut after_chunk: impl FnMut(),
 ) -> Result<(), String> {
-    let error = |e: std::io::Error| format!("{}: {e}", from.display());
+    let error = |e: std::io::Error| format!("{}: {e}", crate::fold::location::display(from));
+    if crate::fold::location::is_archive(from) {
+        let parent = to
+            .parent()
+            .ok_or_else(|| "Destination has no parent".to_string())?;
+        let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(error)?;
+        crate::fold::archive::browser::copy_to(from, &mut staged, progress)
+            .map_err(|e| e.to_string())?;
+        if progress.is_cancelled() {
+            return Err("cancelled".into());
+        }
+        if fs::symlink_metadata(to).is_ok_and(|m| m.is_dir()) {
+            replace_existing(to)?;
+        }
+        staged.persist(to).map_err(|e| e.error.to_string())?;
+        return Ok(());
+    }
     let mut source = fs::File::open(from).map_err(error)?;
     let meta = source.metadata().map_err(error)?;
     let parent = to

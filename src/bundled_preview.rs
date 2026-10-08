@@ -1,9 +1,15 @@
 //! macOS standalone updates replace one executable. Carry matching compressed
 //! helpers there as a fallback; Nix and AppImage retain adjacent executables.
-#[cfg(any(bundled_previews, test))]
+#[cfg(any(bundled_previews, bundled_archive, test))]
 use std::path::Path;
 use std::path::PathBuf;
 pub fn executable(id: &str) -> anyhow::Result<Option<PathBuf>> {
+    #[cfg(bundled_archive)]
+    if id == "archive" {
+        let root = crate::PATHS.cache_dir()?.join("bundled-extensions");
+        return materialize(&root, id, include_bytes!(env!("STARFOLD_BUNDLE_ARCHIVE"))).map(Some);
+    }
+
     #[cfg(bundled_previews)]
     {
         let bytes: &[u8] = match id {
@@ -20,7 +26,7 @@ pub fn executable(id: &str) -> anyhow::Result<Option<PathBuf>> {
         Ok(None)
     }
 }
-#[cfg(any(bundled_previews, test))]
+#[cfg(any(bundled_previews, bundled_archive, test))]
 fn materialize(root: &Path, id: &str, compressed: &[u8]) -> anyhow::Result<PathBuf> {
     use sha2::{Digest, Sha256};
     use std::{
@@ -40,7 +46,11 @@ fn materialize(root: &Path, id: &str, compressed: &[u8]) -> anyhow::Result<PathB
     std::fs::create_dir_all(&directory)?;
     std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))?;
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
-    let path = directory.join(format!("starfold-preview-{id}"));
+    let path = directory.join(if id == "archive" {
+        "starfold-archive".into()
+    } else {
+        format!("starfold-preview-{id}")
+    });
     if std::fs::read(&path).ok().as_deref() == Some(&bytes) {
         return Ok(path);
     }

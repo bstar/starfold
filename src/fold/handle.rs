@@ -143,6 +143,16 @@ pub enum Command {
     MarkAll,
     InvertMarks,
     ClearMarks,
+    UnlockArchive {
+        location: PathBuf,
+        options: starfold_archive_protocol::Options,
+    },
+    QueueArchive {
+        format: super::archive::Format,
+        sources: Vec<PathBuf>,
+        destination: PathBuf,
+        options: starfold_archive_protocol::Options,
+    },
     QueueOperation {
         kind: super::ops::OpKind,
         sources: Vec<PathBuf>,

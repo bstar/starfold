@@ -36,10 +36,10 @@ jobs:
           components: rustfmt, clippy
       - name: Native media dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg p7zip-full unar
       - name: Native media dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg pkg-config llvm
+        run: brew install ffmpeg pkg-config llvm sevenzip unar
       - name: Locate libclang (macOS)
         if: runner.os == 'macOS'
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
@@ -55,6 +55,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings -A dead_code
       # Anything that needs a trash daemon running is gated behind
       # STARFOLD_TEST_TRASH.
+      - run: cargo build -p starfold-archive
       - run: cargo test --workspace --all-features
       - run: cargo test --workspace --no-default-features
 
@@ -70,10 +71,10 @@ jobs:
           components: clippy
       - name: Native media dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg p7zip-full unar
       - name: Native media dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg pkg-config llvm
+        run: brew install ffmpeg pkg-config llvm sevenzip unar
       - name: Locate libclang (macOS)
         if: runner.os == 'macOS'
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
@@ -81,6 +82,7 @@ jobs:
       # unrar_sys builds bundled C++; Ubuntu build-essential and the macOS
       # Xcode toolchain already provide the required compiler/runtime.
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings -A dead_code
+      - run: cargo build -p starfold-archive
       - run: cargo test --workspace --all-features
       - run: cargo test --workspace --no-default-features
 
@@ -105,10 +107,10 @@ jobs:
           toolchain: "1.92"
       - name: Native media dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg p7zip-full unar
       - name: Native media dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg pkg-config llvm
+        run: brew install ffmpeg pkg-config llvm sevenzip unar
       - name: Locate libclang (macOS)
         if: runner.os == 'macOS'
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
@@ -122,10 +124,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
       - name: Native media dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libasound2-dev ffmpeg p7zip-full unar
       - name: Native media dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg pkg-config llvm
+        run: brew install ffmpeg pkg-config llvm sevenzip unar
       - name: Locate libclang (macOS)
         if: runner.os == 'macOS'
         run: echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"

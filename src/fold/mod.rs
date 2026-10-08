@@ -32,6 +32,7 @@ pub mod filter;
 pub mod format;
 pub mod handle;
 pub mod listing;
+pub mod location;
 pub mod open;
 pub mod ops;
 pub mod places;
