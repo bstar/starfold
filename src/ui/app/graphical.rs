@@ -2963,7 +2963,7 @@ impl App {
             );
         }
         format!(
-            "SSH stream · Preview · {}p",
+            "SSH stream · Preview · up to {}p · H.264/AAC",
             match video.quality {
                 starkit::media::Quality::Low => 360,
                 starkit::media::Quality::Balanced => 480,
@@ -3780,15 +3780,15 @@ impl App {
         });
         if let Some(video) = state.video.as_ref() {
             let mut text = format!(
-                "{:02}:{:02} / {:02}:{:02} · {}% volume · {}×{} · {}",
+                "{:02}:{:02} / {:02}:{:02} · {}% volume · {} · source {}×{}",
                 position as u64 / 60,
                 position as u64 % 60,
                 poster.duration as u64 / 60,
                 poster.duration as u64 % 60,
                 video.volume,
+                Self::video_stream_label(video),
                 poster.width,
                 poster.height,
-                Self::video_stream_label(video)
             );
             if video.buffering && !video.finished {
                 text = format!(
