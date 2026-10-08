@@ -77,6 +77,73 @@ pub fn open(path: &Path, head: &[u8]) -> anyhow::Result<Box<dyn Session>> {
         .ok_or_else(|| anyhow::anyhow!("No provider for this file"))?
         .open(path)
 }
+/// Local movie tags remain useful before the decoder/player starts.
+#[cfg(feature = "media")]
+pub fn movie_details(path: &Path) -> Document {
+    let mut document = media::read(path).unwrap_or_else(|_| metadata(path));
+    document.kind = "Movie details".into();
+    if !document
+        .fields
+        .iter()
+        .any(|f| f.label.eq_ignore_ascii_case("title"))
+    {
+        document.field(
+            "Title",
+            path.file_stem().unwrap_or_default().to_string_lossy(),
+        );
+    }
+    let id = document
+        .fields
+        .iter()
+        .filter(|f| f.label.to_ascii_lowercase().contains("imdb"))
+        .find_map(|f| imdb_id(&f.value))
+        .or_else(|| imdb_id(&path.file_name().unwrap_or_default().to_string_lossy()));
+    if let Some(id) = id {
+        document.fields.retain(|f| {
+            !(f.label.to_ascii_lowercase().contains("imdb") && imdb_id(&f.value).is_some())
+        });
+        document.field("IMDb", format!("https://www.imdb.com/title/{id}/"));
+    }
+    // Keep identifying details visible even in a short preview pane; codec
+    // and individual track descriptions follow the movie information.
+    document
+        .fields
+        .sort_by_key(|field| match field.label.to_ascii_lowercase().as_str() {
+            "title" => 0,
+            "year" | "date_released" => 1,
+            "imdb" => 2,
+            "rating" | "imdb_rating" => 3,
+            "genre" => 4,
+            "director" => 5,
+            "plot" | "synopsis" | "summary" | "description" => 6,
+            "duration" => 7,
+            "dimensions" => 8,
+            _ => 9,
+        });
+    document.notice = Some("Enter to play in Preview".into());
+    document
+}
+#[cfg(feature = "media")]
+fn imdb_id(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    for (start, _) in value.match_indices("tt") {
+        if start > 0 && bytes[start - 1].is_ascii_alphanumeric() {
+            continue;
+        }
+        let digits = bytes[start + 2..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        if (7..=10).contains(&digits)
+            && bytes
+                .get(start + 2 + digits)
+                .is_none_or(|c| !c.is_ascii_alphanumeric())
+        {
+            return Some(value[start..start + 2 + digits].into());
+        }
+    }
+    None
+}
 pub fn metadata(path: &Path) -> Document {
     let mut d = Document::new("File metadata");
     d.field("Type", mime_guess::from_path(path).first_or_octet_stream());
@@ -115,5 +182,24 @@ pub fn build(path: &Path, head: &[u8], page: u32, cfg: &PreviewConfig) -> Option
             ));
             Some(base)
         }
+    }
+}
+
+#[cfg(all(test, feature = "media"))]
+mod movie_tests {
+    use super::*;
+    #[test]
+    fn imdb_links_accept_ids_and_urls_without_guessing_movie_titles() {
+        assert_eq!(imdb_id("tt0089839").as_deref(), Some("tt0089839"));
+        assert_eq!(
+            imdb_id("https://www.imdb.com/title/tt0089839/").as_deref(),
+            Some("tt0089839")
+        );
+        assert_eq!(
+            imdb_id("Movie (1985) [imdb-tt0089839].mkv").as_deref(),
+            Some("tt0089839")
+        );
+        assert!(imdb_id("Movie (1985) {tmdb-17824}.mkv").is_none());
+        assert!(imdb_id("tt123 tt123456789012 xtt0089839 tt0089839x").is_none());
     }
 }

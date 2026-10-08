@@ -616,7 +616,11 @@ impl App {
     }
 
     fn graphical_image(&mut self, scene: &mut Scene, regions: &Regions) {
-        if self.editor.is_some() || self.audio_here() || !self.layout.preview_open {
+        if self.editor.is_some()
+            || self.audio_here()
+            || !self.layout.preview_open
+            || self.movie_details_preview().is_some()
+        {
             return;
         }
         let source = match self.view.preview.as_deref() {
@@ -2467,6 +2471,16 @@ impl App {
         }
         self.repaint = true;
     }
+    pub(super) fn movie_details_preview(&self) -> Option<Preview> {
+        let state = self.graphical.as_ref()?;
+        if state.video.is_some() || state.video_pending.is_some() {
+            return None;
+        }
+        match self.view.preview.as_deref()? {
+            Preview::Video { metadata, .. } => Some(Preview::Document((**metadata).clone())),
+            _ => None,
+        }
+    }
     fn pending_movie_error(&self, pending: &Path) -> Option<String> {
         if let Some(Preview::Error(error)) = self.view.preview.as_deref() {
             return Some(error.clone());
@@ -2517,6 +2531,7 @@ impl App {
             return Some("Loading movie…");
         }
         if state.image.is_none()
+            && state.video_pending.is_some()
             && matches!(self.view.preview.as_deref(), Some(Preview::Video { .. }))
         {
             return Some("Preparing preview…");
@@ -3646,6 +3661,9 @@ impl App {
     }
 
     fn video_scene(&mut self, scene: &mut Scene, regions: &Regions) {
+        if self.movie_details_preview().is_some() {
+            return;
+        }
         if self.video_words().is_none() {
             return;
         }
@@ -3980,6 +3998,9 @@ mod tests {
         let path = fake.home().join("movie.mkv");
         app.view.cursor_path = Some(path.clone());
         app.view.preview = Some(Arc::new(Preview::Video {
+            metadata: std::sync::Arc::new(crate::fold::preview::model::Document::new(
+                "Movie details",
+            )),
             extension: None,
             path: path.clone(),
             poster: starkit::media::Poster {
@@ -4146,6 +4167,9 @@ mod tests {
         state.video_player = true;
         state.local_media = true;
         app.view.preview = Some(Arc::new(Preview::Video {
+            metadata: std::sync::Arc::new(crate::fold::preview::model::Document::new(
+                "Movie details",
+            )),
             extension: None,
             path: fake.home().join("movie.mkv"),
             poster: starkit::media::Poster {
@@ -4220,6 +4244,9 @@ mod tests {
         app.graphical.as_mut().unwrap().video_capable = true;
         app.graphical.as_mut().unwrap().original_media = true;
         app.view.preview = Some(Arc::new(Preview::Video {
+            metadata: std::sync::Arc::new(crate::fold::preview::model::Document::new(
+                "Movie details",
+            )),
             extension: None,
             path: fake.home().join("original.mkv"),
             poster: starkit::media::Poster {
@@ -4340,6 +4367,9 @@ mod tests {
             Some(&path)
         );
         app.view.preview = Some(Arc::new(Preview::Video {
+            metadata: std::sync::Arc::new(crate::fold::preview::model::Document::new(
+                "Movie details",
+            )),
             extension: None,
             path: path.clone(),
             poster: starkit::media::Poster {
@@ -4383,6 +4413,9 @@ mod tests {
         state.pixel_layout = true;
         app.layout.preview_open = true;
         app.view.preview = Some(Arc::new(Preview::Video {
+            metadata: std::sync::Arc::new(crate::fold::preview::model::Document::new(
+                "Movie details",
+            )),
             extension: None,
             path: fake.home().join("movie.mp4"),
             poster: starkit::media::Poster {
@@ -5206,6 +5239,65 @@ mod tests {
     }
 
     #[test]
+    fn movie_details_are_replaced_by_playback_without_changing_preview_height() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        fake.pump();
+        app.refresh();
+        app.enable_graphical();
+        let state = app.graphical.as_mut().unwrap();
+        state.cell_mode = true;
+        state.video_capable = true;
+        let path = fake.home().join("movie.mkv");
+        let mut metadata = crate::fold::preview::model::Document::new("Movie details");
+        metadata.field("Title", "Private Resort (1985)");
+        metadata.field("IMDb", "https://www.imdb.com/title/tt0089839/");
+        metadata.notice = Some("Enter to play in Preview".into());
+        app.view.cursor_path = Some(path.clone());
+        app.view.preview = Some(Arc::new(Preview::Video {
+            metadata: Arc::new(metadata),
+            path: path.clone(),
+            extension: None,
+            poster: starkit::media::Poster {
+                pixels: Arc::new(RgbaImage::new(32, 24)),
+                duration: 60.,
+                width: 1920,
+                height: 1080,
+                audio: true,
+            },
+        }));
+        app.layout.preview_open = true;
+        let scene = Controller::scene(&mut app, Viewport::default());
+        assert!(scene
+            .spans
+            .iter()
+            .any(|s| s.text.contains("imdb.com/title/tt0089839")));
+        assert!(!scene
+            .components
+            .iter()
+            .any(|c| matches!(c, Component::Image { .. })));
+        assert_eq!(app.movie_loading_stage(), None);
+        let height = app.layout.native_preview_rows;
+        app.activate_video_entry(path);
+        app.tick_video();
+        assert!(app.movie_details_preview().is_none());
+        assert!(app.graphical.as_ref().unwrap().video.is_some());
+        let scene = Controller::scene(&mut app, Viewport::default());
+        assert!(scene
+            .components
+            .iter()
+            .any(|c| matches!(c, Component::Image { .. })));
+        assert_eq!(app.layout.native_preview_rows, height);
+    }
+
+    #[test]
     fn movie_loading_stops_on_extension_failure_and_can_be_retried() {
         let cfg = Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
@@ -5277,6 +5369,9 @@ mod tests {
             .collect::<String>()
             .contains("Loading movie…"));
         app.view.preview = Some(Arc::new(Preview::Video {
+            metadata: std::sync::Arc::new(crate::fold::preview::model::Document::new(
+                "Movie details",
+            )),
             extension: None,
             path: path.clone(),
             poster: starkit::media::Poster {
@@ -5287,7 +5382,7 @@ mod tests {
                 audio: true,
             },
         }));
-        assert_eq!(app.movie_loading_stage(), Some("Preparing preview…"));
+        assert_eq!(app.movie_loading_stage(), None);
         app.graphical.as_mut().unwrap().video = Some(starkit::terminal_graphics::media::Host::new(
             path,
             "video-test".into(),
@@ -5332,6 +5427,9 @@ mod tests {
         app.enable_graphical();
         app.graphical.as_mut().unwrap().cell_mode = true;
         app.view.preview = Some(Arc::new(Preview::Video {
+            metadata: std::sync::Arc::new(crate::fold::preview::model::Document::new(
+                "Movie details",
+            )),
             extension: None,
             path: fake.home().join("movie.mkv"),
             poster: starkit::media::Poster {

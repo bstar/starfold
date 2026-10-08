@@ -556,6 +556,7 @@ impl Session {
         if let Some(media) = p.media {
             let pixels = image.ok_or_else(|| anyhow::anyhow!("Video extension omitted poster"))?;
             return Ok(Preview::Video {
+                metadata: std::sync::Arc::new(crate::fold::preview::providers::movie_details(path)),
                 path: path.to_owned(),
                 poster: starkit::media::Poster {
                     pixels,

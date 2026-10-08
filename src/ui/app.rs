@@ -3598,12 +3598,16 @@ impl App {
             self.draw_audio(regions.rect_of(ModuleId::Preview), buf);
             None
         } else {
+            #[cfg(feature = "terminal-graphics")]
+            let movie_details = self.movie_details_preview();
+            #[cfg(not(feature = "terminal-graphics"))]
+            let movie_details: Option<Preview> = None;
             let mut pv = panels::preview::View {
                 theme: &self.theme,
                 focused: focus == ModuleId::Preview,
                 folded: !self.layout.is_open(ModuleId::Preview),
                 name: self.view.preview_name.as_deref(),
-                preview: self.view.preview.as_deref(),
+                preview: movie_details.as_ref().or(self.view.preview.as_deref()),
                 scroll: self.preview_scroll,
                 pixel_image: {
                     #[cfg(feature = "terminal-graphics")]

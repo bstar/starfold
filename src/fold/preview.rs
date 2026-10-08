@@ -46,6 +46,7 @@ pub enum Preview {
     Video {
         path: PathBuf,
         poster: starkit::media::Poster,
+        metadata: Arc<model::Document>,
         extension: Option<extensions::Info>,
     },
     Image {
@@ -181,6 +182,7 @@ fn build_file(path: &Path, full_len: u64, cfg: &PreviewConfig, cancel: &AtomicBo
     if super::file_type::classify(path, &head) == super::file_type::FileType::Video {
         return match starkit::media::poster(path, Arc::new(AtomicBool::new(false))) {
             Ok(poster) => Preview::Video {
+                metadata: Arc::new(providers::movie_details(path)),
                 path: path.to_owned(),
                 poster,
                 extension: None,

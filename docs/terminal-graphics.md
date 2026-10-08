@@ -337,14 +337,14 @@ controls retain separate click targets; tabs have no bottom underline.
 
 Preview shows an animated loading indicator while opening a movie and starting playback. Buffering is shown beside the timeline until playback resumes. These states appear in both graphical and cell modes; cell-mode letterboxing matches the surrounding preview pane.
 
-Select a video to get a bounded poster frame and metadata. Press **Enter** on
+Select a video to see its local movie details, including embedded IMDb tags and an IMDb title link when an ID is available. Details work offline; ratings and synopsis appear only when present in the file tags. Press **Enter** on
 the file or click **Play** in the Preview header to start playback. Audio starts at 80%. Header controls
 show the volume percentage and provide Play/Pause, mute, volume, Expand/Restore
 and Close. Muting restores the previous volume when toggled again. Click the full
 width timeline to seek. Dragging pauses playback and previews the target time;
 release seeks once and restores the previous play/pause state. The graphical transport row reuses STAR/AMP's native
 play, pause, stop, backward/forward buttons and volume slider. Backward/forward
-seek five seconds; Stop returns to the poster. The matching AMP helper supplies
+seek five seconds; Stop returns to the movie details. The matching AMP helper supplies
 the artwork, layout and hit testing without opening another audio player.
 Focusing Preview keeps its height unchanged; only Expand
 or dragging the divider changes it.
