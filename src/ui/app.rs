@@ -3608,9 +3608,10 @@ impl App {
                 pixel_image: {
                     #[cfg(feature = "terminal-graphics")]
                     {
-                        self.graphical
-                            .as_ref()
-                            .is_some_and(|state| !state.cell_mode)
+                        // Both frontend modes own image presentation. Painting
+                        // half-block posters here leaves a differently fitted
+                        // second picture underneath the client's live video.
+                        self.graphical.is_some()
                     }
                     #[cfg(not(feature = "terminal-graphics"))]
                     {

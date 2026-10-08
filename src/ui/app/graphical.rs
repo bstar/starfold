@@ -5104,6 +5104,57 @@ mod tests {
     }
 
     #[test]
+    fn cell_movie_scene_does_not_bake_a_second_poster_into_its_spans() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        fake.pump();
+        app.refresh();
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().cell_mode = true;
+        app.view.preview = Some(Arc::new(Preview::Video {
+            extension: None,
+            path: fake.home().join("movie.mkv"),
+            poster: starkit::media::Poster {
+                pixels: Arc::new(RgbaImage::from_pixel(
+                    32,
+                    24,
+                    starkit::image::Rgba([255, 0, 255, 255]),
+                )),
+                duration: 60.,
+                width: 1920,
+                height: 1080,
+                audio: true,
+            },
+        }));
+        app.layout.preview_open = true;
+        let viewport = Viewport {
+            columns: 100,
+            rows: 40,
+            width: 1000,
+            height: 800,
+            ..Viewport::default()
+        };
+        let scene = Controller::scene(&mut app, viewport);
+        let rect = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Preview);
+        assert!(rect.height > 4);
+        assert!(
+            !scene
+                .spans
+                .iter()
+                .any(|span| rect.contains((span.x, span.y).into())
+                    && span.text.chars().any(|c| matches!(c, '▀' | '▄'))),
+            "Cell preview painted a half-block poster behind the frontend image"
+        );
+    }
+
+    #[test]
     fn movie_letterbox_has_equal_gaps_above_and_below() {
         use starkit::native_surface::PixelRect;
         use starkit::terminal_graphics::placement::{PanelPadding, Placement};
