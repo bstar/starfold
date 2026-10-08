@@ -12,7 +12,7 @@ use starkit::terminal_graphics::{
 
 #[derive(Parser)]
 #[command(
-    name = "starfold-graphical",
+    name = "starfold",
     version,
     about = "STAR/FOLD — graphical and cell interfaces"
 )]
