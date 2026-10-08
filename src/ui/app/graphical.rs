@@ -616,14 +616,12 @@ impl App {
     }
 
     fn graphical_image(&mut self, scene: &mut Scene, regions: &Regions) {
-        if self.editor.is_some()
-            || self.audio_here()
-            || !self.layout.preview_open
-            || self.movie_details_preview().is_some()
-        {
+        if self.editor.is_some() || self.audio_here() || !self.layout.preview_open {
             return;
         }
-        let source = match self.view.preview.as_deref() {
+        let details = self.movie_details_preview();
+        let showing_details = details.is_some();
+        let source = match details.as_ref().or(self.view.preview.as_deref()) {
             Some(Preview::Video { poster, .. }) => Some(Arc::clone(&poster.pixels)),
             Some(Preview::Image { data, .. }) => Some(Arc::clone(data)),
             Some(Preview::Document(d)) => d.image.clone(),
@@ -686,7 +684,9 @@ impl App {
         }
         if let Some((id, png)) = &state.image {
             let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
-            if matches!(self.view.preview.as_deref(), Some(Preview::Video { .. })) {
+            if showing_details {
+                rect = panels::preview::movie_card_rects(rect).0;
+            } else if matches!(self.view.preview.as_deref(), Some(Preview::Video { .. })) {
                 rect = movie_body;
             }
             scene.components.push(Component::Image {
@@ -694,7 +694,11 @@ impl App {
                 id: id.clone(),
                 png: Some(png.clone()),
                 zoom: state.image_zoom.unwrap_or(100),
-                scale: match self.cfg.preview.image_scale {
+                scale: match if showing_details {
+                    crate::config::Scale::Smooth
+                } else {
+                    self.cfg.preview.image_scale
+                } {
                     crate::config::Scale::One => {
                         starkit::terminal_graphics::protocol::ImageScale::One
                     }

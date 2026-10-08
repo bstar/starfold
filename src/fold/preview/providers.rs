@@ -1,5 +1,7 @@
 //! Provider registry. Format-specific APIs stop at this boundary.
 mod media;
+#[cfg(feature = "media")]
+mod movie;
 #[cfg(test)]
 mod pdf;
 use super::{
@@ -98,12 +100,13 @@ pub fn movie_details(path: &Path) -> Document {
         .filter(|f| f.label.to_ascii_lowercase().contains("imdb"))
         .find_map(|f| imdb_id(&f.value))
         .or_else(|| imdb_id(&path.file_name().unwrap_or_default().to_string_lossy()));
-    if let Some(id) = id {
+    if let Some(id) = &id {
         document.fields.retain(|f| {
             !(f.label.to_ascii_lowercase().contains("imdb") && imdb_id(&f.value).is_some())
         });
         document.field("IMDb", format!("https://www.imdb.com/title/{id}/"));
     }
+    movie::enrich(&mut document, path, id.as_deref());
     // Keep identifying details visible even in a short preview pane; codec
     // and individual track descriptions follow the movie information.
     document
@@ -113,7 +116,7 @@ pub fn movie_details(path: &Path) -> Document {
             "year" | "date_released" => 1,
             "imdb" => 2,
             "rating" | "imdb_rating" => 3,
-            "genre" => 4,
+            "cast" | "genre" => 4,
             "director" => 5,
             "plot" | "synopsis" | "summary" | "description" => 6,
             "duration" => 7,
@@ -188,6 +191,27 @@ pub fn build(path: &Path, head: &[u8], page: u32, cfg: &PreviewConfig) -> Option
 #[cfg(all(test, feature = "media"))]
 mod movie_tests {
     use super::*;
+    #[test]
+    fn live_movie_lookup_returns_details_and_a_bounded_poster() {
+        let Some(path) = std::env::var_os("STARFOLD_IMDB_TEST") else {
+            return;
+        };
+        let document = movie_details(Path::new(&path));
+        assert!(document
+            .fields
+            .iter()
+            .any(|f| f.label == "IMDb" && f.value.ends_with("/tt1403865/")));
+        assert!(document
+            .fields
+            .iter()
+            .any(|f| f.label == "Title" && f.value == "True Grit"));
+        assert!(document
+            .fields
+            .iter()
+            .any(|f| f.label == "Year" && f.value == "2010"));
+        let poster = document.image.unwrap();
+        assert!(poster.width() <= 2048 && poster.height() <= 2048);
+    }
     #[test]
     fn imdb_links_accept_ids_and_urls_without_guessing_movie_titles() {
         assert_eq!(imdb_id("tt0089839").as_deref(), Some("tt0089839"));

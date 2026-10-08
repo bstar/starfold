@@ -337,7 +337,7 @@ controls retain separate click targets; tabs have no bottom underline.
 
 Preview shows an animated loading indicator while opening a movie and starting playback. Buffering is shown beside the timeline until playback resumes. These states appear in both graphical and cell modes; cell-mode letterboxing matches the surrounding preview pane.
 
-Select a video to see its local movie details, including embedded IMDb tags and an IMDb title link when an ID is available. Details work offline; ratings and synopsis appear only when present in the file tags. Press **Enter** on
+Select a video to see movie details. IMDb title lookup uses an embedded ID or an exact title and release year from the filename, displaying the poster, title, year, cast and IMDb link. Ambiguous remakes retain local metadata. Results and posters are cached for offline use; unavailable lookup leaves playback working. Set `STARFOLD_MOVIE_LOOKUP=off` to use only local tags. Ratings and synopsis appear when embedded in the file. Press **Enter** on
 the file or click **Play** in the Preview header to start playback. Audio starts at 80%. Header controls
 show the volume percentage and provide Play/Pause, mute, volume, Expand/Restore
 and Close. Muting restores the previous volume when toggled again. Click the full

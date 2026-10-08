@@ -1849,14 +1849,21 @@ impl App {
             }
         }
 
-        if let Some(preview) = self
-            .view
-            .preview
+        #[cfg(feature = "terminal-graphics")]
+        let movie_details = self.movie_details_preview();
+        #[cfg(not(feature = "terminal-graphics"))]
+        let movie_details: Option<Preview> = None;
+        if let Some(preview) = movie_details
             .as_ref()
+            .or(self.view.preview.as_deref())
             .filter(|_| self.pending_preview_page.is_none())
         {
             let preview_rect = regions.rect_of(ModuleId::Preview);
-            let body = panels::preview::content_rect(preview_rect);
+            let mut body = panels::preview::content_rect(preview_rect);
+            if matches!(preview, Preview::Document(d) if d.kind == "Movie details" && d.image.is_some())
+            {
+                body = panels::preview::movie_card_rects(body).1;
+            }
             let total = panels::preview::lines(preview, body.width).len();
             let max = total.saturating_sub(usize::from(body.height));
             self.preview_scroll = self.preview_scroll.min(max);

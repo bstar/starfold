@@ -366,6 +366,42 @@ pub fn render(
                 return None;
             }
             if let Some(image) = &d.image {
+                if d.kind == "Movie details" {
+                    draw_meta(body, buf, v.theme, "IMDb · Movie details");
+                    let (poster, details) = movie_card_rects(below_meta(body));
+                    let placement = render_image(
+                        poster,
+                        buf,
+                        v,
+                        image,
+                        image.width(),
+                        image.height(),
+                        "Poster",
+                    );
+                    for (i, line) in lines(preview, details.width)
+                        .iter()
+                        .skip(v.scroll)
+                        .take(usize::from(details.height))
+                        .enumerate()
+                    {
+                        buf.set_string(
+                            details.x,
+                            details.y + i as u16,
+                            line,
+                            Style::default().fg(rgb(v.theme.row_fg)),
+                        );
+                    }
+                    render_scrollbar(
+                        area,
+                        details,
+                        buf,
+                        v.theme,
+                        v.scroll,
+                        lines(preview, details.width).len(),
+                        bars,
+                    );
+                    return placement;
+                }
                 let label = d
                     .fields
                     .iter()
@@ -548,6 +584,20 @@ pub fn lines(preview: &Preview, width: u16) -> Vec<String> {
         )],
         Preview::Empty | Preview::Image { .. } | Preview::Animation(_) => Vec::new(),
     }
+}
+
+/// Shared cell geometry for the movie poster and text in both frontends.
+pub fn movie_card_rects(content: Rect) -> (Rect, Rect) {
+    let width = (content.width / 4).min(32);
+    let gap = 3.min(content.width.saturating_sub(width));
+    (
+        Rect { width, ..content },
+        Rect {
+            x: content.x + width + gap,
+            width: content.width.saturating_sub(width + gap),
+            ..content
+        },
+    )
 }
 
 pub fn content_rect(area: Rect) -> Rect {
@@ -1344,5 +1394,22 @@ mod tests {
             .map(|(x, y)| buf[(x, y)].symbol().to_string())
             .collect();
         assert!(text.contains('\u{2580}'), "{text:?}");
+    }
+}
+
+#[cfg(test)]
+mod movie_card_tests {
+    use super::*;
+    #[test]
+    fn poster_and_details_have_separate_bounded_regions() {
+        for width in [60, 100, 200, 356] {
+            let content = Rect::new(3, 7, width, 18);
+            let (poster, details) = movie_card_rects(content);
+            assert_eq!(poster.x, content.x);
+            assert!(poster.right() < details.x);
+            assert_eq!(details.right(), content.right());
+            assert_eq!(details.height, poster.height);
+            assert!(poster.width <= 32 && details.width > poster.width);
+        }
     }
 }
