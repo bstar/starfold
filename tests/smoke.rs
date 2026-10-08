@@ -107,6 +107,11 @@ fn ssh_shell_uses_video_proxy_while_local_frontend_retains_original() {
         let capabilities: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(capabilities["original_media"], marker.is_none());
         assert_eq!(
+            capabilities["audio_relay"],
+            marker.is_none(),
+            "An unbridged SSH shell must not advertise the terminal's speakers"
+        );
+        assert_eq!(
             capabilities["video"], true,
             "SSH must retain the optimized proxy"
         );

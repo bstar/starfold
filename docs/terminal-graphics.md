@@ -150,6 +150,14 @@ Embedded and external subtitles currently require Preview mode. Turn subtitles
 off before returning to Original; automatic forced subtitles are not rendered
 in Original mode.
 
+Movie audio plays on the machine running the frontend. For Mac speakers,
+launch `starfold --ssh user@host` from a **local Mac shell**, or install the
+Kitty bridge below. Running that command after logging into Linux still runs
+the frontend and sound on Linux. A plain SSH TTY does not relay sound to Kitty.
+For movies, **a** opens the audio-track picker (choose Auto or a track; Off
+mutes the stream). **m** toggles mute. The host/local **a** toggle belongs to
+music preview, not movie playback.
+
 ### Launch after an ordinary SSH login
 
 With the experimental STAR/KIT Kitty integration installed on the **client

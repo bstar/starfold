@@ -11,7 +11,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rmpv = "1"
 crossbeam-channel = "0.5"
-starkit = { git = "https://github.com/bstar/starkit", rev = "d52f100f1e787466a99329f6b3eac5908b571d70", version = "0.3", default-features = false }
+starkit = { git = "https://github.com/bstar/starkit", rev = "04ab644a8de2313622dedcc3fe903f8c727d9dfe", version = "0.3", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
