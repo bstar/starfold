@@ -389,6 +389,14 @@ impl Session {
         cfg: &PreviewConfig,
         stale: &dyn Fn() -> bool,
     ) -> anyhow::Result<Packet> {
+        // Opening a movie may probe a cold removable drive and initialize a
+        // hardware decoder. This runs in the preview worker, not the UI loop.
+        let timeout = if self.provider == "video" && matches!(message, wire::Request::Open { .. }) {
+            cfg.timeout_ms.max(15_000)
+        } else {
+            cfg.timeout_ms
+        };
+        let deadline = Instant::now() + Duration::from_millis(timeout);
         self.sequence = self.sequence.wrapping_add(1);
         self.input
             .as_ref()
@@ -400,7 +408,6 @@ impl Session {
                 message,
             })
             .map_err(|_| anyhow::anyhow!("Preview request queue unavailable"))?;
-        let deadline = Instant::now() + Duration::from_millis(cfg.timeout_ms);
         loop {
             anyhow::ensure!(!stale(), "Preview cancelled");
             anyhow::ensure!(Instant::now() < deadline, "Preview timed out");

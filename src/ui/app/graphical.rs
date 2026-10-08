@@ -2467,6 +2467,25 @@ impl App {
         }
         self.repaint = true;
     }
+    fn pending_movie_error(&self, pending: &Path) -> Option<String> {
+        if let Some(Preview::Error(error)) = self.view.preview.as_deref() {
+            return Some(error.clone());
+        }
+        let state = self.core.state();
+        let (path, preview) = state.preview.as_ref()?;
+        if path != pending {
+            return None;
+        }
+        match preview.as_ref() {
+            Preview::Error(error) => Some(error.clone()),
+            Preview::Document(document) if document.kind != "Loading preview…" => {
+                Some(document.notice.clone().unwrap_or_else(|| {
+                    "Movie preview could not start; try opening it again".into()
+                }))
+            }
+            _ => None,
+        }
+    }
     fn movie_loading_stage(&self) -> Option<&'static str> {
         if !self.layout.preview_open {
             return None;
@@ -2479,7 +2498,12 @@ impl App {
                 "Starting playback…"
             });
         }
-        if matches!(self.view.preview.as_deref(), Some(Preview::Error(_))) {
+        if matches!(self.view.preview.as_deref(), Some(Preview::Error(_)))
+            || state
+                .video_pending
+                .as_ref()
+                .is_some_and(|path| self.pending_movie_error(path).is_some())
+        {
             return None;
         }
         if state.video_pending.is_some()
@@ -2727,9 +2751,12 @@ impl App {
                     self.graphical.as_mut().unwrap().direct_fullscreen = false;
                     self.toggle_video_fullscreen(true);
                 }
-            } else if matches!(self.view.preview.as_deref(), Some(Preview::Error(_))) {
+            } else if let Some(error) = self.pending_movie_error(&pending) {
                 self.graphical.as_mut().unwrap().video_pending = None;
+                self.graphical.as_mut().unwrap().direct_play = None;
                 self.resume_video = None;
+                self.note = Some((error, NoteLevel::Error, Instant::now()));
+                self.repaint = true;
             }
         }
         let path = match self.view.preview.as_deref() {
@@ -5176,6 +5203,48 @@ mod tests {
             .nodes
             .iter()
             .any(|n| matches!(n, Primitive::Text { text, .. } if text == "three")));
+    }
+
+    #[test]
+    fn movie_loading_stops_on_extension_failure_and_can_be_retried() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().video_capable = true;
+        let path = fake.home().join("movie.mkv");
+        let mut loading = crate::fold::preview::model::Document::new("Loading preview…");
+        loading.notice = Some("Loading…".into());
+        fake.state_mut().preview = Some((path.clone(), Arc::new(Preview::Document(loading))));
+        app.view.cursor_path = Some(path.clone());
+        app.activate_video_entry(path.clone());
+        assert_eq!(app.movie_loading_stage(), Some("Loading movie…"));
+        app.tick_video();
+        assert!(app.graphical.as_ref().unwrap().video_pending.is_some());
+        assert!(app.note.is_none());
+        let mut document = crate::fold::preview::model::Document::new("Video");
+        document.notice = Some("Preview extension unavailable: Preview timed out".into());
+        let preview = Arc::new(Preview::Document(document));
+        fake.state_mut().preview = Some((path.clone(), preview.clone()));
+        app.view.cursor_path = Some(path.clone());
+        app.view.preview = Some(preview);
+        app.activate_video_entry(path.clone());
+        assert_eq!(app.movie_loading_stage(), None);
+        app.tick_video();
+        assert!(app.graphical.as_ref().unwrap().video_pending.is_none());
+        assert!(app.note.as_ref().unwrap().0.contains("Preview timed out"));
+        assert!(app.graphical.as_ref().unwrap().video.is_none());
+        fake.state_mut().preview = None;
+        app.view.preview = None;
+        app.activate_video_entry(path);
+        assert_eq!(app.movie_loading_stage(), Some("Loading movie…"));
+        assert!(app.graphical.as_ref().unwrap().video_pending.is_some());
     }
 
     #[test]

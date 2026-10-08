@@ -302,6 +302,7 @@ impl Connection {
             input,
         } = request;
         self.parser = None;
+        let provider_id = provider.id.clone();
         let was_interactive = self
             .extension
             .as_ref()
@@ -363,6 +364,7 @@ impl Connection {
                 Some(preview)
             }
             Err(e) => {
+                tracing::warn!(path = %path.display(), provider = %provider_id, error = %e, "Preview extension failed");
                 self.extension = None;
                 let mut d = providers::metadata(path);
                 d.notice = Some(super::model::clean(
