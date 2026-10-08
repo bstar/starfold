@@ -473,3 +473,11 @@ is a session preference, independent of player artwork settings.
 device and optionally the FOLD controller with a simulated remote frontend.
 Physical macOS Kitty audio over the user's SSH connection still needs a
 listening check; generated PCM and headless controller tests do not prove it.
+
+### Video capability locality
+
+Original streaming is negotiated only by a frontend outside an SSH shell.
+`SSH_CONNECTION`/`SSH_TTY` identify the unbridged remote renderer: it must retain
+the bounded video proxy instead of decoding 4K into raw frames over the TTY.
+A local `--ssh` client and registered Kitty bridge remain original-capable.
+`tests/smoke.rs` checks both capability reports without opening a user session.

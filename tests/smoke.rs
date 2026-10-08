@@ -85,3 +85,34 @@ fn version_reports_the_crates_own_version() {
         "expected the crate version in: {stdout}"
     );
 }
+
+#[cfg(feature = "terminal-graphics")]
+#[test]
+fn ssh_shell_uses_video_proxy_while_local_frontend_retains_original() {
+    let home = tempfile::tempdir().unwrap();
+    for marker in [None, Some("SSH_CONNECTION"), Some("SSH_TTY")] {
+        let mut cmd = command(home.path());
+        cmd.arg("--capabilities")
+            .env_remove("SSH_CONNECTION")
+            .env_remove("SSH_TTY");
+        if let Some(marker) = marker {
+            cmd.env(marker, "test-ssh-session");
+        }
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let capabilities: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(capabilities["original_media"], marker.is_none());
+        assert_eq!(
+            capabilities["video"], true,
+            "SSH must retain the optimized proxy"
+        );
+        assert_eq!(
+            capabilities["video_player"], true,
+            "SSH must retain playback controls"
+        );
+    }
+}

@@ -7,7 +7,7 @@ license = "MIT"
 [dependencies]
 starfold-preview-protocol = { version = "0.1", path = "../protocol" }
 anyhow = "1"
-starkit = { git = "https://github.com/bstar/starkit", rev = "6f49cd51f4d284bfad0180a1831e61ebedd03fb5", version = "0.3", default-features = false, features = ["media"] }
+starkit = { git = "https://github.com/bstar/starkit", rev = "d52f100f1e787466a99329f6b3eac5908b571d70", version = "0.3", default-features = false, features = ["media"] }
 
 [dev-dependencies]
 tempfile = "3"

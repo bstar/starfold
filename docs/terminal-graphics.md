@@ -122,7 +122,11 @@ SSH host without the local Kitty integration sends audio to that host instead.
 
 ### Remote movie quality
 
-Current graphical clients negotiate original-file streaming. With Preview focused,
+Graphical frontends running on the terminal computer negotiate original-file
+streaming. A frontend rendering directly inside an unbridged SSH shell uses the
+bounded preview proxy, avoiding full-resolution RGBA frames over the SSH TTY.
+Launching locally with `starfold --ssh HOST`, or using the registered local Kitty
+frontend, retains original-file playback. With Preview focused,
 press **O** or click **mode** to cycle **Auto → Original → Preview**. Auto starts
 with Original and falls back to Preview if opening or decoding fails. Original
 keeps the source quality and buffers instead of reducing resolution when the
