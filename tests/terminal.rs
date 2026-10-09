@@ -929,6 +929,10 @@ fn osc72_commander_drag_between_panes() {
 fn workspace_child(config: &std::path::Path, dir: Option<&std::path::Path>) -> Running {
     let (master, slave) = pty();
     let mut command = Command::new(env!("CARGO_BIN_EXE_starfold"));
+    // Restart a named workspace deliberately. Ordinary launches now get
+    // independent session files and must not share the former local.toml.
+    #[cfg(feature = "terminal-graphics")]
+    command.args(["--session", "tabs-fixture"]);
     if let Some(dir) = dir {
         command.arg(dir);
     }
@@ -1029,7 +1033,7 @@ fn workspace_tabs_shortcuts_restart_and_cli_override() {
     collect_for(&mut child, Duration::from_millis(100));
     quit_workspace(&mut child);
     let path = if cfg!(feature = "terminal-graphics") {
-        config.join("graphical/local.toml")
+        config.join("graphical/tabs-fixture.toml")
     } else {
         config.join("session.toml")
     };
