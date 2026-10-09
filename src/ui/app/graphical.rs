@@ -13,6 +13,7 @@ pub(super) struct State {
     pub(super) presentation_switch: bool,
     pub(super) animated_images: bool,
     pub(super) surface_mode: bool,
+    pub(super) skin_mode: bool,
     padded_chrome: bool,
     pub(super) pixel_layout: bool,
     pub(super) base_buffer: Option<Buffer>,
@@ -1078,6 +1079,7 @@ impl Controller for App {
         self.graphical.as_mut().unwrap().cell_mode = false;
         self.graphical.as_mut().unwrap().animated_images = false;
         self.graphical.as_mut().unwrap().surface_mode = false;
+        self.graphical.as_mut().unwrap().skin_mode = false;
         self.graphical.as_mut().unwrap().pixel_layout = false;
         self.graphics.set_mode(Mode::Off);
     }
@@ -1124,6 +1126,8 @@ impl Controller for App {
         }
         state.animated_images = capabilities.animated_images;
         self.graphical.as_mut().unwrap().surface_mode = capabilities.native_surfaces;
+        self.graphical.as_mut().unwrap().skin_mode =
+            capabilities.native_surfaces && capabilities.native_skins;
         self.graphical.as_mut().unwrap().pixel_layout = capabilities.pixel_layout;
         self.graphics
             .set_mode(if cells { Mode::Blocks } else { Mode::Off });
@@ -5086,7 +5090,7 @@ mod tests {
     #[test]
     fn native_file_row_pointer_regions_include_metadata_in_both_panes() {
         let cfg = Config::default();
-        let (core, mut fake) = crate::ui::fake::handle(cfg.core());
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
         let mut app = App::new(
             core,
             cfg,

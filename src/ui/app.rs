@@ -467,6 +467,18 @@ impl App {
             focused: self.layout.focus() == ModuleId::Preview,
             graphics: self.audio_graphics_config(),
             visible: self.audio_here() && self.layout.preview_open,
+            native_skins: {
+                #[cfg(feature = "terminal-graphics")]
+                {
+                    self.graphical
+                        .as_ref()
+                        .is_some_and(|state| !state.cell_mode && state.skin_mode)
+                }
+                #[cfg(not(feature = "terminal-graphics"))]
+                {
+                    false
+                }
+            },
             native_surface: {
                 #[cfg(feature = "terminal-graphics")]
                 {

@@ -53,6 +53,7 @@ pub struct Presentation {
     pub theme: Palette,
     pub graphics: Option<GraphicsConfig>,
     pub native_surface: bool,
+    pub native_skins: bool,
     pub visible: bool,
 }
 
@@ -147,6 +148,7 @@ struct Shared {
     transport_images: bool,
     player_styles: bool,
     native_surface: bool,
+    native_skins: bool,
     audio_relay: bool,
     audio_local: bool,
     audio_blocks: Option<Receiver<(u64, Vec<i16>)>>,
@@ -281,6 +283,8 @@ enum HostMessage<'a> {
         profile: Option<&'a str>,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         native_surface: bool,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        native_skins: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         visible: Option<bool>,
     },
@@ -370,6 +374,7 @@ struct Running {
     transport_images: bool,
     player_styles: bool,
     native_surface: bool,
+    native_skins: bool,
 }
 
 /// A nonblocking owner for one embedded player. `new` starts only a cheap
@@ -889,6 +894,7 @@ fn spawn_child(
         transport_images: false,
         player_styles: false,
         native_surface: false,
+        native_skins: false,
     })
 }
 
@@ -1057,6 +1063,7 @@ fn send_configure(player: &mut Running) -> Result<u64, String> {
             },
             profile: player.player_styles.then_some("starfold"),
             native_surface: player.native_surface && p.native_surface,
+            native_skins: player.native_skins && p.native_skins && p.native_surface,
             visible: player.native_surface.then_some(p.visible),
         },
     )
@@ -1172,6 +1179,8 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
             player.native_surface = capabilities
                 .iter()
                 .any(|value| value == "native_surface_v1");
+            player.native_skins =
+                player.native_surface && capabilities.iter().any(|value| value == "native_skin_v1");
             player.player_styles = capabilities.iter().any(|value| value == "player_styles");
             {
                 let mut data = lock(shared);
@@ -1179,6 +1188,7 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
                 data.transport_images = player.transport_images;
                 data.player_styles = player.player_styles;
                 data.native_surface = player.native_surface;
+                data.native_skins = player.native_skins;
                 data.audio_relay = capabilities.iter().any(|value| value == "audio_relay_v1");
             }
             if let Err(message) = queue_play(player, shared) {
@@ -1517,6 +1527,7 @@ mod tests {
             },
             graphics: None,
             native_surface: false,
+            native_skins: false,
             visible: true,
         }
     }
@@ -1643,12 +1654,14 @@ mod tests {
             theme: &theme,
             graphics: None,
             native_surface: false,
+            native_skins: false,
             visible: None,
             profile: None,
         })
         .unwrap();
         assert!(legacy.get("graphics").is_none());
         assert!(legacy.get("profile").is_none());
+        assert!(legacy.get("native_skins").is_none());
         let config = GraphicsConfig {
             cell_width: 8,
             cell_height: 16,
@@ -1661,12 +1674,14 @@ mod tests {
             theme: &theme,
             graphics: Some(&config),
             profile: Some("starfold"),
-            native_surface: false,
+            native_surface: true,
+            native_skins: true,
             visible: None,
         })
         .unwrap();
         assert_eq!(extended["graphics"]["cell_width"], 8);
         assert_eq!(extended["profile"], "starfold");
+        assert_eq!(extended["native_skins"], true);
     }
 
     #[test]
