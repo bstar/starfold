@@ -1,7 +1,7 @@
 //! Experimental launcher and persistent application host. No browser runs remotely.
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -29,10 +29,11 @@ struct Options {
     verbose: bool,
     #[arg(long)]
     ssh_config: Option<PathBuf>,
-    /// Session name. Defaults to local on this machine, default over SSH.
+    /// Optional workspace name. A running workspace cannot be opened twice.
     #[arg(long)]
     session: Option<String>,
-    #[arg(long)]
+    /// Resume a disconnected session explicitly; active windows cannot be shared.
+    #[arg(long, requires = "session")]
     attach: bool,
     #[arg(long)]
     sessions: bool,
@@ -47,14 +48,14 @@ struct Options {
     directory: Option<PathBuf>,
 }
 impl Options {
-    fn session_name(&self, ssh_shell: bool) -> &str {
-        self.session
-            .as_deref()
-            .unwrap_or(if self.ssh.is_some() || ssh_shell {
-                "default"
-            } else {
-                "local"
-            })
+    fn session_name(&self) -> Result<String> {
+        if let Some(name) = &self.session {
+            return Ok(name.clone());
+        }
+        // Generated at the launch site, including when the controller is remote.
+        // No local/SSH window can attach to another launch's live workspace.
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        Ok(format!("window-{:x}-{stamp:x}", std::process::id()))
     }
 }
 #[derive(Parser)]
@@ -118,7 +119,10 @@ fn ensure(name: &str, dir: Option<PathBuf>, attach_only: bool) -> Result<PathBuf
     session::private_root(&root)?;
     let socket = session::socket_path(&root, name)?;
     if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
-        return Ok(socket);
+        if attach_only {
+            return Ok(socket);
+        }
+        bail!("Workspace '{name}' is already running. Launch without --session for an independent window.");
     }
     if attach_only {
         bail!("Session '{name}' is no longer running. Start a new session explicitly.");
@@ -205,9 +209,7 @@ pub fn main() -> Result<()> {
                 path.clone()
             }
         });
-        let session = options
-            .session_name(std::env::var_os("SSH_CONNECTION").is_some())
-            .to_owned();
+        let session = options.session_name()?;
         if options.capabilities {
             let graphics = starkit::graphics::Graphics::probe_if_tty(starkit::graphics::Mode::Auto);
             println!(
@@ -317,9 +319,11 @@ pub fn main() -> Result<()> {
     let _log = starkit::logging::init(&crate::PATHS, true)?;
     let saved = root.join(format!("{name}.toml"));
     if !saved.exists() {
-        let normal = crate::PATHS.session_file()?;
-        if normal.exists() {
-            std::fs::copy(normal, &saved)?;
+        // Restore a snapshot, never the live controller or its writable state.
+        // This also migrates the former local/default workspaces without losing
+        // pane dimensions or a remembered movie position.
+        if let Some(previous) = latest_workspace(&root, crate::PATHS.session_file()?)? {
+            std::fs::copy(previous, &saved)?;
         }
     }
     let (core, cfg, path, saved) = crate::window_parts(options.directory, Some(saved))?;
@@ -331,23 +335,66 @@ pub fn main() -> Result<()> {
         starkit::graphics::Graphics::disabled(),
     );
     app.enable_graphical();
-    session::serve(&root, &name, app)
+    session::serve_exclusive(&root, &name, app)
+}
+
+fn latest_workspace(root: &std::path::Path, normal: PathBuf) -> Result<Option<PathBuf>> {
+    let mut paths = vec![normal];
+    for entry in std::fs::read_dir(root)? {
+        let path = entry?.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "toml")
+        {
+            paths.push(path);
+        }
+    }
+    Ok(paths
+        .into_iter()
+        .filter_map(|path| {
+            let metadata = std::fs::symlink_metadata(&path).ok()?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return None;
+            }
+            Some((metadata.modified().ok()?, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn local_and_remote_default_sessions_do_not_collide() {
-        let local = Options::parse_from(["starfold-graphical"]);
-        assert_eq!(local.session_name(false), "local");
-        assert_eq!(local.session_name(true), "default");
-        let remote = Options::parse_from(["starfold-graphical", "--ssh", "host"]);
-        assert_eq!(remote.session_name(false), "default");
-        let shared = Options::parse_from(["starfold-graphical", "--session", "default"]);
-        assert_eq!(shared.session_name(false), "default");
-        let named = Options::parse_from(["starfold-graphical", "--session", "work", "--attach"]);
-        assert_eq!(named.session_name(false), "work");
-        assert_eq!(named.session_name(true), "work");
+    fn every_ordinary_launch_has_an_independent_session() {
+        for args in [vec!["starfold"], vec!["starfold", "--ssh", "host"]] {
+            let options = Options::parse_from(args);
+            let first = options.session_name().unwrap();
+            let second = options.session_name().unwrap();
+            assert_ne!(first, second);
+            assert!(first.starts_with("window-"));
+            session::socket_path(std::path::Path::new("/tmp/test"), &first).unwrap();
+        }
+        assert!(Options::try_parse_from(["starfold", "--attach"]).is_err());
+        let named = Options::parse_from(["starfold", "--session", "work", "--attach"]);
+        assert_eq!(named.session_name().unwrap(), "work");
+    }
+
+    #[test]
+    fn workspace_restore_copies_state_without_sharing_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("local.toml");
+        std::fs::write(&original, "last_dir = '/saved'\n").unwrap();
+        let previous = latest_workspace(root.path(), root.path().join("missing"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(previous, original);
+        let fresh = root.path().join("window-new.toml");
+        std::fs::copy(previous, &fresh).unwrap();
+        std::fs::write(&fresh, "last_dir = '/independent'\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(original).unwrap(),
+            "last_dir = '/saved'\n"
+        );
     }
 }

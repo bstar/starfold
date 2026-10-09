@@ -433,13 +433,13 @@ mod tests {
         let source_dir = app.view.active_dir.clone();
         choose_create(&mut app, overlays::context::Action::CreateDirectory);
         type_name(&mut app, "from left");
-        app.key(key(KeyCode::Tab));
+        app.key(key(KeyCode::BackTab));
         let right_dir = app.view.active_dir.clone();
         fake.pump();
         app.tick();
         assert!(source_dir.join("from left").is_dir());
         assert_eq!(app.view.active_dir, right_dir);
-        app.key(key(KeyCode::BackTab));
+        app.key(key(KeyCode::Tab));
         app.refresh();
         assert_eq!(app.view.cursor_path, Some(source_dir.join("from left")));
     }

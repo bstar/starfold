@@ -19,9 +19,15 @@ pub struct Viewport {
     pub height: u32,
     pub foreground: String,
     pub background: String,
+    /// Optional document corner radius in presentation pixels; zero keeps square corners.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub corner_radius: u16,
     /// Exact cell grid for a cell presentation; omitted by older hosts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cells: Option<[u16; 2]>,
+}
+fn is_zero(value: &u16) -> bool {
+    *value == 0
 }
 impl Default for Viewport {
     fn default() -> Self {
@@ -31,6 +37,7 @@ impl Default for Viewport {
             height: 600,
             foreground: "#ffffff".into(),
             background: "#000000".into(),
+            corner_radius: 0,
         }
     }
 }

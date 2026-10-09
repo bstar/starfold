@@ -81,14 +81,15 @@ that truncation. Native transport thumbnails never enlarge small pixel art.
 
 ## SSH
 
-Local launches default to session `local`; SSH launches (including launches
-inside an SSH shell) default to `default`. This keeps a local window and an SSH
-window from repeatedly replacing each other's frontend and cancelling playback.
-Each session has one attached frontend. Use distinct `--session` names for
-additional simultaneous windows; explicit names and `--attach` retain their
-normal behavior. To open a previously saved local `default` workspace, use
-`starfold-graphical --session default` after detaching its SSH view.
+Every launch creates an independent session, locally and over SSH. Windows do
+not mirror, share selection or playback, or replace one another. A new window
+restores a saved workspace snapshot into its own state file, including pane
+sizes and movie position.
 
+`--session work` selects a named workspace and reports an error if it is already
+running. `--attach --session work` explicitly resumes a disconnected controller;
+it cannot take over a window that is still open. `--sessions` lists running
+controllers. Ordinary launches require no session name.
 
 ```sh
 nix build .#graphical-host
@@ -178,6 +179,12 @@ copy conflicts, persistent errors, archive actions and authorization prompts.
 Keyboard and pointer input use the existing controller. Desktop drag/drop is a
 separately detected OSC 72 extension; image support alone does not supply it.
 Clipboard output is local OSC 52, with tmux buffer support where needed.
+
+Clickable file rows, text actions and native surface controls use the hand
+pointer. File rows receive a faint theme-aware hover tint across their filename
+and metadata columns. Hover is rendered locally, including over SSH, and does
+not move selection or change marks. Selected rows retain their selection fill;
+modal overlays suppress hover feedback in the panes behind them.
 
 The native path row is a clickable breadcrumb trail (`~ / Pictures / Pixel Art`).
 Each segment navigates its pane to that ancestor; the current segment is bold.

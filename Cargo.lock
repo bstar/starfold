@@ -3767,7 +3767,7 @@ dependencies = [
 [[package]]
 name = "starkit"
 version = "0.3.0"
-source = "git+https://github.com/bstar/starkit?rev=6f49cd51f4d284bfad0180a1831e61ebedd03fb5#6f49cd51f4d284bfad0180a1831e61ebedd03fb5"
+source = "git+https://github.com/bstar/starkit?rev=493da260b99723436e7ab9fd5b11940a4c5538cb#493da260b99723436e7ab9fd5b11940a4c5538cb"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

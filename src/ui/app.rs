@@ -2227,13 +2227,14 @@ impl App {
             Action::FocusNext | Action::FocusPrev if self.commander => {
                 let forward = a == Action::FocusNext;
                 match (self.layout.focus(), self.active_pane, forward) {
-                    (ModuleId::Stack, 0, true) | (ModuleId::Preview, _, false) => {
+                    (ModuleId::Stack, 0, true)
+                    | (ModuleId::Stack, 1, false)
+                    | (ModuleId::Operations, _, false) => self.layout.focus_set(ModuleId::Preview),
+                    (ModuleId::Preview, _, true) | (ModuleId::Stack, 0, false) => {
                         self.focus_pane(1)
                     }
-                    (ModuleId::Stack, _, true)
-                    | (ModuleId::Stack, 0, false)
-                    | (ModuleId::Operations, _, false) => self.layout.focus_set(ModuleId::Preview),
-                    (ModuleId::Preview, _, true)
+                    (ModuleId::Preview, _, false)
+                    | (ModuleId::Stack, _, true)
                     | (ModuleId::Stack, _, false)
                     | (ModuleId::Operations, _, true) => self.focus_pane(0),
                 }
@@ -4963,8 +4964,8 @@ mod tests {
         app.tick();
         assert!(app.commander);
         for (module, pane) in [
+            (ModuleId::Preview, 0),
             (ModuleId::Stack, 1),
-            (ModuleId::Preview, 1),
             (ModuleId::Stack, 0),
         ] {
             app.key(code(KeyCode::Tab));
@@ -4972,8 +4973,8 @@ mod tests {
             assert_eq!((app.layout.focus(), app.active_pane), (module, pane));
         }
         for (module, pane) in [
-            (ModuleId::Preview, 0),
             (ModuleId::Stack, 1),
+            (ModuleId::Preview, 1),
             (ModuleId::Stack, 0),
         ] {
             app.key(code(KeyCode::BackTab));
@@ -5005,16 +5006,26 @@ mod tests {
         let generation = app.core.state().preview_generation;
         assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
         app.key(code(KeyCode::Tab));
+        app.tick();
+        assert_eq!(app.layout.focus(), ModuleId::Preview);
+        assert_eq!(app.active_pane, 0);
+        assert_eq!(app.core.state().preview_generation, generation);
+        assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
+        app.key(code(KeyCode::BackTab));
+        app.tick();
+        assert_eq!(app.layout.focus(), ModuleId::Stack);
+        assert_eq!(app.active_pane, 0);
+        app.key(code(KeyCode::BackTab));
         fake.pump();
         app.tick();
         assert_eq!(app.active_pane, 1);
         assert_eq!(app.core.state().preview_generation, generation);
         assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
-        app.key(code(KeyCode::Tab));
+        app.key(code(KeyCode::BackTab));
         app.tick();
         assert_eq!(app.layout.focus(), ModuleId::Preview);
         assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
-        app.key(code(KeyCode::BackTab));
+        app.key(code(KeyCode::Tab));
         app.key(key('j'));
         app.tick();
         fake.pump();
@@ -5043,14 +5054,14 @@ mod tests {
         app.last_preview_for = Some(source.clone());
         app.refresh();
         let generation = app.core.state().preview_generation;
-        app.key(code(KeyCode::Tab));
+        app.key(code(KeyCode::BackTab));
         // Both the preview and the new pane's nonempty listing complete later.
         fake.pump();
         app.tick();
         assert!(!app.panes[1].rows.is_empty());
         assert_eq!(app.core.state().preview_generation, generation);
         assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
-        app.key(code(KeyCode::Tab));
+        app.key(code(KeyCode::BackTab));
         app.tick();
         assert_eq!(app.layout.focus(), ModuleId::Preview);
         assert_eq!(app.core.state().preview.as_ref().unwrap().0, source);
@@ -5074,7 +5085,7 @@ mod tests {
         let left_key = app.panes[0].key;
         let left_scroll = app.scroll[&left_key];
         assert!(left_scroll > 0);
-        app.key(code(KeyCode::Tab));
+        app.key(code(KeyCode::BackTab));
         app.tick();
         assert_eq!(app.active_pane, 1);
         assert_eq!(app.panes[1].cursor, 0);
@@ -5124,7 +5135,7 @@ mod tests {
         );
         app.key(code(KeyCode::Esc));
         app.key(key('v'));
-        app.key(code(KeyCode::Tab));
+        app.key(code(KeyCode::BackTab));
         app.place_action(super::super::places::PlaceAction::Open(
             fk.home().join("pictures"),
         ));

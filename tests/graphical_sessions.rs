@@ -24,6 +24,9 @@ impl Drop for Host {
 }
 impl Host {
     fn start() -> Self {
+        Self::start_named("test", None)
+    }
+    fn start_named(name: &str, shared_base: Option<&std::path::Path>) -> Self {
         let directory = tempfile::tempdir_in("/tmp").unwrap();
         let files = directory.path().join("files");
         fs::create_dir(&files).unwrap();
@@ -33,9 +36,11 @@ impl Host {
             file.write_all(&vec![7u8; 1024 * 1024]).unwrap();
         }
         fs::write(files.join("two ' quoted.bin"), b"second marked file").unwrap();
-        let base = directory.path().join("app");
+        let base = shared_base
+            .map(PathBuf::from)
+            .unwrap_or_else(|| directory.path().join("app"));
         let child = Command::new(env!("CARGO_BIN_EXE_starfold"))
-            .args(["--graphical-server", "test", "--directory"])
+            .args(["--graphical-server", name, "--directory"])
             .arg(&files)
             .env("STARFOLD_DIR", &base)
             .env_remove("DISPLAY")
@@ -45,7 +50,7 @@ impl Host {
             .stderr(Stdio::inherit())
             .spawn()
             .unwrap();
-        let socket = base.join("graphical/test.sock");
+        let socket = base.join(format!("graphical/{name}.sock"));
         let started = Instant::now();
         while !socket.exists() {
             assert!(started.elapsed() < Duration::from_secs(10));
@@ -225,6 +230,43 @@ fn socket_probe_does_not_steal_an_active_attachment() {
     wait(&mut reader, |m| matches!(m, ServerMessage::Hello { .. }));
     drop(UnixStream::connect(&host.socket).unwrap());
     std::thread::sleep(Duration::from_millis(100));
+    write_message(&ClientMessage::Ping, &mut socket).unwrap();
+    wait(&mut reader, |m| matches!(m, ServerMessage::Pong));
+    assert!(key(&mut socket, &mut reader, 1, "char:q"));
+}
+
+#[test]
+fn separate_instances_on_the_same_host_close_independently() {
+    let first = Host::start_named("window-one", None);
+    let base = first._directory.path().join("app");
+    let second = Host::start_named("window-two", Some(&base));
+    let (mut first_socket, mut first_reader) = first.connect();
+    let (mut second_socket, mut second_reader) = second.connect();
+    wait(&mut first_reader, |m| {
+        matches!(m, ServerMessage::Hello { .. })
+    });
+    wait(&mut second_reader, |m| {
+        matches!(m, ServerMessage::Hello { .. })
+    });
+    assert_ne!(first.socket, second.socket);
+    assert!(key(&mut first_socket, &mut first_reader, 1, "char:q"));
+    write_message(&ClientMessage::Ping, &mut second_socket).unwrap();
+    wait(&mut second_reader, |m| matches!(m, ServerMessage::Pong));
+    assert!(key(&mut second_socket, &mut second_reader, 1, "char:q"));
+}
+
+#[test]
+fn second_frontend_cannot_take_over_an_active_window() {
+    let host = Host::start();
+    let (mut socket, mut reader) = host.connect();
+    wait(&mut reader, |m| matches!(m, ServerMessage::Hello { .. }));
+    let (_second_socket, mut second_reader) = host.connect();
+    let rejection = wait(&mut second_reader, |m| {
+        matches!(m, ServerMessage::Error { .. })
+    });
+    assert!(
+        matches!(rejection, ServerMessage::Error { message } if message.contains("already open"))
+    );
     write_message(&ClientMessage::Ping, &mut socket).unwrap();
     wait(&mut reader, |m| matches!(m, ServerMessage::Pong));
     assert!(key(&mut socket, &mut reader, 1, "char:q"));

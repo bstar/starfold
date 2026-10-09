@@ -126,3 +126,7 @@ modifiers and cursor coordinates. Neovim uses this grid directly, without page
 headings or wrapping. Text pages remain the fallback for older providers.
 See [presentation and shortcuts](../documentation/presentation.html) for launch,
 switching, media and configuration examples.
+
+PDF pages open at 70% of Preview’s width by default, centered horizontally. Scroll vertically to read; `0` fits the whole page, `w` fills the available width, and `+`/`-` adjust zoom. Rendering keeps the pane’s aspect ratio when limiting raster size.
+
+PDF pages use the same `[preview]` `video_corners` and `video_corner_radius` settings as video. The surrounding canvas uses the theme’s panel background; page content keeps its original colors.

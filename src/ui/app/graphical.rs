@@ -53,6 +53,7 @@ pub(super) struct State {
     video_control_rect: Option<Rect>,
     video_control_request: Option<crate::video_transport::Request>,
     image_source: Option<Arc<RgbaImage>>,
+    image_document: Option<(String, u64)>,
     image_sequence: u64,
     pub(super) image_zoom: Option<u16>,
     image_id: Option<String>,
@@ -621,6 +622,15 @@ impl App {
         }
         let details = self.movie_details_preview();
         let showing_details = details.is_some();
+        let pdf =
+            matches!(self.view.preview.as_deref(), Some(Preview::Document(d)) if d.kind == "PDF");
+        let document = match self.view.preview.as_deref() {
+            Some(Preview::Document(d)) if d.kind == "PDF" => d
+                .extension
+                .as_ref()
+                .map(|info| (info.provider.clone(), info.session)),
+            _ => None,
+        };
         let source = match details.as_ref().or(self.view.preview.as_deref()) {
             Some(Preview::Video { poster, .. }) => Some(Arc::clone(&poster.pixels)),
             Some(Preview::Image { data, .. }) => Some(Arc::clone(data)),
@@ -649,9 +659,11 @@ impl App {
         if changed {
             // Older frontends receive individual frames. Keep the last ready
             // frame visible while its replacement is encoded on the worker.
-            if state.animated_images || self.preview_animation.is_none() {
+            let same_document = document.is_some() && document == state.image_document;
+            if !same_document && (state.animated_images || self.preview_animation.is_none()) {
                 state.image = None;
             }
+            state.image_document = document;
             state.image_id = None;
             state.image_source = source.clone();
             if let Some(source) = source {
@@ -665,6 +677,8 @@ impl App {
                     } else {
                         worker.request(id, source);
                     }
+                } else if pdf {
+                    worker.request_raster(id, source);
                 } else {
                     worker.request(id, source);
                 }
@@ -684,7 +698,12 @@ impl App {
         }
         if let Some((id, png)) = &state.image {
             let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
-            if showing_details {
+            if pdf {
+                // Start at the top of the document body; reserve only the
+                // bottom caption row, matching the cell reader's placement.
+                rect = panels::preview::body(regions.rect_of(ModuleId::Preview));
+                rect.height = rect.height.saturating_sub(1);
+            } else if showing_details {
                 rect = panels::preview::movie_card_rects(rect).0;
             } else if matches!(self.view.preview.as_deref(), Some(Preview::Video { .. })) {
                 rect = movie_body;
@@ -693,12 +712,12 @@ impl App {
                 rect: rect.into(),
                 id: id.clone(),
                 png: Some(png.clone()),
-                zoom: if showing_details {
+                zoom: if showing_details || pdf {
                     100
                 } else {
                     state.image_zoom.unwrap_or(100)
                 },
-                scale: match if showing_details {
+                scale: match if showing_details || pdf {
                     crate::config::Scale::Smooth
                 } else {
                     self.cfg.preview.image_scale
@@ -939,10 +958,21 @@ fn native_header(
             bold: true,
             mono: true,
         });
+    let title_hit_width = (starkit::wrap::width_of(title) * cw).min(title_width);
+    if title_hit_width > 0 {
+        surface.hits.push(starkit::native_surface::HitRegion {
+            rect: R::new(inset, 0, title_hit_width, ch),
+            action: "focus".into(),
+        });
+    }
     let shortcut = theme
         .panel_bg
         .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]);
     for (word, slot) in slots {
+        surface.hits.push(starkit::native_surface::HitRegion {
+            rect: R::new((slot.x - area.x) * cw, 0, slot.width * cw, ch),
+            action: "header".into(),
+        });
         // Use the same character advances as header hit testing. This keeps
         // inter-item spacing equal and mnemonic positions exact at every scale.
         for (offset, character) in word
@@ -1308,6 +1338,14 @@ impl Controller for App {
                             self.view.ops.len()
                         )
                     };
+                    let text_width =
+                        (starkit::wrap::width_of(&text) * cw).min(surface.width.saturating_sub(24));
+                    if text_width > 0 {
+                        surface.hits.push(starkit::native_surface::HitRegion {
+                            rect: R::new(12.min(surface.width), 0, text_width, surface.height),
+                            action: "operations".into(),
+                        });
+                    }
                     surface.text(
                         R::new(
                             12.min(surface.width),
@@ -1892,6 +1930,20 @@ impl Controller for App {
                             } else {
                                 &self.view.active_dir
                             };
+                            let list =
+                                panels::stack::split(body, view.crumbs.len(), view.fold_rows).list;
+                            if !view.loading && view.error.is_none() {
+                                clickable.extend(
+                                    view.rows
+                                        .iter()
+                                        .skip(view.scroll)
+                                        .take(usize::from(list.height))
+                                        .enumerate()
+                                        .map(|(index, _)| {
+                                            Rect::new(list.x, list.y + index as u16, list.width, 1)
+                                        }),
+                                );
+                            }
                             clickable.extend(
                                 breadcrumb_slots(rule, path, &self.view.home)
                                     .into_iter()
@@ -5032,6 +5084,51 @@ mod tests {
     }
 
     #[test]
+    fn native_file_row_pointer_regions_include_metadata_in_both_panes() {
+        let cfg = Config::default();
+        let (core, mut fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().pixel_layout = true;
+        for commander in [false, true] {
+            app.core.send(Command::RestoreCommander {
+                dirs: [fake.home().to_path_buf(), fake.home().to_path_buf()],
+                active: 0,
+                enabled: commander,
+            });
+            fake.pump();
+            app.tick();
+            let scene = Controller::scene(
+                &mut app,
+                Viewport {
+                    columns: 160,
+                    rows: 40,
+                    width: 1600,
+                    height: 800,
+                    generation: 1,
+                },
+            );
+            let mut count = 0;
+            for component in &scene.components {
+                if let Component::ListRow { rect, .. } = component {
+                    count += 1;
+                    assert!(scene.pointer_regions.iter().any(|r| r.x == rect.x
+                        && r.y == rect.y
+                        && r.height == 1
+                        && r.width > rect.width));
+                }
+            }
+            assert!(count > 0);
+        }
+    }
+
+    #[test]
     fn native_chrome_surfaces_fit_at_resize_and_keep_operations_compact() {
         let cfg = Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
@@ -5737,6 +5834,97 @@ mod tests {
                 .unwrap()
                 .contains(app.cfg.preview.image_scale.name()));
         }
+    }
+
+    #[test]
+    fn pdf_reader_fills_its_body_without_using_pixel_art_scaling() {
+        use starkit::terminal_graphics::protocol::ImageScale;
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.layout.preview_open = true;
+        let mut scene = Controller::scene(&mut app, Viewport::default());
+        let regions = app.layout.last.clone().unwrap();
+        let source = Arc::new(RgbaImage::new(200, 50));
+        let mut document = crate::fold::preview::model::Document::new("PDF");
+        document.image = Some(source.clone());
+        document.extension = Some(Box::new(crate::fold::preview::extensions::Info {
+            provider: "pdf".into(),
+            revision: "test".into(),
+            session: 10,
+            sequence: 1,
+            keys: vec![],
+            interactive: false,
+            modified: false,
+            actions: vec![],
+        }));
+        let mut scrolled = document.clone();
+        app.view.preview = Some(Arc::new(Preview::Document(document)));
+        app.cfg.preview.image_scale = crate::config::Scale::One;
+        let state = app.graphical.as_mut().unwrap();
+        state.image_source = Some(source);
+        state.image = Some(("pdf-page".into(), "payload".into()));
+        state.image_document = Some(("pdf".into(), 10));
+        scene.components.clear();
+        app.graphical_image(&mut scene, &regions);
+        let body = panels::preview::body(regions.rect_of(ModuleId::Preview));
+        assert!(scene.components.iter().any(|component| matches!(component,
+            Component::Image { rect, scale: ImageScale::Smooth, .. }
+            if rect.x == body.x && rect.y == body.y && rect.width == body.width
+                && rect.height == body.height.saturating_sub(1))));
+        assert_eq!(app.cfg.preview.image_scale, crate::config::Scale::One);
+        scrolled.image = Some(Arc::new(RgbaImage::new(1800, 50)));
+        app.view.preview = Some(Arc::new(Preview::Document(scrolled.clone())));
+        scene.components.clear();
+        app.graphical_image(&mut scene, &regions);
+        assert!(
+            scene.components.iter().any(|component| matches!(component,
+            Component::Image { id, .. } if id == "pdf-page")),
+            "scrolling must retain the ready page"
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app
+            .graphical
+            .as_ref()
+            .unwrap()
+            .image
+            .as_ref()
+            .is_some_and(|(id, _)| id == "pdf-page")
+        {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+            scene.components.clear();
+            app.graphical_image(&mut scene, &regions);
+        }
+        let state = app.graphical.as_ref().unwrap();
+        let png = &state.image.as_ref().unwrap().1;
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(png)
+            .unwrap();
+        assert_eq!(
+            starkit::image::load_from_memory(&bytes).unwrap().width(),
+            1800
+        );
+        scrolled.extension.as_mut().unwrap().session = 11;
+        scrolled.image = Some(Arc::new(RgbaImage::new(1800, 50)));
+        app.view.preview = Some(Arc::new(Preview::Document(scrolled)));
+        scene.components.clear();
+        app.graphical_image(&mut scene, &regions);
+        assert!(
+            !scene
+                .components
+                .iter()
+                .any(|component| matches!(component, Component::Image { .. })),
+            "a different document must never retain the old page"
+        );
     }
 
     #[test]

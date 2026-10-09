@@ -3,7 +3,7 @@ use hayro::hayro_interpret::util::TransformExt;
 use hayro::{
     hayro_interpret::InterpreterSettings,
     hayro_syntax::Pdf,
-    kurbo::Affine,
+    kurbo::{Affine, RoundedRect, Shape},
     vello_cpu::{Pixmap, RenderContext},
     RenderCache, RenderSettings,
 };
@@ -17,6 +17,7 @@ use std::{
 struct Session {
     pdf: Pdf,
     text: lopdf::Document,
+    unavailable_text: std::collections::HashSet<u32>,
     page: u32,
     text_mode: bool,
     fit_width: bool,
@@ -45,10 +46,11 @@ impl Session {
         Ok(Self {
             pdf,
             text,
+            unavailable_text: Default::default(),
             page: 1,
             text_mode: false,
-            fit_width: false,
-            zoom: 1.0,
+            fit_width: true,
+            zoom: 0.7,
             scroll: 0.0,
             pan: 0.0,
             viewport,
@@ -126,12 +128,26 @@ impl Session {
             cap: self.limits.text_bytes.min(262_144),
             truncated: false,
         };
-        let extracted = pdf_extract::output_doc_page(
-            &self.text,
-            &mut pdf_extract::PlainTextOutput::new(&mut out as &mut dyn Write),
-            self.page,
-        );
-        if extracted.is_err() && !out.truncated {
+        let unavailable = if self.unavailable_text.contains(&self.page) {
+            true
+        } else {
+            // Text is optional. Foreign font parsing must not unwind through
+            // page rendering or trigger the same panic again in text fallback.
+            let extracted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pdf_extract::output_doc_page(
+                    &self.text,
+                    &mut pdf_extract::PlainTextOutput::new(&mut out as &mut dyn Write),
+                    self.page,
+                )
+            }));
+            let failed = !matches!(extracted, Ok(Ok(()))) && !out.truncated;
+            if failed {
+                self.unavailable_text.insert(self.page);
+            }
+            failed
+        };
+        if unavailable {
+            out.bytes.clear();
             p.notice = Some("Text extraction unavailable; rendered page remains available".into());
         }
         p.pages.push(TextPage {
@@ -151,8 +167,16 @@ impl Session {
             "Invalid PDF page dimensions; use text mode"
         );
         let cap = self.limits.image_dimension.clamp(1, 4096);
-        let width = self.viewport.width.clamp(1, cap).min(2048);
-        let height = self.viewport.height.clamp(1, cap).min(2048);
+        // Bound rendering cost without changing the pane's aspect ratio.
+        // Independently clamping width/height leaves large previews undersized.
+        let bound = cap as f64;
+        let viewport_width = self.viewport.width.max(1) as f64;
+        let viewport_height = self.viewport.height.max(1) as f64;
+        let reduction = (bound / viewport_width.max(viewport_height))
+            .min((8_000_000.0 / (viewport_width * viewport_height)).sqrt())
+            .min(1.0);
+        let width = (viewport_width * reduction).floor().max(1.0) as u32;
+        let height = (viewport_height * reduction).floor().max(1.0) as u32;
         let fit = if self.fit_width {
             width as f64 / pw as f64
         } else {
@@ -174,12 +198,14 @@ impl Session {
             ((height as f64 - ph as f64 * scale) / 2.0).max(0.0)
         };
         let cache_key = format!(
-            "{}:{width}:{height}:{}:{}:{}:{}",
+            "{}:{width}:{height}:{}:{}:{}:{}:{}:{}",
             self.page,
             self.fit_width,
             self.zoom.to_bits(),
             self.scroll.to_bits(),
-            self.pan.to_bits()
+            self.pan.to_bits(),
+            self.viewport.background,
+            self.viewport.corner_radius,
         );
         p.raster = Some(Raster {
             width,
@@ -189,8 +215,9 @@ impl Session {
         p.fields.push((
             "View".into(),
             format!(
-                "Page {}/{total} · {:.0}% · n/p pages · +/- zoom · w width · 0 fit · t text",
+                "Page {}/{total} · {} · {:.0}% · n/p pages · scroll · +/- zoom · w width · 0 fit · t text",
                 self.page,
+                if self.fit_width { "Fit width" } else { "Fit page" },
                 self.zoom * 100.0
             ),
         ));
@@ -201,6 +228,35 @@ impl Session {
             return Ok((p, pixels));
         }
         let mut context = RenderContext::new(width as u16, height as u16);
+        let rounded = self.viewport.corner_radius > 0;
+        if rounded {
+            // Scale the mask with raster reduction so its visible radius stays
+            // consistent with video even on a large presentation viewport.
+            let clip = RoundedRect::new(
+                x,
+                y,
+                x + pw as f64 * scale,
+                y + ph as f64 * scale,
+                f64::from(self.viewport.corner_radius) * reduction,
+            )
+            .to_path(0.1);
+            context.push_clip_layer(&clip);
+        }
+        // Paper stays white; only the canvas outside the page follows the theme.
+        context.set_paint(hayro::vello_cpu::color::palette::css::WHITE);
+        context.fill_rect(&hayro::kurbo::Rect::new(
+            x,
+            y,
+            x + pw as f64 * scale,
+            y + ph as f64 * scale,
+        ));
+        let background = self
+            .viewport
+            .background
+            .strip_prefix('#')
+            .filter(|hex| hex.len() == 6)
+            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+            .unwrap_or(0);
         let transform = Affine::translate((x, y))
             * Affine::scale(scale)
             * page.initial_transform(true).to_kurbo();
@@ -212,6 +268,9 @@ impl Session {
             &mut context,
             transform,
         );
+        if rounded {
+            context.pop_layer();
+        }
         context.flush();
         let mut pixmap = Pixmap::new(width as u16, height as u16);
         context.render_with(
@@ -219,7 +278,11 @@ impl Session {
             &mut Default::default(),
             hayro::vello_cpu::RasterizerSettings {
                 target_init: hayro::vello_cpu::TargetInit::Clear(
-                    hayro::vello_cpu::color::palette::css::WHITE,
+                    hayro::vello_cpu::color::AlphaColor::from_rgb8(
+                        (background >> 16) as u8,
+                        (background >> 8) as u8,
+                        background as u8,
+                    ),
                 ),
                 ..Default::default()
             },

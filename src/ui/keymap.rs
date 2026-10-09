@@ -926,8 +926,9 @@ Low → High or High → Low for size, with corresponding labels for other keys;
 `S` toggles direction directly. The picker also toggles directories first.
 Timestamp sorts show newest first by default, with unavailable dates last.
 
-In Commander view, `tab` cycles left pane, right pane and Preview;
-`shift+tab` reverses that cycle. Changing pane focus preserves the displayed
+In Commander view, `tab` cycles left pane, Preview and right pane;
+`shift+tab` reverses that cycle. From the left pane, `tab` enters Preview
+directly; from the right pane, `shift+tab` enters Preview directly. Changing pane focus preserves the displayed
 preview; navigating or selecting a file updates it. `F7` jumps directly into
 Preview. `alt+1` focuses the active pane; `alt+2` and `alt+3` reach preview and operations. `y` (or
 `yy`) saves the marked entries or highlighted file; `p` queues a copy into

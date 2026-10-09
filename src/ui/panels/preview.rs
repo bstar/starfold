@@ -411,8 +411,12 @@ pub fn render(
                     .find(|f| f.label == "View")
                     .map(|f| f.value.clone())
                     .unwrap_or_else(|| format!("{} · page {}", d.kind, d.image_page.unwrap_or(1)));
-                return render_image(
-                    frame::body(area, &word_list),
+                let original_scale = v.scale;
+                if d.kind == "PDF" {
+                    v.scale = Scale::Smooth;
+                }
+                let placement = render_image(
+                    pad_body(frame::body(area, &word_list)),
                     buf,
                     v,
                     image,
@@ -420,6 +424,8 @@ pub fn render(
                     image.height(),
                     &label,
                 );
+                v.scale = original_scale;
+                return placement;
             }
             let meta = d
                 .total_pages

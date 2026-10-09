@@ -293,18 +293,36 @@ impl App {
         let cell_mode = !self.graphical.as_ref().is_some_and(|g| !g.cell_mode);
         #[cfg(not(feature = "terminal-graphics"))]
         let cell_mode = true;
+        let pdf =
+            matches!(self.view.preview.as_deref(), Some(Preview::Document(d)) if d.kind == "PDF");
         let viewport = Viewport {
+            corner_radius: if pdf {
+                self.cfg.preview.video_radius()
+            } else {
+                0
+            },
             cells: cell_mode.then_some([content.width, content.height]),
             width: u32::from(content.width) * u32::from(cell.0),
-            height: u32::from(content.height.saturating_sub(1)) * u32::from(cell.1),
+            height: u32::from(if pdf {
+                content.height
+            } else {
+                content.height.saturating_sub(1)
+            }) * u32::from(cell.1),
             foreground: format!(
                 "#{:02x}{:02x}{:02x}",
                 self.theme.fg.r, self.theme.fg.g, self.theme.fg.b
             ),
-            background: format!(
-                "#{:02x}{:02x}{:02x}",
-                self.theme.bg.r, self.theme.bg.g, self.theme.bg.b
-            ),
+            background: {
+                let background = if pdf {
+                    self.theme.panel_bg
+                } else {
+                    self.theme.bg
+                };
+                format!(
+                    "#{:02x}{:02x}{:02x}",
+                    background.r, background.g, background.b
+                )
+            },
         };
         if viewport.width == 0 || viewport.height == 0 {
             return;
@@ -666,7 +684,7 @@ mod editor_tests {
             }
             app.focus_pane(0);
             app.key(KeyEvent::new(
-                KeyCode::Tab,
+                KeyCode::BackTab,
                 starkit::crossterm::event::KeyModifiers::NONE,
             ));
             fake.pump();
@@ -674,7 +692,7 @@ mod editor_tests {
             assert_eq!(app.active_pane, 1);
             assert_ne!(app.view.cursor_path.as_ref(), Some(&path));
             app.key(KeyEvent::new(
-                KeyCode::Tab,
+                KeyCode::BackTab,
                 starkit::crossterm::event::KeyModifiers::NONE,
             ));
             fake.pump();

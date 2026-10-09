@@ -176,7 +176,7 @@ fn commander_frames() {
     assert!(floor.lines().next().unwrap().contains("› LEFT"));
     assert_eq!(floor.lines().count(), 21);
     insta::assert_snapshot!("commander-floor-60x21", floor);
-    app.key(code(KeyCode::Tab));
+    app.key(code(KeyCode::BackTab));
     settle(&mut app, &fk);
     cursor_to(&mut app, &fk, "empty");
     app.key(code(KeyCode::Enter));
@@ -209,11 +209,11 @@ fn commander_frames() {
         .contains("S T A R / F O L D"));
     assert_eq!(preview_floor.lines().count(), 21);
     app.key(alt('1'));
-    app.key(code(KeyCode::BackTab));
+    app.key(code(KeyCode::Tab));
     settle(&mut app, &fk);
     app.key(key('y'));
     settle(&mut app, &fk);
-    app.key(code(KeyCode::Tab));
+    app.key(code(KeyCode::BackTab));
     settle(&mut app, &fk);
     app.key(key('p'));
     settle(&mut app, &fk);
