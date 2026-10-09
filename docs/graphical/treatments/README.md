@@ -1,6 +1,6 @@
 # STAR/FOLD Commander visual target
 
-A local, buildless design review for the native terminal graphics direction (`tiny-skia` / `cosmic-text`). HTML/CSS is used only for review. The native application now carries the rack palette, beveled chrome, workspace readout and lower module deck; the browser study remains the target for further spacing and content refinements.
+A local, buildless design review for the native terminal graphics direction (`tiny-skia` / `cosmic-text`). HTML/CSS is used only for review. The native application carries the rack palette and layout: a large workspace display, shared Commander header, file column labels, pane toolbars, image inspection card and structured operation queue. The browser study remains the visual target; specialized document and media readers retain their existing content layouts.
 
 Open `index.html`, or check a free port and serve this directory:
 
@@ -21,10 +21,12 @@ Marks, cursors and directory history are independent per pane and workspace. The
 
 Chromium review on 2026-10-09 covered pane and workspace switching, independent marks, yank/paste queueing, stop/resume, clearing waiting entries, filtering, searched Places, text previews and double-click navigation. Layout checks passed at 1536, 1280, 930, 768 and 390 px widths, including the mobile Places dialog, with no page script exceptions.
 
-`native-classic.png`, `native-mocha.png` and `native-latte.png` are captures from STAR/KIT's Rust renderer using FOLD's real application scene over `Fixture::tree()`, including a marked file, text preview and completed copy. These are application captures, separate from the HTML target. Recreate them with:
+`native-classic.png`, `native-mocha.png` and `native-latte.png` are 1400×1147 captures from STAR/KIT's Rust renderer using FOLD's real application scene over `Fixture::tree()`, including a marked image, smooth image preview and completed copy. The low-resolution harbour image comes from the shared fixture. These are application captures, separate from the HTML target. Native transfer readouts use measured worker progress and show a dash when speed or ETA is unavailable. Recreate them with:
 
 ```sh
 STARFOLD_RACK_CAPTURES=/tmp/starfold-native-rack-review \
   CARGO_NET_GIT_FETCH_WITH_CLI=true nix develop -c cargo test --locked \
   --all-features --bin starfold rack_native_frames
 ```
+
+The capture test also renders 1600×1200, 800×720 and 600×420 scenes in all three themes. Pointer tests exercise native pane yank/paste, queue cursor visibility, file dragging, breadcrumbs, modal projection and cell fallback. Interactive desktop review is still needed.

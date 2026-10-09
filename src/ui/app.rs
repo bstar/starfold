@@ -1947,13 +1947,24 @@ impl App {
             self.preview_scroll = self.preview_scroll.min(max);
         }
 
-        let ops_rect = regions.rect_of(ModuleId::Operations);
-        let ops_body = header::body(ops_rect);
-        let ops_visible = usize::from(ops_body.height)
-            .saturating_sub(usize::from(self.view.unmounting.is_some()))
-            .max(1);
+        let ops_visible = self.operations_visible(&regions);
         self.ops_scroll =
             starkit::list::clamp_scroll(self.ops_cursor, self.ops_scroll, ops_visible);
+    }
+
+    fn operations_visible(&self, regions: &Regions) -> usize {
+        let rows = usize::from(header::body(regions.rect_of(ModuleId::Operations)).height);
+        #[cfg(feature = "terminal-graphics")]
+        let rows = self
+            .rack_queue_rect(regions)
+            .map_or(rows, |r| usize::from(r.height / 2));
+        rows.saturating_sub(usize::from(self.view.unmounting.is_some()))
+            .saturating_sub(usize::from(
+                self.dnd.receiving_uri
+                    && self.dnd.choice.is_some()
+                    && self.dnd.result_kind.is_some(),
+            ))
+            .max(1)
     }
 
     // -- keys -------------------------------------------------------------
@@ -2788,10 +2799,7 @@ impl App {
             ModuleId::Preview => {
                 usize::from(header::body(regions.rect_of(ModuleId::Preview)).height)
             }
-            ModuleId::Operations => {
-                usize::from(header::body(regions.rect_of(ModuleId::Operations)).height)
-                    .saturating_sub(usize::from(self.view.unmounting.is_some()))
-            }
+            ModuleId::Operations => self.operations_visible(regions),
         };
         i32::try_from(rows).unwrap_or(i32::MAX).max(1)
     }
@@ -3244,14 +3252,14 @@ impl App {
             Bar::Operations => {
                 self.ops_scroll = above;
                 let height = self
-                    .bars
-                    .track_of(Bar::Operations)
-                    .map(|r| r.height)
-                    .unwrap_or(0);
+                    .layout
+                    .last
+                    .as_ref()
+                    .map_or(1, |r| self.operations_visible(r));
                 self.ops_cursor = starkit::list::cursor_into_view(
                     self.ops_cursor,
                     above,
-                    usize::from(height),
+                    height,
                     self.view.ops.len(),
                 );
             }
@@ -3399,7 +3407,13 @@ impl App {
                 self.request_pdf_pages(delta);
             }
             ModuleId::Operations => {
-                self.ops_scroll = (self.ops_scroll as i64 + i64::from(delta)).max(0) as usize;
+                let above = ((self.ops_scroll as i64 + i64::from(delta)).max(0) as usize).min(
+                    self.view
+                        .ops
+                        .len()
+                        .saturating_sub(self.operations_visible(regions)),
+                );
+                self.scroll_bar_to(Bar::Operations, above as u32);
             }
         }
     }
@@ -3777,7 +3791,7 @@ impl App {
                 .as_ref()
                 .is_some_and(|state| state.uses_pixel_layout());
             if self.layout.native_rack && area.height >= 40 {
-                self.layout.tab_rows = 5;
+                self.layout.tab_rows = if area.height >= 50 { 9 } else { 5 };
             }
             if pixels && area.width >= layout::MIN_COLS + 4 && area.height >= layout::MIN_ROWS + 2 {
                 padding = (1, 0);
@@ -3818,6 +3832,8 @@ impl App {
             self.bars = bars;
             return;
         };
+        let _rack =
+            panels::stack::rack_scope(self.layout.native_rack && layout::rack_browser(&regions));
 
         #[cfg(feature = "terminal-graphics")]
         let is_pixel_frontend = self
@@ -3834,7 +3850,7 @@ impl App {
         }
         self.tab_hits.clear();
         if let Some(rect) = regions.tabs {
-            let rect = if rect.height >= 5 {
+            let mut rect = if rect.height >= 5 {
                 Rect::new(
                     rect.x + 1,
                     rect.bottom() - 2,
@@ -3844,6 +3860,11 @@ impl App {
             } else {
                 rect
             };
+            #[cfg(feature = "terminal-graphics")]
+            if self.layout.native_rack && self.layout.tab_rows >= 9 {
+                rect.x += 14;
+                rect.width = rect.width.saturating_sub(30);
+            }
             let items = self.tab_items();
             let active = self.core.state().tabs.active().id;
             self.tab_hits = super::tabs::rail(

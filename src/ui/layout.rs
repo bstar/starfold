@@ -65,6 +65,11 @@ pub fn pane_rect(area: Rect, pane: usize) -> Rect {
     }
 }
 
+pub fn rack_browser(regions: &Regions) -> bool {
+    let stack = regions.rect_of(ModuleId::Stack);
+    stack.width >= 100 && stack.height >= 18
+}
+
 /// Below this the layout is not drawn at all.
 ///
 /// Sixty columns is the narrowest a row of metadata beside a file name is
@@ -197,7 +202,13 @@ impl LayoutState {
 
         // The status line first, off the bottom, because it is never hidden,
         // never focused and never resized.
-        let status_rows = if extra > 0 { 2 } else { 1 };
+        let status_rows = if self.native_rack && area.height >= 50 {
+            3
+        } else if extra > 0 {
+            2
+        } else {
+            1
+        };
         let status = Rect {
             y: area.y + area.height - status_rows,
             height: status_rows,
@@ -236,9 +247,23 @@ impl LayoutState {
             };
             let deck = collapsed_rows
                 .saturating_add(preview_rows)
+                .max(if self.preview_open {
+                    body.height * 2 / 5
+                } else {
+                    0
+                })
                 .max(deck_floor)
                 .min(body.height.saturating_sub(STACK_MIN_ROWS + extra + gap));
-            let stack = Rect::new(body.x, body.y, body.width, body.height - deck - gap);
+            // Native placements give the browser the remaining physical
+            // height. Fewer logical rows keep a comfortable 28px file row
+            // instead of filling a large window with terminal density.
+            let stack_rows = body.height.saturating_sub(deck + gap);
+            let stack = Rect::new(
+                body.x,
+                body.y,
+                body.width,
+                (stack_rows * 4 / 5).max(18).min(stack_rows),
+            );
             let deck_area = Rect::new(body.x, stack.bottom() + gap, body.width, deck);
             self.last = Some(Regions {
                 area,

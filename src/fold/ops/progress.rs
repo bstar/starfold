@@ -194,30 +194,34 @@ impl Progress {
         )
     }
 
-    fn transfer_details(&self) -> String {
-        let mut details = String::new();
+    /// Measured throughput and ETA for graphical readouts. Sampling is
+    /// bounded and uses the same history as the terminal progress line.
+    pub(crate) fn transfer_estimate(&self) -> Option<(u64, Option<Duration>)> {
         if !self.is_cancelled() {
-            let estimate = self
-                .estimate
+            self.estimate
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .sample(Instant::now(), self.done(), self.total());
-            if let Some(estimate) = estimate {
-                details.push_str(&format!(
-                    " · {}/s",
-                    crate::fold::format::size(estimate.bytes_per_second)
-                ));
-                if let Some(remaining) = estimate.remaining {
-                    let seconds = remaining.as_secs();
-                    let time = if seconds >= 3600 {
-                        format!("{}h {:02}m", seconds / 3600, seconds % 3600 / 60)
-                    } else if seconds >= 60 {
-                        format!("{}m {:02}s", seconds / 60, seconds % 60)
-                    } else {
-                        format!("{seconds}s")
-                    };
-                    details.push_str(&format!(" · ~{time} left"));
-                }
+                .sample(Instant::now(), self.done(), self.total())
+                .map(|estimate| (estimate.bytes_per_second, estimate.remaining))
+        } else {
+            None
+        }
+    }
+
+    fn transfer_details(&self) -> String {
+        let mut details = String::new();
+        if let Some((rate, remaining)) = self.transfer_estimate() {
+            details.push_str(&format!(" · {}/s", crate::fold::format::size(rate)));
+            if let Some(remaining) = remaining {
+                let seconds = remaining.as_secs();
+                let time = if seconds >= 3600 {
+                    format!("{}h {:02}m", seconds / 3600, seconds % 3600 / 60)
+                } else if seconds >= 60 {
+                    format!("{}m {:02}s", seconds / 60, seconds % 60)
+                } else {
+                    format!("{seconds}s")
+                };
+                details.push_str(&format!(" · ~{time} left"));
             }
         }
         details

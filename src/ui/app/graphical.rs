@@ -4,6 +4,9 @@ use starkit::terminal_graphics::{
     protocol::{Component, Input, Scene, ServerMessage, Span, Viewport},
     session::Controller,
 };
+#[path = "rack_scene.rs"]
+mod rack_scene;
+use rack_scene::RackHit;
 
 #[derive(Default)]
 pub(super) struct State {
@@ -19,6 +22,7 @@ pub(super) struct State {
     pub(super) base_buffer: Option<Buffer>,
     pub(super) base_scrollbars: Vec<Component>,
     placements: Vec<starkit::terminal_graphics::placement::Placement>,
+    rack_hits: Vec<(Rect, RackHit)>,
     viewport: Option<Viewport>,
     preserved_preview: Option<(u16, u16)>,
     pointer_capture: Option<starkit::terminal_graphics::placement::Placement>,
@@ -130,7 +134,7 @@ fn color(c: starkit::ratatui::style::Color, fallback: &str) -> String {
 /// renderer and pointer adapter share these placements, including modal layers.
 fn pixel_placements(
     regions: &Regions,
-    commander: bool,
+    _commander: bool,
     v: Viewport,
     modals: &[Rect],
     overlay: &[Span],
@@ -192,14 +196,7 @@ fn pixel_placements(
         if source.width == 0 || source.height == 0 || target.width == 0 || target.height == 0 {
             continue;
         }
-        if i == flexible && commander {
-            for (pane, target) in placement::split(target, metrics.gap)
-                .into_iter()
-                .enumerate()
-            {
-                result.push(Placement::new(pane_rect(source, pane).into(), target));
-            }
-        } else if deck && i == flexible + 1 {
+        if deck && i == flexible + 1 {
             for (source, target) in [preview, operations]
                 .into_iter()
                 .zip(placement::split(target, metrics.gap))
@@ -409,6 +406,19 @@ impl App {
                 .as_ref()
                 .is_some_and(|g| g.uses_pixel_layout())
         {
+            let hit = self
+                .graphical
+                .as_ref()
+                .unwrap()
+                .rack_hits
+                .iter()
+                .find(|(r, _)| r.contains((x, y).into()))
+                .map(|(_, hit)| *hit);
+            if let Some(hit) = hit {
+                self.rack_click(hit);
+                self.repaint = true;
+                return;
+            }
             if let Some(regions) = self.layout.last.as_ref() {
                 let pane = if self.commander {
                     usize::from(
@@ -453,6 +463,10 @@ impl App {
                     self.repaint = true;
                     return;
                 }
+            }
+            if self.rack_background_click(x, y) {
+                self.repaint = true;
+                return;
             }
         }
         if modifiers == starkit::crossterm::event::KeyModifiers::CONTROL.bits()
@@ -662,6 +676,11 @@ impl App {
             regions.rect_of(ModuleId::Preview),
             self.graphical.as_ref().unwrap().uses_pixel_layout(),
         );
+        let rack_image = self.graphical.as_ref().unwrap().uses_pixel_layout()
+            && regions.rect_of(ModuleId::Stack).width >= 100
+            && regions.rect_of(ModuleId::Stack).height >= 18
+            && regions.rect_of(ModuleId::Preview).height >= 14
+            && matches!(self.view.preview.as_deref(), Some(Preview::Image { .. }));
         let state = self.graphical.as_mut().unwrap();
         if let Some((id, png)) = state
             .thumbnail
@@ -719,7 +738,9 @@ impl App {
         }
         if let Some((id, png)) = &state.image {
             let mut rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
-            if pdf {
+            if rack_image {
+                rect = rack_scene::image_rect(regions.rect_of(ModuleId::Preview));
+            } else if pdf {
                 // Start at the top of the document body; reserve only the
                 // bottom caption row, matching the cell reader's placement.
                 rect = panels::preview::body(regions.rect_of(ModuleId::Preview));
@@ -1077,6 +1098,7 @@ impl Controller for App {
             .map(|(r, v)| (r.rect_of(ModuleId::Preview).height, v.rows));
         state.cell_mode = cells;
         state.placements.clear();
+        state.rack_hits.clear();
         state.pointer_capture = None;
         state.base_buffer = None;
         state.base_scrollbars.clear();
@@ -1210,6 +1232,9 @@ impl Controller for App {
     fn tick(&mut self) {
         let _chrome =
             starkit::chrome::frame::padding_scope(self.graphical.as_ref().unwrap().padded_chrome);
+        let _rack = panels::stack::rack_scope(
+            self.layout.native_rack && self.layout.last.as_ref().is_some_and(layout::rack_browser),
+        );
         App::tick(self);
         self.tick_video();
         let phase = self
@@ -1330,6 +1355,7 @@ impl Controller for App {
         let Some(regions) = self.layout.last.clone() else {
             return scene;
         };
+        let _rack = panels::stack::rack_scope(pixels && layout::rack_browser(&regions));
         use std::hash::{Hash, Hasher};
         let mut targets = std::collections::hash_map::DefaultHasher::new();
         self.view.active_dir.hash(&mut targets);
@@ -1802,6 +1828,9 @@ impl Controller for App {
             }
         }
         self.graphical_tree(&mut scene, &regions, viewport, modal);
+        if pixels {
+            self.rack_scene(&mut scene, &regions, (cw, ch));
+        }
         self.video_picker_scene(&mut scene);
         // Draw pixel scrollbars from the exact geometry used for pointer grabs.
         // Add before modal chrome so menus can cover the underlying track.
@@ -2016,6 +2045,14 @@ impl Controller for App {
                     clickable.extend(picker.pointer_regions(area));
                 }
             } else {
+                clickable.extend(
+                    self.graphical
+                        .as_ref()
+                        .unwrap()
+                        .rack_hits
+                        .iter()
+                        .map(|(r, _)| *r),
+                );
                 clickable.extend(self.tab_hits.iter().map(|(rect, _)| *rect));
                 let status = self.status_view(Instant::now());
                 for x in regions.status.x..regions.status.right() {
@@ -2215,6 +2252,9 @@ impl Controller for App {
     fn input(&mut self, input: Input) {
         let _chrome =
             starkit::chrome::frame::padding_scope(self.graphical.as_ref().unwrap().padded_chrome);
+        let _rack = panels::stack::rack_scope(
+            self.layout.native_rack && self.layout.last.as_ref().is_some_and(layout::rack_browser),
+        );
         if self.graphical.as_ref().unwrap().authorization.is_some() {
             use std::io::Write;
             let mut cancel = false;
@@ -5317,12 +5357,188 @@ mod tests {
     }
 
     #[test]
+    fn native_rack_controls_copy_to_the_clicked_pane_and_reveal_the_queue_cursor() {
+        fn click(app: &mut App, predicate: impl Fn(RackHit) -> bool) {
+            let rect = app
+                .graphical
+                .as_ref()
+                .unwrap()
+                .rack_hits
+                .iter()
+                .find(|(_, hit)| predicate(*hit))
+                .unwrap()
+                .0;
+            let (x, y) = physical_cell(app, rect.x + rect.width / 2, rect.y);
+            for action in ["down", "up"] {
+                Controller::input(
+                    app,
+                    Input::Pointer {
+                        pixel: None,
+                        action: action.into(),
+                        button: 0,
+                        x,
+                        y,
+                        modifiers: 0,
+                    },
+                );
+            }
+        }
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().pixel_layout = true;
+        let source = fake.fixture.path("projects/starwire");
+        let dest = fake.fixture.path("empty");
+        app.core.send(Command::RestoreCommander {
+            dirs: [source.clone(), dest.clone()],
+            active: 0,
+            enabled: true,
+        });
+        fake.pump();
+        app.tick();
+        let cursor = app
+            .view
+            .rows
+            .iter()
+            .position(|r| r.name == "README.md")
+            .unwrap();
+        app.core.send(Command::CursorTo(cursor));
+        fake.pump();
+        app.tick();
+        let viewport = Viewport {
+            columns: 160,
+            rows: 60,
+            width: 1600,
+            height: 1200,
+            generation: 1,
+        };
+        Controller::scene(&mut app, viewport);
+        click(&mut app, |hit| {
+            matches!(hit, RackHit::Pane(0, Action::Yank))
+        });
+        fake.pump();
+        app.tick();
+        Controller::scene(&mut app, viewport);
+        click(&mut app, |hit| {
+            matches!(hit, RackHit::Pane(1, Action::Paste))
+        });
+        fake.pump();
+        app.tick();
+        assert_eq!(
+            std::fs::read(dest.join("README.md")).unwrap(),
+            std::fs::read(source.join("README.md")).unwrap()
+        );
+        assert_eq!(app.active_pane, 1);
+        Controller::scene(&mut app, viewport);
+        // Removed per-pane header controls must not remain invisible targets.
+        let _padding = starkit::chrome::frame::padding_scope(true);
+        let pane = pane_rect(
+            app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack),
+            0,
+        );
+        let sort = starkit::chrome::header::slots(pane, &app.panel_words(ModuleId::Stack))
+            .into_iter()
+            .find(|(word, _)| matches!(word, panels::Word::Sort))
+            .unwrap()
+            .1;
+        let (x, y) = physical_cell(&app, sort.x, sort.y);
+        Controller::input(
+            &mut app,
+            Input::Pointer {
+                pixel: None,
+                action: "down".into(),
+                button: 0,
+                x,
+                y,
+                modifiers: 0,
+            },
+        );
+        assert!(!app.overlays.is_open());
+        for index in 0..9 {
+            let target = fake.home().join(format!("copy-{index}"));
+            std::fs::create_dir(&target).unwrap();
+            app.core.send(Command::QueueOperation {
+                kind: OpKind::Copy,
+                sources: vec![source.join("README.md")],
+                dest: Some(target),
+            });
+        }
+        fake.pump();
+        app.tick();
+        app.layout.focus_set(ModuleId::Operations);
+        app.ops_cursor = app.view.ops.len() - 1;
+        app.clamp_scrolls();
+        Controller::scene(&mut app, viewport);
+        let last = app.view.ops.len() - 1;
+        click(
+            &mut app,
+            |hit| matches!(hit, RackHit::Operation(i) if i == last),
+        );
+        assert_eq!(app.ops_cursor, last);
+        assert!(app.ops_scroll > 0);
+        let regions = app.layout.last.clone().unwrap();
+        assert_eq!(app.page_size() as usize, app.operations_visible(&regions));
+        let above = app.ops_scroll;
+        let queue = app.rack_queue_rect(&regions).unwrap();
+        app.scroll_at(&regions, queue.x + 2, queue.y, -3);
+        app.clamp_scrolls();
+        assert!(app.ops_scroll < above);
+        Controller::scene(&mut app, viewport);
+        assert!(app
+            .graphical
+            .as_ref()
+            .unwrap()
+            .rack_hits
+            .iter()
+            .any(|(_, hit)| matches!(hit, RackHit::Operation(i) if *i == app.ops_cursor)));
+        click(&mut app, |hit| {
+            matches!(hit, RackHit::Word(panels::Word::Filter))
+        });
+        for ch in "README".chars() {
+            Controller::input(
+                &mut app,
+                Input::Key {
+                    code: format!("char:{ch}"),
+                    modifiers: 0,
+                },
+            );
+        }
+        fake.pump();
+        app.tick();
+        let filtered = Controller::scene(&mut app, viewport);
+        assert_eq!(app.view.rows.len(), 1);
+        assert_eq!(app.view.rows[0].name, "README.md");
+        assert!(filtered.components.iter().any(|component| matches!(component,
+            Component::Surface { surface, .. } if surface.nodes.iter().any(|node| matches!(node,
+                starkit::native_surface::Primitive::Text { text, .. } if text == "FILTER / README│")))));
+        Controller::input(
+            &mut app,
+            Input::Key {
+                code: "escape".into(),
+                modifiers: 0,
+            },
+        );
+        fake.pump();
+        app.tick();
+        assert!(app.filter.is_none());
+        assert!(app.view.rows.len() > 1);
+    }
+
+    #[test]
     fn rack_native_frames_preserve_pointer_projection_and_cell_fallback() {
         use starkit::terminal_graphics::renderer::{RenderMessage, Renderer};
         let mut renderer = Renderer::spawn().unwrap();
         for theme in ["terminal", "catppuccin-mocha", "catppuccin-latte"] {
             let mut cfg = Config::default();
             cfg.ui.theme = theme.into();
+            cfg.preview.image_scale = crate::config::Scale::Smooth;
             let (core, fake) = crate::ui::fake::handle(cfg.core());
             let mut app = App::new(
                 core,
@@ -5333,18 +5549,31 @@ mod tests {
             );
             app.enable_graphical();
             app.graphical.as_mut().unwrap().pixel_layout = true;
+            let pictures = fake.fixture.path("pictures");
+            for name in ["Exports", "RAW"] {
+                std::fs::create_dir(pictures.join(name)).unwrap();
+            }
+            std::fs::copy(pictures.join("harbour.png"), pictures.join("blue-hour.png")).unwrap();
+            std::fs::copy(
+                fake.fixture.path("projects/starwire/README.md"),
+                pictures.join("field-notes.md"),
+            )
+            .unwrap();
             app.core.send(Command::RestoreCommander {
-                dirs: [
-                    fake.fixture.path("projects/starwire"),
-                    fake.home().to_path_buf(),
-                ],
+                dirs: [pictures.clone(), fake.home().to_path_buf()],
                 active: 0,
                 enabled: true,
             });
             fake.pump();
             app.tick();
-            let readme = fake.fixture.path("projects/starwire/README.md");
-            app.core.send(Command::CursorTo(3));
+            let readme = pictures.join("harbour.png");
+            let cursor = app
+                .view
+                .rows
+                .iter()
+                .position(|r| r.name == "harbour.png")
+                .unwrap();
+            app.core.send(Command::CursorTo(cursor));
             app.core.send(Command::ToggleMarkPath(readme.clone()));
             app.core.send(Command::Preview(readme.clone()));
             app.core.send(Command::QueueOperation {
@@ -5354,13 +5583,14 @@ mod tests {
             });
             fake.pump();
             app.tick();
-            let readme = fake.fixture.path("projects/starwire/README.md");
+            let readme = pictures.join("harbour.png");
             if !app.core.state().selection.is_marked(&readme) {
                 app.core.send(Command::ToggleMarkPath(readme));
                 fake.pump();
                 app.tick();
             }
             for (columns, rows, width, height) in [
+                (140, 57, 1400, 1147),
                 (160, 60, 1600, 1200),
                 (80, 36, 800, 720),
                 (60, 21, 600, 420),
@@ -5372,11 +5602,19 @@ mod tests {
                     height,
                     generation: 1,
                 };
-                let scene = Controller::scene(&mut app, viewport);
+                let mut scene = Controller::scene(&mut app, viewport);
+                if app.layout.preview_open {
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while app.graphical.as_ref().unwrap().image.is_none() {
+                        assert!(Instant::now() < deadline);
+                        std::thread::sleep(Duration::from_millis(10));
+                        scene = Controller::scene(&mut app, viewport);
+                    }
+                }
                 let regions = app.layout.last.clone().unwrap();
                 let preview = regions.rect_of(ModuleId::Preview);
                 let operations = regions.rect_of(ModuleId::Operations);
-                assert_eq!(preview.y == operations.y, columns == 160);
+                assert_eq!(preview.y == operations.y, columns >= 100);
                 for placement in &scene.placements {
                     placement.validate(viewport).unwrap();
                 }

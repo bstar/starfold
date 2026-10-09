@@ -50,11 +50,16 @@ retain a full-width Preview. The cell presentation keeps its established layout
 and palette. [Native Classic capture](graphical/treatments/native-classic.png),
 [Mocha](graphical/treatments/native-mocha.png) and
 [Latte](graphical/treatments/native-latte.png) show actual Rust-rendered fixture scenes.
+Commander uses a shared header, labeled file columns and pane-specific action
+buttons. Image inspection places the preview beside cached file metadata;
+Operations has transfer/ETA readouts, two-line queue entries and segmented progress.
+Pane actions, queue scrolling and pointer selection use the same controller geometry.
 
 Reconnect after changing the terminal font family. Installed fonts supply Unicode
 fallback.
 BMP image previews are enabled in both terminal modes.
-In graphical image previews, click **scale** in the Preview header or press `z`
+In graphical image previews, click **Scale** in the inspection toolbar (the Preview
+header in compact windows) or press `z`
 with Preview focused to cycle **1x**, **pixels**, and **smooth**. Pixels enlarges
 at whole-number factors with nearest-neighbor sampling; 1x never enlarges.
 Oversized images fit within the preview; large sources still use bounded

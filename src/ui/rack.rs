@@ -282,7 +282,14 @@ pub fn workspace(rect: Rect, cell: (u16, u16), p: &Colors, view: Workspace<'_>) 
         font,
         false,
     );
-    let display = R::new(8, ch, s.width.saturating_sub(16), 2 * ch);
+    let display_rows = rect.height.saturating_sub(3).min(5);
+    let roomy = rect.height >= 9;
+    let display = R::new(
+        8,
+        ch + if roomy { 6 } else { 0 },
+        s.width.saturating_sub(16),
+        display_rows * ch - if roomy { 10 } else { 0 },
+    );
     bevel(&mut s, display, p, true);
     s.fill(
         R::new(
@@ -294,7 +301,12 @@ pub fn workspace(rect: Rect, cell: (u16, u16), p: &Colors, view: Workspace<'_>) 
         &hex(p.inset),
         0,
     );
-    let digit_width = (ch * 3 / 4).max(6);
+    let digit_width = (if roomy {
+        display.height * 2 / 5
+    } else {
+        ch * 3 / 4
+    })
+    .max(6);
     let text = format!("{count:02}");
     let digits_width = (text.len() as u16 * digit_width).min(s.width / 4);
     let patterns = [
@@ -303,8 +315,11 @@ pub fn workspace(rect: Rect, cell: (u16, u16), p: &Colors, view: Workspace<'_>) 
     let unit = (digits_width / (text.len() as u16).max(1)).max(3);
     for (i, digit) in text.bytes().enumerate() {
         let x = 14 + i as u16 * unit;
-        let y = ch + 5;
-        let h = (2 * ch).saturating_sub(10);
+        let y = display.y + if roomy { 10 } else { 5 };
+        let h = display
+            .height
+            .saturating_sub(if roomy { 36 } else { 10 })
+            .max(8);
         let w = unit.saturating_sub(5).max(2);
         let segments = [
             R::new(x + 1, y, w, 2),
@@ -327,16 +342,39 @@ pub fn workspace(rect: Rect, cell: (u16, u16), p: &Colors, view: Workspace<'_>) 
             );
         }
     }
-    let x = digits_width + 30;
+    let x = digits_width + 40;
+    let line_y = if roomy {
+        display.y + display.height / 2 - ch
+    } else {
+        ch
+    };
     let volume_width = if s.width >= 900 && space.is_some() {
         230.min(s.width / 4)
     } else {
         0
     };
     let width = s.width.saturating_sub(x + volume_width + 24);
+    if rect.height >= 9 {
+        mono(
+            &mut s,
+            R::new(14, display.y + display.height - ch, digits_width + 10, ch),
+            "MARKED",
+            p.accent,
+            font.saturating_sub(4).max(1),
+            false,
+        );
+        mono(
+            &mut s,
+            R::new(x, line_y.saturating_sub(ch), width, ch),
+            mode,
+            p.accent,
+            font.saturating_sub(4).max(1),
+            false,
+        );
+    }
     mono(
         &mut s,
-        R::new(x, ch, width, ch),
+        R::new(x, line_y, width, ch),
         location,
         p.accent,
         font,
@@ -344,15 +382,12 @@ pub fn workspace(rect: Rect, cell: (u16, u16), p: &Colors, view: Workspace<'_>) 
     );
     mono(
         &mut s,
-        R::new(x, 2 * ch, width, ch),
-        format!(
-            "{mode} · {}",
-            if marked.is_empty() {
-                "0 marked"
-            } else {
-                marked
-            }
-        ),
+        R::new(x, line_y + ch, width, ch),
+        if marked.is_empty() {
+            "0 marked"
+        } else {
+            marked
+        },
         p.muted,
         font.saturating_sub(2).max(1),
         false,
@@ -364,7 +399,7 @@ pub fn workspace(rect: Rect, cell: (u16, u16), p: &Colors, view: Workspace<'_>) 
         let x = s.width - volume_width - 16;
         mono(
             &mut s,
-            R::new(x, ch, volume_width, ch),
+            R::new(x, line_y, volume_width, ch),
             format!("{} FREE", crate::fold::format::size(available)),
             p.accent,
             font.saturating_sub(2).max(1),
@@ -376,7 +411,7 @@ pub fn workspace(rect: Rect, cell: (u16, u16), p: &Colors, view: Workspace<'_>) 
             let lit = u128::from(i) * u128::from(total) < u128::from(used) * u128::from(segments);
             for j in 0..3.min(ch.saturating_sub(5) / 4) {
                 s.fill(
-                    R::new(x + i * 6, 2 * ch + 3 + j * 4, 4, 2),
+                    R::new(x + i * 6, line_y + ch + 3 + j * 4, 4, 2),
                     &hex(if lit {
                         p.accent
                     } else {

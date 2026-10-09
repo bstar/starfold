@@ -17,6 +17,20 @@ use super::{empty, fit, rgb, width_of, words, ModuleId, HEADING};
 use crate::ui::theme::Theme;
 use crate::ui::{Bar, Bars};
 
+thread_local! {
+    static RACK_COLUMNS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+pub struct RackScope(bool);
+impl Drop for RackScope {
+    fn drop(&mut self) {
+        RACK_COLUMNS.set(self.0);
+    }
+}
+/// Match the full native browser's reserved rows across drawing and input.
+pub fn rack_scope(enabled: bool) -> RackScope {
+    RackScope(RACK_COLUMNS.replace(enabled))
+}
+
 /// Whether a row carries a mark glyph, and which.
 ///
 /// `None` is not "unmarked" -- it is "the column does not apply here". A
@@ -132,9 +146,14 @@ pub fn split(body: Rect, depth: usize, fold_rows: u16) -> Split {
         height: rule_rows.min(body.height.saturating_sub(crumbs.height)),
         ..body
     };
+    // Graphical column labels and the summary/toolbar share the geometry
+    // used by scrolling, pointer selection and file dragging.
+    let rack = RACK_COLUMNS.get() && body.height >= 12;
     let list = Rect {
-        y: rule.y + rule.height,
-        height: body.height.saturating_sub(crumbs.height + rule.height),
+        y: rule.y + rule.height + u16::from(rack),
+        height: body
+            .height
+            .saturating_sub(crumbs.height + rule.height + if rack { 4 } else { 0 }),
         ..body
     };
     Split {

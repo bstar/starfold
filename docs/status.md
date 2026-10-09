@@ -34,9 +34,11 @@ The [Commander visual target](graphical/treatments/README.md) is an interactive,
 buildless design study with bundled screenshots and fonts. Study 03 follows
 STAR/AMP's Option 1: beveled slate racks, recessed directory lists, lime readouts,
 and matching inspection and operations modules around two equal panes. The native
-renderer now implements the rack palette, beveled chrome, marked-file workspace
-readout and responsive lower deck. The study remains the target for further
-spacing and content refinements. Automated scene rendering and pointer checks
+renderer implements the rack proportions, large marked-file workspace display,
+shared Commander header, file columns, pane action buttons, image inspection card,
+and queue readouts with measured throughput, ETA and segmented progress. The
+study remains the visual target; specialized document and media content retain
+their existing layouts. Automated scene rendering and pointer checks
 cover light/dark themes and the terminal floor; desktop review remains. The older separate GPUI
 frontend remains on `experiment/graphical-presentation`; the active renderer uses
 STAR/KIT's `tiny-skia` and `cosmic-text` inside the terminal.
