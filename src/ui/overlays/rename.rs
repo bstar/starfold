@@ -34,6 +34,7 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct Rename {
+    pub recovery: bool,
     pub from: PathBuf,
     pub input: TextInput,
     /// Why the last submission was refused.
@@ -42,6 +43,14 @@ pub struct Rename {
 }
 
 impl Rename {
+    pub fn footer(&self) -> &'static str {
+        if self.recovery {
+            "enter restore · esc cancel"
+        } else {
+            FOOTER
+        }
+    }
+
     pub fn new(from: PathBuf) -> Self {
         let name = from
             .file_name()
@@ -51,6 +60,7 @@ impl Rename {
         let mut input = TextInput::single().with_text(name);
         input.set_cursor(cursor);
         Self {
+            recovery: false,
             from,
             input,
             error: None,
@@ -147,13 +157,15 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, r: &mut Rename) -> Op
         buf,
         &overlay::Overlay {
             theme: core,
-            title: if r.detail.is_some() {
+            title: if r.recovery {
+                "restore with another name"
+            } else if r.detail.is_some() {
                 "rename conflict"
             } else {
                 "rename"
             },
             detail: r.detail.as_deref(),
-            footer: Some(FOOTER),
+            footer: Some(r.footer()),
         },
     );
     if inner.width == 0 || inner.height == 0 {

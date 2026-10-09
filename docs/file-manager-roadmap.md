@@ -100,7 +100,7 @@ unreadable file, cancellation, and actions on a result.
 Implementation and the [milestone 2b manual checklist](content-search-validation.md)
 are available for validation before starting milestone 3.
 
-### 3. Recovery after execution
+### 3. Recovery after execution (implemented; platform validation pending)
 
 Add a way to inspect and restore items STAR/FOLD put in Trash, including a
 clear collision prompt when the original path exists. Investigate the Trash
@@ -115,6 +115,17 @@ STAR/FOLD; session-only rename/move undo may be ephemeral.
 a restore collision; rename or move and undo; modify the destination externally
 and see undo safely refused. Automated tests use a fake Trash adapter; a real
 platform Trash check is explicit and disposable.
+
+Implementation and the [milestone 3 manual checklist](recovery-validation.md)
+are available for validation before starting milestone 4. Trash and Undo actions
+live in the Recovery submenu; Ctrl+Z opens session undo. Recoveries use the
+operations queue and never overwrite existing files. Linux recovery uses
+freedesktop metadata across restarts; macOS keeps a private journal for files
+STAR/FOLD trashes after this implementation. Undo records the last 100 eligible
+items in this session and rejects changed files, changed directory contents,
+occupied original names, and replaced original parent directories. Overwrites,
+merges, incomplete operations and permanent deletes are excluded. Cross-device
+recovery stages a complete copy before publication and reports cleanup failures.
 
 ### 4. Bulk selection and rename
 

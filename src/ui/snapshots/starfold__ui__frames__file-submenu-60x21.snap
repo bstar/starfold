@@ -21,5 +21,5 @@ expression: submenu
 ╔═│─────────────────────│══════════════════════════════════╗
 ║ │  Tabs…              │                           remove ║
 ║ │  Appearance       › │thing queued                      ║
-╚═└─────────────────────┘══════════════════════════════════╝
-? help  / filter  space mark  enter open  y yank  p   ~  off
+╚═│  Recovery         › │══════════════════════════════════╝
+? └─────────────────────┘ark  enter open  y yank  p   ~  off

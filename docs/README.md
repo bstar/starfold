@@ -18,6 +18,8 @@ grouped by what you are trying to do.
 ## Going further
 
 - [Intelligent previews, file icons and archive actions](previews-and-archives.md)
+- [Archive formats](archive-formats.md): verified fixtures, codec limits and editing support.
+- [Terminal graphics](terminal-graphics.md): native presentation, SSH, media and pointer controls.
 
 - [Themes](themes.md): the format, your own themes, and the `[fold]` roles.
 - [On the command line](cli.md): `starfold list`, which prints a directory
@@ -33,8 +35,11 @@ grouped by what you are trying to do.
   and directories in Fold and Commander.
 - [Content search validation](content-search-validation.md): milestone 2b checks
   nested text matches, skips, cancellation, and result actions.
+- [Recovery validation](recovery-validation.md): Trash restore and safe session undo,
+  including platform limits and disposable checks.
 - [Status](status.md): what is done, what is in progress, and what is not
   started.
+- [Commander visual target](graphical/treatments/README.md): interactive redesign study and captures.
 - [Contributing](../CONTRIBUTING.md), [Security](../SECURITY.md),
   [Changelog](../CHANGELOG.md).
 

@@ -64,6 +64,11 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone)]
 pub enum Command {
     SyncArchiveEdits,
+    LoadRecovery(super::recovery::Mode),
+    QueueRecovery {
+        record: super::recovery::Record,
+        target: PathBuf,
+    },
     LoadPlaces(PathBuf),
     RefreshPlaces,
     UnmountPlace {
@@ -285,6 +290,7 @@ impl Note {
 /// module doc.
 #[derive(Debug, Clone)]
 pub enum Event {
+    Recovery,
     Places,
     Listing(PathBuf),
     Stack,

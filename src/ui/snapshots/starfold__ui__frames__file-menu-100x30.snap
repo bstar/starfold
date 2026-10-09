@@ -1,6 +1,5 @@
 ---
 source: src/ui/frames.rs
-assertion_line: 720
 expression: "render(&mut app, w, h)"
 ---
 ╔═ S T A R / F O L D ══════════════════════════════════════════════════════════════════════ stack ═╗
@@ -22,8 +21,8 @@ expression: "render(&mut app, w, h)"
 ╚═│─────────────────────│ree / 500.0 GB total══════════════════════════════════════════════════════╝
 ╔═│  Tabs…              │══════════════════════════════════════════════════════════════════════════╗
 ║ │  Appearance       › │                                                                    close ║
-║ └─────────────────────┘                                                            File metadata ║
-║ Type: application/octet-stream                                                                   ║
+║ │  Recovery         › │                                                            File metadata ║
+║ └─────────────────────┘-stream                                                                   ║
 ║ Size: 256 B                                                                                      ║
 ║ Permissions: -rw-r--r--                                                                          ║
 ║ Modified: 2026-09-10T12:00:00Z                                                                   ║

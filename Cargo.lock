@@ -3748,6 +3748,7 @@ dependencies = [
  "mime_guess",
  "mp4parse",
  "nucleo-matcher",
+ "objc2-foundation",
  "pdf-extract",
  "percent-encoding",
  "portable-pty",
@@ -3851,7 +3852,7 @@ dependencies = [
 [[package]]
 name = "starkit"
 version = "0.3.0"
-source = "git+https://github.com/bstar/starkit?rev=8c3badd41ccda68f0bff27b7af045c28776d090f#8c3badd41ccda68f0bff27b7af045c28776d090f"
+source = "git+https://github.com/bstar/starkit?rev=9245a2971ca46d95aec23acc5ab0e643ce849077#9245a2971ca46d95aec23acc5ab0e643ce849077"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

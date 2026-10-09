@@ -123,6 +123,7 @@ _everywhere_
 | `dd`           | delete (confirm) |
 | `X`            | resume queue |
 | `ctrl+x`       | stop the running op |
+| `ctrl+z`       | undo history |
 
 ## queue
 

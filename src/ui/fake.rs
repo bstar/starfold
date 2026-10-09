@@ -372,6 +372,75 @@ mod tests {
     }
 
     #[test]
+    fn rename_undo_uses_the_real_queue_and_is_consumed_only_after_success() {
+        use crate::fold::recovery::Mode;
+        let (handle, fake) = handle(FoldConfig::default());
+        let original = fake.fixture.path("blob.bin");
+        let renamed = fake.fixture.path("renamed.bin");
+        handle.send(Command::QueueRename {
+            from: original.clone(),
+            to: renamed.clone(),
+        });
+        fake.pump();
+        assert!(!original.exists());
+        assert!(renamed.exists());
+        assert_eq!(fake.state().undo.len(), 1);
+        handle.send(Command::LoadRecovery(Mode::Undo));
+        fake.pump();
+        let record = fake.state().recovery_items[0].record.clone();
+        handle.send(Command::QueueRecovery {
+            record,
+            target: original.clone(),
+        });
+        assert!(fake
+            .state()
+            .queue
+            .iter()
+            .any(|op| op.title().starts_with("UNDO")));
+        fake.pump();
+        assert!(original.exists());
+        assert!(!renamed.exists());
+        assert!(fake.state().undo.is_empty());
+        assert!(fake
+            .state()
+            .queue
+            .iter()
+            .all(|op| op.status == OpStatus::Done));
+    }
+
+    #[test]
+    fn changed_move_destination_fails_undo_and_retains_its_recovery_record() {
+        use crate::fold::recovery::Mode;
+        let (handle, fake) = handle(FoldConfig::default());
+        let original = fake.fixture.path("blob.bin");
+        let dest = fake.fixture.path("empty");
+        handle.send(Command::QueueOperation {
+            kind: crate::fold::ops::OpKind::Move,
+            sources: vec![original.clone()],
+            dest: Some(dest.clone()),
+        });
+        fake.pump();
+        assert_eq!(fake.state().undo.len(), 1);
+        let moved = dest.join("blob.bin");
+        std::fs::write(&moved, b"edited externally").unwrap();
+        handle.send(Command::LoadRecovery(Mode::Undo));
+        fake.pump();
+        let record = fake.state().recovery_items[0].record.clone();
+        handle.send(Command::QueueRecovery {
+            record,
+            target: original.clone(),
+        });
+        fake.pump();
+        assert!(!original.exists());
+        assert_eq!(std::fs::read(&moved).unwrap(), b"edited externally");
+        assert_eq!(fake.state().undo.len(), 1);
+        let state = fake.state();
+        let operation = state.queue.iter().last().unwrap();
+        assert_eq!(operation.status, OpStatus::Failed);
+        assert!(operation.failure.as_ref().unwrap().contains("changed"));
+    }
+
+    #[test]
     fn pasting_a_search_result_rejects_a_replacement_after_search_closes() {
         let (handle, fake) = handle(FoldConfig::default());
         handle.send(Command::StartSearch("README.md".into()));

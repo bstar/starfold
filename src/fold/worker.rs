@@ -59,6 +59,7 @@ impl Senders {
                 | Job::RefreshPlaces
                 | Job::UnmountPlace { .. }
                 | Job::Create { .. }
+                | Job::LoadRecovery { .. }
         ) {
             self.dispatch(job);
             return;
@@ -71,6 +72,10 @@ impl Senders {
         if let Err(error) = sender.try_send(job) {
             let message = "Places worker is busy or unavailable; retry the action".to_string();
             let done = match error.into_inner() {
+                Job::LoadRecovery { generation, .. } => Done::RecoveryLoaded {
+                    generation,
+                    result: Err("Recovery worker is busy or unavailable; refresh to retry".into()),
+                },
                 Job::SaveBookmarks { revision, .. } => Done::BookmarksSaved {
                     revision,
                     result: Err(message),
@@ -131,6 +136,11 @@ pub enum Job {
     UnlockArchive {
         location: PathBuf,
         options: starfold_archive_protocol::Options,
+    },
+    LoadRecovery {
+        generation: u64,
+        mode: super::recovery::Mode,
+        undo: Vec<super::recovery::Record>,
     },
     ClosePreview,
     LoadPlaces(PathBuf),
@@ -198,6 +208,7 @@ pub enum Job {
     /// Execute a planned op. `progress` is the same `Arc` the `Op` in
     /// `State` holds, which is how the status row sees the bytes move.
     Run {
+        recovery: Option<Arc<super::recovery::Guard>>,
         op: OpId,
         kind: OpKind,
         plan: Plan,
@@ -238,6 +249,10 @@ pub enum Done {
         editable: bool,
         generation: u64,
         preview: Preview,
+    },
+    RecoveryLoaded {
+        generation: u64,
+        result: Result<Vec<super::recovery::Item>, String>,
     },
     StartupListed {
         requested: PathBuf,
@@ -455,6 +470,14 @@ pub fn perform_io(
             }
             IoOutcome::Done(Done::Listed(listing::read(&location, &cfg.list)))
         }
+        Job::LoadRecovery {
+            generation,
+            mode,
+            undo,
+        } => IoOutcome::Done(Done::RecoveryLoaded {
+            generation,
+            result: super::recovery::list(mode, undo, cfg.recovery_dir.as_deref()),
+        }),
         Job::LoadPlaces(path) => IoOutcome::Done(Done::PlacesLoaded {
             bookmarks: places::load_bookmarks(&path),
             locations: places::discover_locations(),
@@ -709,6 +732,7 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
             Some(Done::Planned { op, result })
         }
         Job::Run {
+            recovery,
             op,
             kind,
             plan,
@@ -730,14 +754,40 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
                 preserve_times: cfg.preserve_times,
                 force_copy: false,
             };
-            let outcome = ops::exec::run_with_names(
-                kind,
-                &plan,
-                policy,
-                &options,
-                &progress,
-                &rename_targets,
-            );
+            let mut outcome = if let Some(guard) = &recovery {
+                super::recovery::run(guard, &plan.dest, &progress)
+            } else if kind == OpKind::Delete(ops::DeleteHow::Trash)
+                && !plan
+                    .sources
+                    .iter()
+                    .any(|path| super::location::is_archive(path))
+            {
+                let mut outcome = Outcome::default();
+                progress.set_total(plan.sources.len() as u64);
+                for source in &plan.sources {
+                    if plan.missing.contains(source) {
+                        outcome.skipped += 1;
+                        continue;
+                    }
+                    if progress.is_cancelled() {
+                        outcome.cancelled = true;
+                        break;
+                    }
+                    match super::recovery::trash_one(source, cfg.recovery_dir.as_deref()) {
+                        Ok(()) => {
+                            outcome.done += 1;
+                            progress.add(1);
+                        }
+                        Err(error) => outcome.failed.push((source.clone(), error)),
+                    }
+                }
+                outcome
+            } else {
+                ops::exec::run_with_names(kind, &plan, policy, &options, &progress, &rename_targets)
+            };
+            if recovery.is_none() {
+                outcome.reversible = super::recovery::receipt(kind, &plan, &outcome);
+            }
             for (path, reason) in &outcome.failed {
                 tracing::warn!(operation = ?kind, path = %path.display(), %reason, "file operation failed");
             }
@@ -758,6 +808,7 @@ pub fn perform_ops(job: Job, cfg: &FoldConfig) -> Option<Done> {
         // Not ops work: `spawn_ops`'s loop forwards everything else before
         // this is called.
         Job::UnlockArchive { .. }
+        | Job::LoadRecovery { .. }
         | Job::LoadPlaces(_)
         | Job::RefreshPlaces
         | Job::SaveBookmarks { .. }
@@ -1243,6 +1294,7 @@ mod tests {
         ));
         let finished = perform_ops(
             Job::Run {
+                recovery: None,
                 op: OpId(1),
                 kind: OpKind::Delete(ops::DeleteHow::Permanent),
                 plan: Plan::default(),
@@ -1454,6 +1506,7 @@ mod tests {
             expected: vec![],
         });
         senders.dispatch(Job::Run {
+            recovery: None,
             op: OpId(0),
             kind: OpKind::Copy,
             plan: Plan::default(),

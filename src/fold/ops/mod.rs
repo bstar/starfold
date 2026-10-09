@@ -145,6 +145,7 @@ pub struct Plan {
 /// other thirteen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Outcome {
+    pub reversible: Vec<super::recovery::Record>,
     pub done: usize,
     pub skipped: usize,
     pub failed: Vec<(PathBuf, String)>,
@@ -170,6 +171,7 @@ pub enum OpStatus {
 /// One entry in the queue: what to do, to which files, and how it is going.
 pub struct Op {
     pub archive_options: starfold_archive_protocol::Options,
+    pub recovery: Option<Arc<super::recovery::Guard>>,
     pub origin_tab: Option<super::tab::TabId>,
     pub origin_name: String,
     pub id: OpId,
@@ -282,6 +284,7 @@ impl Queue {
         self.next_id += 1;
         self.ops.push(Op {
             archive_options: Default::default(),
+            recovery: None,
             origin_tab: None,
             origin_name: String::new(),
             id,
@@ -415,6 +418,7 @@ mod tests {
     fn op(id: u64, status: OpStatus) -> Op {
         Op {
             archive_options: Default::default(),
+            recovery: None,
             origin_tab: None,
             origin_name: String::new(),
             id: OpId(id),

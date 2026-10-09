@@ -28,6 +28,7 @@ pub mod conflict;
 pub mod context;
 pub mod create;
 pub mod failure;
+pub mod recovery;
 pub mod rename;
 pub mod search;
 pub mod sort;
@@ -75,6 +76,7 @@ pub enum Overlay {
     Unsaved(String),
     TrashWarning(trash_warning::Prompt),
     Create(create::Create),
+    Recovery(recovery::Browser),
     Rename(rename::Rename),
     Search(search::Search),
     Sort(sort::Picker),
@@ -104,7 +106,9 @@ impl Overlays {
         };
         let footer = match overlay {
             Overlay::Destination(d) => Some(d.footer()),
-            Overlay::Rename(_) | Overlay::ConflictRename(_) => Some(rename::FOOTER),
+            Overlay::Rename(form) => Some(form.footer()),
+            Overlay::ConflictRename(_) => Some(rename::FOOTER),
+            Overlay::Recovery(browser) => Some(browser.footer()),
             Overlay::Create(_) => Some(create::FOOTER),
             Overlay::Search(_) => Some(search::FOOTER),
             Overlay::Failure(f) | Overlay::Update(f) => Some(failure::footer(f)),
@@ -160,6 +164,7 @@ impl Overlays {
             Overlay::Unsaved(_) => unsaved::layout(area)?,
             Overlay::TrashWarning(_) => trash_warning::layout(area)?,
             Overlay::Create(_) => create::rect(area),
+            Overlay::Recovery(browser) => browser.bounds(area),
             Overlay::Rename(_) | Overlay::ConflictRename(_) => rename::rect(area),
             Overlay::Search(_) => search::rect(area),
             Overlay::Sort(_) => sort::Picker::rect(area),
@@ -171,6 +176,8 @@ impl Overlays {
 /// What handling a key or a click did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
+    Recover(crate::fold::recovery::Record, PathBuf),
+    RefreshRecovery(crate::fold::recovery::Mode),
     Context(context::Target, context::Action),
     Drop(crate::fold::ops::OpKind),
     Operation(context::Request),
@@ -289,6 +296,14 @@ impl Overlays {
         self.current = Some(Overlay::Destination(context::Destination::new(request)));
     }
 
+    pub fn open_recovery(&mut self, mode: crate::fold::recovery::Mode) {
+        self.current = Some(Overlay::Recovery(recovery::Browser::new(mode)));
+    }
+    pub fn sync_recovery(&mut self, state: &crate::fold::State) {
+        if let Some(Overlay::Recovery(browser)) = self.current.as_mut() {
+            browser.sync(state);
+        }
+    }
     pub fn open_rename(&mut self, from: PathBuf) {
         self.current = Some(Overlay::Rename(rename::Rename::new(from)));
     }
@@ -326,6 +341,13 @@ impl Overlays {
             Some(Overlay::ConflictRename(sequence)) => {
                 sequence.form.error = None;
                 &mut sequence.form.input
+            }
+            Some(Overlay::Recovery(browser)) => {
+                let Some(form) = browser.rename.as_mut() else {
+                    return false;
+                };
+                form.error = None;
+                &mut form.input
             }
             _ => return false,
         };
@@ -369,6 +391,11 @@ impl Overlays {
         let overlay = self.current.as_mut().expect("checked above");
         let mut start_rename = None;
         let (close, answer) = match overlay {
+            Overlay::Recovery(browser) => match browser.handle(k) {
+                recovery::Action::Taken => (false, Answer::Consumed),
+                recovery::Action::Refresh => (false, Answer::RefreshRecovery(browser.mode)),
+                recovery::Action::Submit(record, target) => (true, Answer::Recover(record, target)),
+            },
             Overlay::Drop(m) => match k.code {
                 KeyCode::Char('c') => (true, Answer::Drop(crate::fold::ops::OpKind::Copy)),
                 KeyCode::Char('m') => (true, Answer::Drop(crate::fold::ops::OpKind::Move)),
@@ -570,9 +597,9 @@ impl Overlays {
         // transitions as keys. No duplicate operation/confirmation logic.
         let footer = match self.current.as_ref().unwrap() {
             Overlay::Destination(d) => Some((d.bounds(area), d.footer())),
-            Overlay::Rename(_) | Overlay::ConflictRename(_) => {
-                Some((rename::rect(area), rename::FOOTER))
-            }
+            Overlay::Rename(form) => Some((rename::rect(area), form.footer())),
+            Overlay::Recovery(browser) => Some((browser.bounds(area), browser.footer())),
+            Overlay::ConflictRename(_) => Some((rename::rect(area), rename::FOOTER)),
             Overlay::Create(_) => Some((create::rect(area), create::FOOTER)),
             Overlay::Search(_) => Some((search::rect(area), search::FOOTER)),
             Overlay::Failure(f) | Overlay::Update(f) => {
@@ -588,6 +615,20 @@ impl Overlays {
         let overlay = self.current.as_mut().expect("checked above");
         let mut start_rename = None;
         let (close, answer) = match overlay {
+            Overlay::Recovery(browser) => {
+                let r = browser.bounds(area);
+                if !inside(r, x, y) {
+                    (true, Answer::Closed)
+                } else {
+                    if browser.rename.is_none() && y > r.y && y < r.bottom().saturating_sub(1) {
+                        let rows = (r.height.saturating_sub(2) as usize / 2).max(1);
+                        let start = browser.cursor.saturating_sub(rows - 1);
+                        browser.cursor = (start + (y - r.y - 1) as usize / 2)
+                            .min(browser.items.len().saturating_sub(1));
+                    }
+                    (false, Answer::Consumed)
+                }
+            }
             Overlay::Drop(m) => match m.popup.click(area, x, y) {
                 super::popup::Answer::Selected(context::Action::Copy) => {
                     (true, Answer::Drop(crate::fold::ops::OpKind::Copy))
@@ -743,6 +784,16 @@ impl Overlays {
     /// prompt hold a list long enough to scroll.
     pub fn scroll(&mut self, up: bool) {
         match self.current.as_mut() {
+            Some(Overlay::Recovery(browser)) => {
+                browser.cursor = if up {
+                    browser.cursor.saturating_sub(3)
+                } else {
+                    browser
+                        .cursor
+                        .saturating_add(3)
+                        .min(browser.items.len().saturating_sub(1))
+                };
+            }
             Some(Overlay::Help { scroll }) => {
                 *scroll = if up {
                     scroll.saturating_sub(3)
@@ -783,6 +834,7 @@ impl Overlays {
         bars: &mut Bars,
     ) -> Option<(u16, u16)> {
         match self.current.as_mut()? {
+            Overlay::Recovery(browser) => recovery::render(area, buf, theme, browser),
             Overlay::Drop(m) => {
                 m.render(area, buf, theme);
                 None
@@ -903,6 +955,30 @@ mod tests {
 
     fn key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    #[test]
+    #[cfg(feature = "terminal-graphics")]
+    fn recovery_graphical_bounds_and_footer_follow_collision_dialog() {
+        let area = Rect::new(0, 0, 100, 30);
+        let mut overlays = Overlays::default();
+        overlays.open_recovery(crate::fold::recovery::Mode::Undo);
+        assert_eq!(overlays.graphical_rect(area), Some(recovery::rect(area)));
+        if let Some(Overlay::Recovery(browser)) = overlays.current.as_mut() {
+            let mut form = rename::Rename::new(PathBuf::from("/tmp/recovered.txt"));
+            form.recovery = true;
+            browser.rename = Some(form);
+        }
+        let rect = rename::rect(area);
+        assert_eq!(overlays.graphical_rect(area), Some(rect));
+        let hits = overlays.pointer_regions(area);
+        let cancel = hits
+            .iter()
+            .find(|hit| {
+                footer_key(rect, "enter restore · esc cancel", hit.x, hit.y) == Some(KeyCode::Esc)
+            })
+            .expect("restore dialog has a clickable cancel footer");
+        assert_eq!(overlays.click(cancel.x, cancel.y, area), Answer::Closed);
     }
 
     fn code(c: KeyCode) -> KeyEvent {

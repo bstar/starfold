@@ -34,6 +34,8 @@ pub enum Action {
     PrevTheme,
     TogglePresentation,
     Tabs,
+    Trash,
+    Undo,
     Open,
     Preview,
     Edit,
@@ -59,6 +61,8 @@ impl Action {
             Self::NextTheme => "Next theme",
             Self::PrevTheme => "Previous theme",
             Self::TogglePresentation => "Graphical / cells",
+            Self::Trash => "Trash…",
+            Self::Undo => "Undo…",
             Self::Tabs => "Tabs…",
             Self::Open => "Open",
             Self::Preview => "Preview",
@@ -219,6 +223,10 @@ impl Menu {
                 action(Action::PrevTheme),
                 action(Action::TogglePresentation),
             ],
+        ));
+        entries.push(Entry::submenu(
+            "Recovery",
+            vec![action(Action::Trash), action(Action::Undo)],
         ));
         Self {
             target,

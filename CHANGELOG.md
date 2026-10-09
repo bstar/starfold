@@ -5,6 +5,18 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- Trash recovery and session-only undo for eligible completed moves and renames,
+  with worker-backed menus, safe collision handling, and `Ctrl+Z`.
+- Browsable archive workspaces, staged ZIP member editing and nested ZIP publication.
+- A Commander redesign study with interactive controls and reference captures.
+
+### Fixed
+
+- Pointer feedback, independent graphical window sessions, and PDF preview navigation.
+- Embedded player skin negotiation and playback availability with the matching STAR/AMP helper.
+
 ## [0.0.2] - 2026-09-30
 
 ### Added

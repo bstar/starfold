@@ -372,6 +372,7 @@ impl Config {
     /// and not carried across here is a key that silently does nothing.
     pub fn core(&self) -> fold::FoldConfig {
         fold::FoldConfig {
+            recovery_dir: None,
             list: fold::listing::ListConfig {
                 max_entries: self.ui.max_entries,
                 sort: fold::sort::SortOrder {

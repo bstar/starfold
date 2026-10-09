@@ -1,7 +1,8 @@
 # Status
 
-As of 2026-09-27, STAR/FOLD is a working terminal file manager with Fold and
-Commander views. [The file manager roadmap](file-manager-roadmap.md) tracks the
+As of 2026-10-09, STAR/FOLD is a working file manager with Fold and Commander
+views, native Rust graphics in supported Kitty terminals, and a cell presentation
+elsewhere. [The file manager roadmap](file-manager-roadmap.md) tracks the
 remaining daily-work features and gives each one an acceptance check. The
 [milestone 0 baseline](baseline-validation.md) records how to test the current
 behavior without touching an ordinary STAR/FOLD session.
@@ -21,9 +22,20 @@ covers text-content search.
 | Commander and Places | Implemented. Two panes, mounted-location discovery, searchable bookmarks, drive details, and local-drive unmount have tests. Linux PTY checks covered browsing, Places, and session restore. Physical devices and network mounts need hands-on checks. |
 | Previews, file icons, and archive actions | Implemented. Text, images, directories, audio/video tags, PDF pages, archive inspection, compression, and extraction have automated coverage. Terminal graphics and complex real-world files need broader manual checks. |
 | Native drag and drop, embedded STAR/AMP | Implemented with PTY or process tests on Linux. Desktop terminal combinations and macOS embedding need hands-on checks. |
-| Packaging | Nix, AppImage, and Apple Silicon macOS release routes are configured. Linux release builds are part of milestone acceptance; platform release checks remain separate. |
+| Graphical presentation | The terminal renderer is on main, with shared navigation, pixel layout, pointer feedback, independent window sessions, image zoom, PDF reading, movie playback and AMP-owned player skins. See [terminal graphics](terminal-graphics.md) for transport and platform verification. |
+| Archive workspace | Archives open as browsable locations, including nested archives and selective member copies. ZIP chains support staged member editing and guarded publication; other readable formats can be saved as ZIP. The [format matrix](archive-formats.md) distinguishes checked fixtures from unverified formats. |
+| Recovery | Worker-backed Trash picker, collision-safe restore, and session-only undo for successful moves/renames. Linux uses freedesktop Trash metadata; macOS records STAR/FOLD deletions in a private journal. Automated tests cover restart, collisions, nested changes, cancellation, staged copying, and queue integration. Real macOS Trash and physical cross-device validation remain. |
+| Workspace tabs | Implemented with independent Fold/Commander contexts, sorting, filtering, marks, preview context, and session restoration. Core, snapshots, and PTY checks cover isolation and restart. |
+| Packaging | Nix, x86_64/ARM64 AppImages, native Arch packages, and Apple Silicon macOS archives passed the v0.0.2 release workflow, including 15 distribution smoke checks, both FUSE tests, and Arch installation. |
 
 ## Work in progress
+
+The [Commander visual target](graphical/treatments/README.md) is an interactive,
+buildless design study with bundled screenshots and fonts. Its equal panes,
+larger filenames, compact inspection and transfer hierarchy are a review target;
+the application does not yet implement that treatment. The older separate GPUI
+frontend remains on `experiment/graphical-presentation`; the active renderer uses
+STAR/KIT's `tiny-skia` and `cosmic-text` inside the terminal.
 
 Milestone 0's automated Linux checks and release build passed on 2026-09-25;
 its [interactive checklist](baseline-validation.md) is ready for desktop
@@ -34,15 +46,15 @@ is ready for review. Milestone 2b adds content search; its
 [interactive checklist](content-search-validation.md) is ready for review.
 A follow-up yank/paste and current-path clipboard change
 has passed automated checks and a Linux release build, with desktop clipboard
-and interactive paste validation still pending. Recovery, bulk rename, shell handoff, durable tabs, and other
-desktop file actions follow in the roadmap's stated order.
+and interactive paste validation still pending. Recovery now has an implementation and [manual checklist](recovery-validation.md). Bulk rename, shell handoff, and other desktop file actions remain next.
 
 ## Known boundaries
 
 - `/` filters one directory; F3/Ctrl+F searches descendants by filename or
   file contents, switched with Tab in the search prompt.
-- There is no bulk rename, Trash browser or restore action, shell picker output,
-  or multi-tab session yet.
+- Bulk rename, shell picker output, configured custom actions, and permission editing remain unimplemented.
+- macOS recovery lists items trashed by STAR/FOLD with this recovery implementation; use Finder for older or other applications' Trash items. Linux lists compatible freedesktop Trash items.
+- Undo is limited to the last 100 recorded items in the current session. Overwrites, merges, permanent deletes, and incomplete operations are not undoable. Changed items are refused. Verification is bounded to 50,000 entries and 64 directory levels per item.
 - Copies report byte progress within a file and can be stopped between
   chunks. A stopped copy removes its incomplete destination file.
 - Places discovers mounted network locations; it does not establish network

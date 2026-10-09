@@ -1,0 +1,25 @@
+---
+source: src/ui/frames.rs
+expression: output
+---
+╔═ S T A R / F O L D ══════════════════════════════ stack ═╗
+║ ╔═ UNDO · THIS SESSION ════════════════════════════════╗ ║
+║─║› blob.bin                                            ║─║
+║ ║  → ~/blob.bin                                        ║ ║
+║ ║                                                      ║ ║
+║ ║                                                      ║ ║
+║›║                                                      ║ ║
+║ ║                                                      ║ ║
+║ ║                                                      ║ ║
+║ ║                                                      ║ ║
+║ ║                                                      ║ ║
+╚═║                                                      ║═╝
+╔═║                                                      ║═╗
+║ ║                                                      ║ ║
+║ ║                                                      ║ ║
+╚═║                                                      ║═╝
+╔═║                                                      ║═╗
+║ ║                                                      ║ ║
+║ ╚══ enter recover · r refresh · j/k select · esc close ╝ ║
+╚══════════════════════════════════════════════════════════╝
+? help  / filter  space mark  enter open  y yank  p   ~  off

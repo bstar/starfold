@@ -20,11 +20,13 @@ CARGO_NET_GIT_FETCH_WITH_CLI=true nix develop -c cargo test --all
 ```
 
 On the Linux development workstation, the `starfold` command in the user's
-shell is `~/.local/bin/starfold`, a symlink to this checkout's
-`target/release/starfold`. After changing application code, always complete a
-release build before saying the change is ready for desktop testing. Verify
-`command -v starfold` and `readlink -f "$(command -v starfold)"` point to the
-built executable; a debug/test build does not update the user's command.
+shell is `~/.local/bin/starfold`. It currently wraps this checkout's
+`target/release/starfold` with media runtime environment settings; preserve those
+settings when updating its executable target. After changing application code,
+always complete a release build before saying the change is ready for desktop
+testing. Verify `command -v starfold` and inspect the wrapper's `exec` target
+(or `readlink -f "$(command -v starfold)"` if it is a symlink) against the built
+executable; a debug/test build does not update the user's command.
 Restart running STAR/FOLD instances when desktop testing requires the new
 binary, since existing processes keep the old executable loaded.
 
@@ -481,3 +483,21 @@ Original streaming is negotiated only by a frontend outside an SSH shell.
 the bounded video proxy instead of decoding 4K into raw frames over the TTY.
 A local `--ssh` client and registered Kitty bridge remain original-capable.
 `tests/smoke.rs` checks both capability reports without opening a user session.
+
+## Recovery
+
+`fold::recovery` owns recovery records and worker-only filesystem verification.
+Linux lists freedesktop Trash metadata through `trash::os_limited`; macOS uses
+NSFileManager's resulting URL and persists intent before moving a file, under
+`PATHS.base_dir()/recovery`. The journal preserves raw path bytes. It covers
+STAR/FOLD deletions made with this implementation, not arbitrary Finder history.
+Undo receipts are global across tabs, session-only, bounded to 100 items, and
+exclude overwrites, merged directories and incomplete operations. A SHA-256
+fingerprint of bounded metadata traversal detects source or descendant changes.
+Recovery queues a guarded rename with a RESTORE/UNDO label; the worker executes
+the guard instead of the ordinary rename policy and uses exclusive publication.
+Never offer overwrite for recovery. Cross-device recovery copies to private
+staging, revalidates, exclusively publishes, then removes the old copy; cleanup
+failures remain visible in OPERATIONS. Same-device recovery uses atomic rename.
+The Linux restart test sets Trash environment variables only in subprocesses,
+using disposable private bins; normal tests must not empty the user's Trash.
