@@ -204,6 +204,7 @@ fn exercise_editor(user_config: bool) {
             height: 240,
             foreground: "#123456".into(),
             background: "#abcdef".into(),
+            corner_radius: 0,
         },
     });
     assert!(resized.surface.is_some(), "resize failed: {resized:?}");
