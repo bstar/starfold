@@ -41,6 +41,16 @@ Override it with `STAR_GRAPHICS_FONT="JetBrainsMono Nerd Font"`; optionally use
 `STAR_GRAPHICS_FONT_SIZE=16` for a pixel size override. If the terminal font
 cannot be found, an installed monospace font or bundled Liberation Mono is used.
 Swash rasterization can differ slightly from Kitty’s antialiasing and hinting.
+The graphical presentation follows the [Classic Commander rack study](graphical/treatments/README.md),
+with beveled slate chrome, recessed lists and themed readouts. Roomy windows show
+marked totals, active location, cached volume capacity and workspace tabs above
+the file browser, with Preview and Operations beside each other below. Narrow or
+short windows stack those modules; embedded audio, the editor and expanded movies
+retain a full-width Preview. The cell presentation keeps its established layout
+and palette. [Native Classic capture](graphical/treatments/native-classic.png),
+[Mocha](graphical/treatments/native-mocha.png) and
+[Latte](graphical/treatments/native-latte.png) show actual Rust-rendered fixture scenes.
+
 Reconnect after changing the terminal font family. Installed fonts supply Unicode
 fallback.
 BMP image previews are enabled in both terminal modes.

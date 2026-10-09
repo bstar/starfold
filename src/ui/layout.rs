@@ -129,6 +129,8 @@ pub struct LayoutState {
     pub tabs_visible: bool,
     /// Pixel presentation reserves extra vertical padding for tabs.
     pub tab_rows: u16,
+    /// Native rack layout uses a shared lower deck on roomy viewports.
+    pub native_rack: bool,
     /// An embedded player reserves ten body rows when possible, five at
     /// the terminal floor, temporarily borrowing rows from the file list.
     pub audio_active: bool,
@@ -161,6 +163,7 @@ impl LayoutState {
             preview_open: true,
             tabs_visible: false,
             tab_rows: 1,
+            native_rack: false,
             audio_active: false,
             editor_active: false,
             ops_active: false,
@@ -214,6 +217,37 @@ impl LayoutState {
             height: area.height - status_rows - tab_rows,
             ..area
         };
+
+        if self.native_rack
+            && extra > 0
+            && body.width >= 100
+            && body.height >= 32
+            && !self.audio_active
+            && !self.editor_active
+            && self.native_preview_rows != Some(u16::MAX)
+        {
+            // The lower modules share a row and keep their real logical
+            // widths. Rendering and mouse projection use these same regions.
+            let deck_floor = collapsed_rows + 2;
+            let preview_rows = if self.preview_open {
+                self.native_preview_rows.unwrap_or(self.preview_rows)
+            } else {
+                0
+            };
+            let deck = collapsed_rows
+                .saturating_add(preview_rows)
+                .max(deck_floor)
+                .min(body.height.saturating_sub(STACK_MIN_ROWS + extra + gap));
+            let stack = Rect::new(body.x, body.y, body.width, body.height - deck - gap);
+            let deck_area = Rect::new(body.x, stack.bottom() + gap, body.width, deck);
+            self.last = Some(Regions {
+                area,
+                modules: [stack, pane_rect(deck_area, 0), pane_rect(deck_area, 1)],
+                status,
+                tabs,
+            });
+            return self.last.as_ref();
+        }
 
         // Everyone at their floor is the baseline; `room` is how much taller
         // than that the body is. The `MIN_ROWS` check above guarantees this
@@ -380,6 +414,49 @@ fn inset(area: Rect, pad: (u16, u16)) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_deck_collapses_and_expanded_content_keeps_full_width() {
+        let _padding = starkit::chrome::frame::padding_scope(true);
+        let mut layout = LayoutState::new(10, 8, 3);
+        layout.native_rack = true;
+        layout.tabs_visible = true;
+        layout.tab_rows = 5;
+        let area = Rect::new(0, 0, 160, 60);
+        let open = layout.regions(area, (0, 0), 3).unwrap().clone();
+        assert_eq!(
+            open.rect_of(ModuleId::Preview).y,
+            open.rect_of(ModuleId::Operations).y
+        );
+        layout.preview_open = false;
+        let closed = layout.regions(area, (0, 0), 3).unwrap().clone();
+        assert!(closed.rect_of(ModuleId::Preview).height < open.rect_of(ModuleId::Preview).height);
+        layout.preview_open = true;
+        layout.native_preview_rows = Some(u16::MAX);
+        let expanded = layout.regions(area, (0, 0), 3).unwrap();
+        assert_eq!(expanded.rect_of(ModuleId::Preview).width, area.width);
+        assert!(expanded.rect_of(ModuleId::Operations).y > expanded.rect_of(ModuleId::Preview).y);
+        layout.native_preview_rows = None;
+        layout.audio_active = true;
+        assert_eq!(
+            layout
+                .regions(area, (0, 0), 3)
+                .unwrap()
+                .rect_of(ModuleId::Preview)
+                .width,
+            area.width
+        );
+        layout.audio_active = false;
+        layout.editor_active = true;
+        assert_eq!(
+            layout
+                .regions(area, (0, 0), 3)
+                .unwrap()
+                .rect_of(ModuleId::Preview)
+                .width,
+            area.width
+        );
+    }
     use proptest::prelude::*;
 
     fn state() -> LayoutState {

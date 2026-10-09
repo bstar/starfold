@@ -198,9 +198,29 @@ pub struct Theme {
     core: Core,
     pub fold: Fold,
     pub(crate) graphical_rows: bool,
+    #[cfg(feature = "terminal-graphics")]
+    graphical_core: Core,
+    #[cfg(feature = "terminal-graphics")]
+    graphical_fold: Fold,
+    #[cfg(feature = "terminal-graphics")]
+    cell_fold: Fold,
+    #[cfg(feature = "terminal-graphics")]
+    pub(crate) rack: super::rack::Colors,
 }
 
 impl Theme {
+    #[cfg(feature = "terminal-graphics")]
+    pub fn set_graphical(&mut self, graphical: bool) {
+        if self.graphical_rows != graphical {
+            self.fold = if graphical {
+                &self.graphical_fold
+            } else {
+                &self.cell_fold
+            }
+            .clone();
+            self.graphical_rows = graphical;
+        }
+    }
     pub fn file_cursor_bg(&self) -> Rgb {
         if self.graphical_rows {
             self.panel_bg.mix(self.accent, 0.28)
@@ -222,6 +242,10 @@ impl Deref for Theme {
     type Target = Core;
 
     fn deref(&self) -> &Core {
+        #[cfg(feature = "terminal-graphics")]
+        if self.graphical_rows {
+            return &self.graphical_core;
+        }
         &self.core
     }
 }
@@ -235,7 +259,31 @@ impl Resolve for Theme {
             FoldColors::default()
         });
         let fold = Fold::derive(&core, &stated, file.base16.as_ref());
+        #[cfg(feature = "terminal-graphics")]
+        let rack = super::rack::Colors::new(&core);
+        #[cfg(feature = "terminal-graphics")]
+        let mut graphical_core = core.clone();
+        #[cfg(feature = "terminal-graphics")]
+        rack.apply(&mut graphical_core);
+        #[cfg(feature = "terminal-graphics")]
+        let graphical_fold = Fold::derive(
+            &graphical_core,
+            &FoldColors {
+                dir_fg: stated.dir_fg.or(Some(graphical_core.accent)),
+                crumb_active_fg: stated.crumb_active_fg.or(Some(graphical_core.accent)),
+                ..stated
+            },
+            file.base16.as_ref(),
+        );
         Self {
+            #[cfg(feature = "terminal-graphics")]
+            cell_fold: fold.clone(),
+            #[cfg(feature = "terminal-graphics")]
+            graphical_core,
+            #[cfg(feature = "terminal-graphics")]
+            graphical_fold,
+            #[cfg(feature = "terminal-graphics")]
+            rack,
             core,
             fold,
             graphical_rows: false,
@@ -276,6 +324,31 @@ mod tests {
     use super::tests_support::theme;
     use super::*;
     use starkit::theme::builtin::BUILTINS;
+
+    #[cfg(feature = "terminal-graphics")]
+    #[test]
+    fn rack_themes_keep_text_legible_and_restore_cell_colors() {
+        for builtin in BUILTINS {
+            let mut theme = theme(builtin.id);
+            let before = (theme.panel_bg, theme.accent, theme.fold.dir_fg);
+            theme.set_graphical(true);
+            for fg in [
+                theme.fg,
+                theme.dim,
+                theme.accent,
+                theme.empty_fg,
+                theme.fold.dir_fg,
+            ] {
+                assert!(
+                    fg.contrast(theme.panel_bg) >= 4.49,
+                    "{}: {fg:?}",
+                    builtin.id
+                );
+            }
+            theme.set_graphical(false);
+            assert_eq!((theme.panel_bg, theme.accent, theme.fold.dir_fg), before);
+        }
+    }
 
     #[test]
     fn every_builtin_resolves_with_a_fold_table() {

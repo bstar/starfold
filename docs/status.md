@@ -31,9 +31,13 @@ covers text-content search.
 ## Work in progress
 
 The [Commander visual target](graphical/treatments/README.md) is an interactive,
-buildless design study with bundled screenshots and fonts. Its equal panes,
-larger filenames, compact inspection and transfer hierarchy are a review target;
-the application does not yet implement that treatment. The older separate GPUI
+buildless design study with bundled screenshots and fonts. Study 03 follows
+STAR/AMP's Option 1: beveled slate racks, recessed directory lists, lime readouts,
+and matching inspection and operations modules around two equal panes. The native
+renderer now implements the rack palette, beveled chrome, marked-file workspace
+readout and responsive lower deck. The study remains the target for further
+spacing and content refinements. Automated scene rendering and pointer checks
+cover light/dark themes and the terminal floor; desktop review remains. The older separate GPUI
 frontend remains on `experiment/graphical-presentation`; the active renderer uses
 STAR/KIT's `tiny-skia` and `cosmic-text` inside the terminal.
 

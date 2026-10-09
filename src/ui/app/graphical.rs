@@ -148,16 +148,29 @@ fn pixel_placements(
         sources.push(tabs);
     }
     let flexible = sources.len();
-    sources.extend(
-        [ModuleId::Stack, ModuleId::Preview, ModuleId::Operations].map(|id| regions.rect_of(id)),
-    );
+    let preview = regions.rect_of(ModuleId::Preview);
+    let operations = regions.rect_of(ModuleId::Operations);
+    let deck = preview.y == operations.y;
+    sources.push(regions.rect_of(ModuleId::Stack));
+    sources.push(if deck {
+        Rect::new(preview.x, preview.y, regions.area.width, preview.height)
+    } else {
+        preview
+    });
+    if !deck {
+        sources.push(operations);
+    }
     sources.push(regions.status);
     let heights: Vec<_> = sources
         .iter()
         .map(|r| {
             if Some(*r) == regions.tabs {
                 // Comfortable label/control height without an extra outer top margin.
-                ch.saturating_add(20).max(36)
+                if r.height >= 5 {
+                    r.height.saturating_mul(ch)
+                } else {
+                    ch.saturating_add(20).max(36)
+                }
             } else if r.height == 2 {
                 metrics.control
             } else {
@@ -185,6 +198,13 @@ fn pixel_placements(
                 .enumerate()
             {
                 result.push(Placement::new(pane_rect(source, pane).into(), target));
+            }
+        } else if deck && i == flexible + 1 {
+            for (source, target) in [preview, operations]
+                .into_iter()
+                .zip(placement::split(target, metrics.gap))
+            {
+                result.push(Placement::new(source.into(), target));
             }
         } else {
             result.push(Placement::new(source.into(), target));
@@ -959,7 +979,7 @@ fn native_header(
     let mut surface = Surface::new(
         area.width * cw,
         area.height.max(1) * ch,
-        hex(theme.panel_bg),
+        hex(theme.header_bg),
     );
     let font = Metrics::from_cell(cw, ch).font;
     let slots = header::slots(rect, words);
@@ -990,9 +1010,21 @@ fn native_header(
         });
     }
     let shortcut = theme
-        .panel_bg
+        .rack
+        .button
         .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]);
     for (word, slot) in slots {
+        super::super::rack::bevel(
+            &mut surface,
+            R::new(
+                (slot.x - area.x) * cw,
+                1,
+                slot.width * cw,
+                ch.saturating_sub(2),
+            ),
+            &theme.rack,
+            false,
+        );
         surface.hits.push(starkit::native_surface::HitRegion {
             rect: R::new((slot.x - area.x) * cw, 0, slot.width * cw, ch),
             action: "header".into(),
@@ -1011,7 +1043,14 @@ fn native_header(
                 .push(starkit::native_surface::Primitive::Text {
                     rect: R::new((slot.x - area.x + offset as u16) * cw, 0, cw, ch),
                     text: character.to_string(),
-                    color: hex(if highlighted { shortcut } else { theme.dim }),
+                    color: hex(if highlighted {
+                        shortcut
+                    } else {
+                        theme
+                            .rack
+                            .foreground
+                            .ensure_contrast(theme.rack.button, 4.5)
+                    }),
                     size: font,
                     bold: highlighted,
                     mono: true,
@@ -1257,7 +1296,7 @@ impl Controller for App {
                     .saturating_add(self.cfg.ui.padding_y.max(1).saturating_mul(2));
         // Native rows have independent cursor/mark indicators, so their fill
         // can stay subtle while labels retain readable text contrast.
-        self.theme.graphical_rows = !state.cell_mode;
+        self.theme.set_graphical(!state.cell_mode);
         let _chrome = starkit::chrome::frame::padding_scope(state.padded_chrome);
         if let Some((height, rows)) = state.preserved_preview.take() {
             self.layout.native_preview_rows = Some(
@@ -1466,7 +1505,13 @@ impl Controller for App {
                     // Proportional fonts give spaces a narrower advance than
                     // letters; keep the separator visibly separated as in TUI.
                     let brand = panels::HEADING.replace(" / ", "  /  ");
-                    let title = if self.commander {
+                    let title = if self.commander && regions.tabs.is_some_and(|r| r.height >= 5) {
+                        if pane == 0 {
+                            "COMMANDER · LEFT".into()
+                        } else {
+                            "COMMANDER · RIGHT".into()
+                        }
+                    } else if self.commander {
                         if pane == 0 {
                             format!("{brand} · Left")
                         } else {
@@ -1684,6 +1729,75 @@ impl Controller for App {
                             }),
                         });
                     }
+                }
+            }
+        }
+        if pixels {
+            use super::super::rack;
+            // Keep the Panel/Tab markers for stable interaction identities;
+            // the native chrome paints over their legacy outlines and tabs.
+            let components = std::mem::take(&mut scene.components);
+            if let Some(tabs) = regions.tabs.filter(|r| r.height >= 5) {
+                let view = if self.commander {
+                    self.pane_view(self.active_pane)
+                } else {
+                    self.stack_view()
+                };
+                let count = self.core.state().selection.len();
+                let mode = if self.commander {
+                    if self.active_pane == 0 {
+                        "LEFT PANE · COMMANDER"
+                    } else {
+                        "RIGHT PANE · COMMANDER"
+                    }
+                } else {
+                    "FOLD"
+                };
+                scene.components.push(rack::workspace(
+                    tabs,
+                    (cw, ch),
+                    &self.theme.rack,
+                    rack::Workspace {
+                        count,
+                        marked: &self.view.marked,
+                        location: &home_relative(&self.view.active_dir, &self.view.home),
+                        mode,
+                        space: view.space,
+                    },
+                ));
+            }
+            for component in components {
+                match &component {
+                    Component::Panel { rect, .. } => {
+                        let rect = Rect::new(rect.x, rect.y, rect.width, rect.height);
+                        scene.components.push(component);
+                        scene
+                            .components
+                            .extend(rack::frame(rect, (cw, ch), &self.theme.rack));
+                    }
+                    Component::Tab {
+                        rect,
+                        label,
+                        number,
+                        active,
+                        close,
+                    } => {
+                        let convert = |r: starkit::terminal_graphics::Rect| {
+                            Rect::new(r.x, r.y, r.width, r.height)
+                        };
+                        let painted = rack::tab(
+                            convert(*rect),
+                            label,
+                            *number,
+                            *active,
+                            close.map(convert),
+                            (cw, ch),
+                            &self.theme.rack,
+                        );
+                        scene.components.push(component);
+                        scene.components.push(painted);
+                    }
+                    _ => scene.components.push(component),
                 }
             }
         }
@@ -5203,7 +5317,135 @@ mod tests {
     }
 
     #[test]
-    fn native_chrome_surfaces_fit_at_resize_and_keep_operations_compact() {
+    fn rack_native_frames_preserve_pointer_projection_and_cell_fallback() {
+        use starkit::terminal_graphics::renderer::{RenderMessage, Renderer};
+        let mut renderer = Renderer::spawn().unwrap();
+        for theme in ["terminal", "catppuccin-mocha", "catppuccin-latte"] {
+            let mut cfg = Config::default();
+            cfg.ui.theme = theme.into();
+            let (core, fake) = crate::ui::fake::handle(cfg.core());
+            let mut app = App::new(
+                core,
+                cfg,
+                fake.home().join("config.toml"),
+                None,
+                Graphics::disabled(),
+            );
+            app.enable_graphical();
+            app.graphical.as_mut().unwrap().pixel_layout = true;
+            app.core.send(Command::RestoreCommander {
+                dirs: [
+                    fake.fixture.path("projects/starwire"),
+                    fake.home().to_path_buf(),
+                ],
+                active: 0,
+                enabled: true,
+            });
+            fake.pump();
+            app.tick();
+            let readme = fake.fixture.path("projects/starwire/README.md");
+            app.core.send(Command::CursorTo(3));
+            app.core.send(Command::ToggleMarkPath(readme.clone()));
+            app.core.send(Command::Preview(readme.clone()));
+            app.core.send(Command::QueueOperation {
+                kind: OpKind::Copy,
+                sources: vec![readme],
+                dest: Some(fake.home().to_path_buf()),
+            });
+            fake.pump();
+            app.tick();
+            let readme = fake.fixture.path("projects/starwire/README.md");
+            if !app.core.state().selection.is_marked(&readme) {
+                app.core.send(Command::ToggleMarkPath(readme));
+                fake.pump();
+                app.tick();
+            }
+            for (columns, rows, width, height) in [
+                (160, 60, 1600, 1200),
+                (80, 36, 800, 720),
+                (60, 21, 600, 420),
+            ] {
+                let viewport = Viewport {
+                    columns,
+                    rows,
+                    width,
+                    height,
+                    generation: 1,
+                };
+                let scene = Controller::scene(&mut app, viewport);
+                let regions = app.layout.last.clone().unwrap();
+                let preview = regions.rect_of(ModuleId::Preview);
+                let operations = regions.rect_of(ModuleId::Operations);
+                assert_eq!(preview.y == operations.y, columns == 160);
+                for placement in &scene.placements {
+                    placement.validate(viewport).unwrap();
+                }
+                for component in &scene.components {
+                    if let Component::Surface { surface, .. } = component {
+                        surface.validate().unwrap();
+                    }
+                }
+                for (module, rect) in [
+                    (ModuleId::Preview, preview),
+                    (ModuleId::Operations, operations),
+                ] {
+                    if let Some(placement) =
+                        scene.placements.iter().find(|p| p.source == rect.into())
+                    {
+                        let x = u32::from(placement.target.x + placement.target.width / 2);
+                        let y = u32::from(placement.target.y + placement.target.height / 2);
+                        let (col, row) = placement.pointer_pixels(x, y, false).unwrap();
+                        assert_eq!(regions.hit(col, row), Some(module));
+                    }
+                }
+                renderer.scene(&scene).unwrap();
+                loop {
+                    match renderer
+                        .output
+                        .recv_timeout(Duration::from_secs(20))
+                        .unwrap()
+                    {
+                        RenderMessage::Frame {
+                            pixels: Some(image),
+                            ..
+                        } => {
+                            assert_eq!(image.dimensions(), (width, height));
+                            if let Some(dir) = std::env::var_os("STARFOLD_RACK_CAPTURES") {
+                                std::fs::create_dir_all(&dir).unwrap();
+                                image
+                                    .save(
+                                        PathBuf::from(dir)
+                                            .join(format!("native-{theme}-{columns}x{rows}.png")),
+                                    )
+                                    .unwrap();
+                            }
+                            break;
+                        }
+                        RenderMessage::Error { message } => panic!("{message}"),
+                        _ => {}
+                    }
+                }
+            }
+            let cells = Viewport {
+                columns: 100,
+                rows: 30,
+                width: 1000,
+                height: 600,
+                generation: 2,
+            };
+            Controller::presentation(&mut app, true);
+            Controller::scene(&mut app, cells);
+            let regions = app.layout.last.as_ref().unwrap();
+            assert_ne!(
+                regions.rect_of(ModuleId::Preview).y,
+                regions.rect_of(ModuleId::Operations).y
+            );
+            assert!(!app.theme.graphical_rows);
+        }
+    }
+
+    #[test]
+    fn native_chrome_surfaces_fit_and_deck_allocation_stays_stable() {
         let cfg = Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
         let mut app = App::new(
@@ -5240,15 +5482,18 @@ mod tests {
             for surface in surfaces {
                 surface.validate().unwrap();
             }
-            assert_eq!(
-                app.layout
-                    .last
-                    .as_ref()
-                    .unwrap()
-                    .rect_of(ModuleId::Operations)
-                    .height,
-                2
-            );
+            let ops_height = app
+                .layout
+                .last
+                .as_ref()
+                .unwrap()
+                .rect_of(ModuleId::Operations)
+                .height;
+            if columns < 100 {
+                assert_eq!(ops_height, 2);
+            } else {
+                assert!(ops_height >= 6);
+            }
             app.layout.focus_set(ModuleId::Operations);
             let scene = Controller::scene(&mut app, viewport);
             assert_eq!(
@@ -5258,7 +5503,7 @@ mod tests {
                     .unwrap()
                     .rect_of(ModuleId::Operations)
                     .height,
-                2
+                ops_height
             );
             for component in scene.components {
                 if let Component::Surface { surface, .. } = component {
@@ -5282,12 +5527,12 @@ mod tests {
                         .unwrap()
                         .rect_of(ModuleId::Operations)
                         .height,
-                    2
+                    ops_height
                 );
                 for placement in &failed.placements {
                     placement.validate(viewport).unwrap();
                 }
-                assert!(failed.components.iter().any(|component| matches!(component,
+                assert!(failed.spans.iter().any(|span| span.text.contains("Permission denied")) || failed.components.iter().any(|component| matches!(component,
                     Component::Surface { surface, .. } if surface.nodes.iter().any(|primitive| matches!(primitive,
                         starkit::native_surface::Primitive::Text { text, .. } if text.contains("Permission denied"))))));
             }
@@ -5761,7 +6006,8 @@ mod tests {
         for name in ["terminal", "catppuccin-latte"] {
             let theme = crate::ui::theme::tests_support::theme(name);
             let shortcut = hex(theme
-                .panel_bg
+                .rack
+                .button
                 .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]));
             for enabled in [false, true] {
                 let Component::Surface { surface, .. } =
@@ -5778,7 +6024,7 @@ mod tests {
                             .nodes
                             .iter()
                             .skip(1)
-                            .find(|node| node.rect().x == expected_x)
+                            .find(|node| matches!(node, Primitive::Text { rect, .. } if rect.x == expected_x))
                             .unwrap();
                         let Primitive::Text {
                             rect,
@@ -5801,7 +6047,10 @@ mod tests {
                             if highlighted {
                                 shortcut.clone()
                             } else {
-                                hex(theme.dim)
+                                hex(theme
+                                    .rack
+                                    .foreground
+                                    .ensure_contrast(theme.rack.button, 4.5))
                             }
                         );
                         assert_eq!(

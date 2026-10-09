@@ -11,6 +11,8 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
   with worker-backed menus, safe collision handling, and `Ctrl+Z`.
 - Browsable archive workspaces, staged ZIP member editing and nested ZIP publication.
 - A Commander redesign study with interactive controls and reference captures.
+- Native rack presentation following STAR/AMP Option 1, with beveled chrome,
+  recessed lists, a marked-file workspace display and a responsive Preview/Operations deck.
 
 ### Fixed
 

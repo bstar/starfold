@@ -3772,6 +3772,13 @@ impl App {
                 .as_ref()
                 .is_some_and(|state| !state.cell_mode);
             self.layout.tab_rows = if pixels { 2 } else { 1 };
+            self.layout.native_rack = self
+                .graphical
+                .as_ref()
+                .is_some_and(|state| state.uses_pixel_layout());
+            if self.layout.native_rack && area.height >= 40 {
+                self.layout.tab_rows = 5;
+            }
             if pixels && area.width >= layout::MIN_COLS + 4 && area.height >= layout::MIN_ROWS + 2 {
                 padding = (1, 0);
             }
@@ -3786,6 +3793,10 @@ impl App {
         .unwrap_or(u16::MAX);
         self.layout.ops_active = self.view.ops_active || incoming;
         self.layout.tabs_visible = self.core.state().tabs.tabs.len() > 1;
+        #[cfg(feature = "terminal-graphics")]
+        if self.layout.native_rack && area.height >= 40 {
+            self.layout.tabs_visible = true;
+        }
         #[cfg(feature = "terminal-graphics")]
         let held_regions = self
             .graphical
@@ -3823,6 +3834,16 @@ impl App {
         }
         self.tab_hits.clear();
         if let Some(rect) = regions.tabs {
+            let rect = if rect.height >= 5 {
+                Rect::new(
+                    rect.x + 1,
+                    rect.bottom() - 2,
+                    rect.width.saturating_sub(2),
+                    2,
+                )
+            } else {
+                rect
+            };
             let items = self.tab_items();
             let active = self.core.state().tabs.active().id;
             self.tab_hits = super::tabs::rail(

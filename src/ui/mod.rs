@@ -22,6 +22,8 @@ pub mod overlays;
 pub mod panels;
 pub mod places;
 mod popup;
+#[cfg(feature = "terminal-graphics")]
+mod rack;
 pub mod status;
 mod tabs;
 pub mod theme;
