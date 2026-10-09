@@ -1,75 +1,12 @@
-//! Archive service shared by previews and operations. No UI or state access.
+//! Archive extension integration: navigation and transactional publication.
+pub mod browser;
 pub mod connection;
+pub mod edit;
 pub mod operation;
-mod rar;
-mod read;
-mod write;
-pub use read::{extract, list};
-use serde::{Deserialize, Serialize};
+pub mod service;
+pub use service::list;
+pub use starfold_archive_protocol::{Entry, Format};
 use std::path::{Component, Path, PathBuf};
-pub use write::create;
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Entry {
-    pub name: String,
-    pub bytes: Option<u64>,
-    pub directory: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Format {
-    Zip,
-    Tar,
-    TarGz,
-    TarZst,
-    TarXz,
-    TarBz2,
-    SevenZip,
-    Rar,
-}
-impl Format {
-    pub fn detect(path: &Path) -> anyhow::Result<Self> {
-        use std::io::Read;
-        let mut head = [0; 512];
-        let n = std::fs::File::open(path)?.read(&mut head)?;
-        let h = &head[..n];
-        if h.starts_with(b"PK\x03\x04") || h.starts_with(b"PK\x05\x06") {
-            return Ok(Self::Zip);
-        }
-        if h.starts_with(b"7z\xbc\xaf\x27\x1c") {
-            return Ok(Self::SevenZip);
-        }
-        if h.starts_with(b"Rar!\x1a\x07") {
-            return Ok(Self::Rar);
-        }
-        if h.get(257..262) == Some(b"ustar") {
-            return Ok(Self::Tar);
-        }
-        Self::from_path(path).ok_or_else(|| anyhow::anyhow!("Unsupported archive format"))
-    }
-    pub fn from_path(path: &Path) -> Option<Self> {
-        let n = path.file_name()?.to_string_lossy().to_ascii_lowercase();
-        [
-            (".tar.gz", Self::TarGz),
-            (".tgz", Self::TarGz),
-            (".tar.zst", Self::TarZst),
-            (".tzst", Self::TarZst),
-            (".tar.xz", Self::TarXz),
-            (".txz", Self::TarXz),
-            (".tar.bz2", Self::TarBz2),
-            (".tbz2", Self::TarBz2),
-            (".tar", Self::Tar),
-            (".zip", Self::Zip),
-            (".7z", Self::SevenZip),
-            (".rar", Self::Rar),
-        ]
-        .into_iter()
-        .find(|(ext, _)| n.ends_with(ext))
-        .map(|(_, f)| f)
-    }
-    pub fn writable(self) -> bool {
-        !matches!(self, Self::Rar | Self::TarXz | Self::TarBz2)
-    }
-}
 pub fn destination(path: &Path) -> PathBuf {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     path.with_file_name(

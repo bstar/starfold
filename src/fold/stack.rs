@@ -181,7 +181,10 @@ impl Stack {
     /// its cursor; an unrelated trail is replaced by a fresh parent frame.
     pub fn go_parent(&mut self) -> Option<ParentMove> {
         let departed = self.active().dir.clone();
-        let parent = departed.parent()?.to_path_buf();
+        let parent = super::location::Location::from_key(&departed)
+            .ok()?
+            .parent()?
+            .key();
         if parent == departed || parent.as_os_str().is_empty() {
             return None;
         }

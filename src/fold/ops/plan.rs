@@ -52,6 +52,19 @@ pub enum PlanError {
 
 /// Work out `Plan` for `kind` over `sources` into `dest`.
 pub fn plan(kind: OpKind, sources: &[PathBuf], dest: Option<&Path>) -> Result<Plan, PlanError> {
+    if sources.iter().any(|p| crate::fold::location::is_archive(p))
+        || dest.is_some_and(crate::fold::location::is_archive)
+    {
+        if kind == OpKind::Copy && !dest.is_some_and(crate::fold::location::is_archive) {
+            return crate::fold::archive::browser::plan_copy(
+                sources,
+                dest.ok_or(PlanError::NoDestination)?,
+            )
+            .map_err(|e| PlanError::Archive(e.to_string()));
+        }
+        return crate::fold::archive::edit::plan(kind, sources, dest)
+            .map_err(|e| PlanError::Archive(e.to_string()));
+    }
     match kind {
         OpKind::Copy | OpKind::Move => plan_copy_move(sources, dest),
         OpKind::Delete(DeleteHow::Permanent) if dest.is_some() => {
@@ -77,6 +90,9 @@ pub fn plan(kind: OpKind, sources: &[PathBuf], dest: Option<&Path>) -> Result<Pl
         }
         OpKind::Delete(_) => Ok(plan_delete(sources)),
         OpKind::Rename => plan_rename(sources, dest),
+        OpKind::ArchiveSave | OpKind::ArchiveDiscard | OpKind::ArchiveTest => {
+            Err(PlanError::Archive("Select an archive location".into()))
+        }
         OpKind::Compress(_) | OpKind::Extract => crate::fold::archive::operation::plan(
             kind,
             sources,
@@ -355,6 +371,7 @@ fn plan_rename(sources: &[PathBuf], dest: Option<&Path>) -> Result<Plan, PlanErr
     }
 
     Ok(Plan {
+        archive_options: Default::default(),
         sources: vec![from.clone()],
         dest: to.to_path_buf(),
         total_bytes: 0,

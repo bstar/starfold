@@ -5,6 +5,16 @@ use crate::ui::overlays;
 use std::path::Path;
 impl App {
     pub(super) fn request_delete(&mut self, sources: Vec<PathBuf>, keyboard: bool) {
+        if sources.iter().any(|p| crate::fold::location::is_archive(p)) {
+            self.overlays.open_confirm(Confirm {
+                title: "remove from ZIP".into(),
+                body: vec!["Stage removal? The archive changes only when you save.".into()],
+                yes: "remove",
+                no: "keep",
+                pending: Pending::QueueDelete(sources),
+            });
+            return;
+        }
         let auto = matches!(self.cfg.ops.trash, crate::fold::TrashMode::Auto);
         let disabled_drive = if auto && !sources.is_empty() {
             let state = self.core.state();
@@ -82,6 +92,7 @@ impl App {
                 destination: dir.clone(),
                 create_dir: dir,
                 editable: false,
+                archive_writable: None,
             },
             (x, y),
         );
@@ -163,8 +174,9 @@ impl App {
                 directory: entry.is_dir_like(),
                 sources,
                 destination,
-                create_dir,
+                create_dir: create_dir.clone(),
                 editable: crate::ui::editor::is_editable(entry),
+                archive_writable: state.listings.get(&create_dir).map(|l| l.archive_writable),
             }
         } else {
             drop(state);
@@ -181,6 +193,45 @@ impl App {
         action: overlays::context::Action,
     ) {
         use overlays::context::{Action as A, Request};
+        if matches!(
+            action,
+            A::ArchiveSave | A::ArchiveDiscard | A::ArchiveSaveAs
+        ) {
+            if let Some(id) = self.parked_archive_editor() {
+                self.change_tab(Command::SwitchTab(id));
+                self.layout.focus_set(ModuleId::Preview);
+                self.note = Some((
+                    "Save or discard and exit this tab’s archive editor first".into(),
+                    NoteLevel::Warning,
+                    Instant::now(),
+                ));
+                return;
+            }
+            if self
+                .editor
+                .as_ref()
+                .is_some_and(|e| e.origin.is_some() && e.interacted)
+            {
+                self.note = Some((
+                    "Save or discard and exit the editor first".into(),
+                    NoteLevel::Warning,
+                    Instant::now(),
+                ));
+                self.layout.focus_set(ModuleId::Preview);
+                return;
+            }
+            if self.editor_transition(preview_extensions::EditorTransition::Context(
+                target.clone(),
+                action,
+            )) {
+                return;
+            }
+            if self.editor.as_ref().is_some_and(|e| e.origin.is_some()) {
+                self.finish_archive_editor();
+            }
+            self.core.send(Command::SyncArchiveEdits);
+            self.core.send(Command::ClosePreview);
+        }
         match action {
             A::Tabs => self.open_tab_picker(None),
             A::NextTheme => self.act(Action::NextTheme),
@@ -194,6 +245,12 @@ impl App {
                     .is_some_and(|e| e.path == target.clicked);
                 if target.directory {
                     self.core.send(Command::Push(target.clicked));
+                } else if crate::fold::archive::Format::from_path(&target.clicked).is_some() {
+                    if let Ok(location) = crate::fold::location::Location::from_key(&target.clicked)
+                        .and_then(|l| l.enter_archive())
+                    {
+                        self.core.send(Command::Push(location.key()));
+                    }
                 } else if current_matches {
                     self.activate_entry();
                 } else {
@@ -207,7 +264,7 @@ impl App {
             A::Edit => self.start_editor(target.clicked),
             A::Mark => self.core.send(Command::ToggleMarkPath(target.clicked)),
             A::CopyCurrentPath => {
-                let path = target.create_dir.to_string_lossy().into_owned();
+                let path = crate::fold::location::display(&target.create_dir);
                 match self.copy_ui_text(&path) {
                     Ok(message) => {
                         self.note = Some((
@@ -234,6 +291,7 @@ impl App {
                 .open_create(target.create_dir, CreateKind::Directory),
             A::Delete => self.request_delete(target.sources, false),
             A::Copy | A::Move => self.overlays.open_destination(Request {
+                archive_options: Default::default(),
                 kind: if action == A::Copy {
                     OpKind::Copy
                 } else {
@@ -259,21 +317,72 @@ impl App {
                     .unwrap_or(Path::new("."))
                     .join(format!("{name}.zip"));
                 self.overlays.open_destination(Request {
+                    archive_options: Default::default(),
                     kind: OpKind::Compress(crate::fold::archive::Format::Zip),
                     sources: target.sources,
                     destination,
                 });
             }
+            A::ArchiveSave | A::ArchiveDiscard | A::ArchiveTest => {
+                self.core.send(Command::QueueOperation {
+                    kind: match action {
+                        A::ArchiveSave => OpKind::ArchiveSave,
+                        A::ArchiveDiscard => OpKind::ArchiveDiscard,
+                        _ => OpKind::ArchiveTest,
+                    },
+                    sources: vec![target.create_dir],
+                    dest: None,
+                })
+            }
+            A::ArchiveSaveAs => {
+                let mut destination = crate::fold::location::Location::from_key(&target.create_dir)
+                    .ok()
+                    .and_then(|l| {
+                        if let crate::fold::location::Location::Archive { source, .. } = l {
+                            Some(source.file.with_file_name(format!(
+                                    "copy-{}",
+                                    source
+                                        .nested
+                                        .last()
+                                        .map(|m| m.name.as_path())
+                                        .unwrap_or(&source.file)
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                )))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
+                if target.archive_writable == Some(false) {
+                    destination.set_extension("zip");
+                }
+                self.overlays.open_destination(Request {
+                    archive_options: Default::default(),
+                    kind: OpKind::ArchiveSave,
+                    sources: vec![target.create_dir],
+                    destination,
+                });
+            }
+            A::ArchiveUnlock => self.overlays.open_destination(Request {
+                archive_options: Default::default(),
+                kind: OpKind::ArchiveTest,
+                sources: vec![],
+                destination: target.create_dir,
+            }),
             A::Extract => {
                 // Each archive has its own atomic destination and queue row.
                 if target.sources.len() == 1 {
                     self.overlays.open_destination(Request {
+                        archive_options: Default::default(),
                         kind: OpKind::Extract,
                         destination: crate::fold::archive::destination(&target.clicked),
                         sources: target.sources,
                     });
                 } else {
                     self.overlays.open_destination(Request {
+                        archive_options: Default::default(),
                         kind: OpKind::Extract,
                         destination: target.destination,
                         sources: target.sources,
@@ -595,6 +704,7 @@ mod tests {
         let (mut app, fake) = app();
         let source = fake.fixture.path("blob.bin");
         app.after_overlay_answer(Answer::Operation(overlays::context::Request {
+            archive_options: Default::default(),
             kind: OpKind::Compress(crate::fold::archive::Format::Zip),
             sources: vec![source],
             destination: fake.fixture.path("test.zip"),

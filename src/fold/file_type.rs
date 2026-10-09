@@ -57,6 +57,9 @@ pub fn classify(path: &Path, head: &[u8]) -> FileType {
         .unwrap_or_default()
         .to_string_lossy()
         .to_ascii_lowercase();
+    if super::archive::Format::from_path(path).is_some() {
+        return Archive;
+    }
     match ext.as_str() {
         "pdf" => Pdf,
         "zip" | "tar" | "gz" | "tgz" | "xz" | "bz2" | "tbz2" | "zst" | "tzst" | "7z" | "rar" => {
@@ -67,6 +70,7 @@ pub fn classify(path: &Path, head: &[u8]) -> FileType {
         "mp4" | "m4v" | "mov" | "mkv" | "webm" | "avi" | "mpeg" | "mpg" | "wmv" => Video,
         "rs" | "c" | "h" | "cpp" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "sh" | "nix"
         | "html" | "css" | "json" | "toml" | "yaml" | "yml" => Code,
+        "cfg" | "conf" | "ini" => Text,
         "ttf" | "otf" | "woff" | "woff2" => Font,
         _ => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
@@ -87,6 +91,14 @@ mod tests {
     fn signatures_override_names() {
         assert_eq!(classify(Path::new("x.txt"), b"%PDF-1.7"), FileType::Pdf);
     }
+    #[test]
+    fn configuration_files_are_text_but_signatures_remain_authoritative() {
+        for name in ["game.cfg", "GAME.CFG", "service.conf", "settings.ini"] {
+            assert_eq!(classify(Path::new(name), &[]), FileType::Text);
+        }
+        assert_eq!(classify(Path::new("game.cfg"), b"%PDF-1.7"), FileType::Pdf);
+    }
+
     #[test]
     fn extensions_are_case_insensitive() {
         assert_eq!(classify(Path::new("X.FLAC"), &[]), FileType::Audio);

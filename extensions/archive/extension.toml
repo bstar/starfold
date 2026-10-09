@@ -1,0 +1,4 @@
+id = "archive"
+executable = "starfold-archive"
+protocol = "starfold-archive-v1"
+capabilities = ["index", "member_read", "create", "extract", "zip_edit", "test", "password", "volumes"]

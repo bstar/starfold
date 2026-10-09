@@ -123,7 +123,11 @@ SSH host without the local Kitty integration sends audio to that host instead.
 
 ### Remote movie quality
 
-Current graphical clients negotiate original-file streaming. With Preview focused,
+Graphical frontends running on the terminal computer negotiate original-file
+streaming. A frontend rendering directly inside an unbridged SSH shell uses the
+bounded preview proxy, avoiding full-resolution RGBA frames over the SSH TTY.
+Launching locally with `starfold --ssh HOST`, or using the registered local Kitty
+frontend, retains original-file playback. With Preview focused,
 press **O** or click **mode** to cycle **Auto → Original → Preview**. Auto starts
 with Original and falls back to Preview if opening or decoding fails. Original
 keeps the source quality and buffers instead of reducing resolution when the
@@ -146,6 +150,19 @@ transport does not provide native HDR output or surround-audio passthrough.
 Embedded and external subtitles currently require Preview mode. Turn subtitles
 off before returning to Original; automatic forced subtitles are not rendered
 in Original mode.
+
+Playback details distinguish the stream mode from the source dimensions.
+`source 3840×1608` describes the file, not a 4K delivery guarantee.
+`SSH stream · Preview · up to 480p · H.264/AAC` means a compressed preview;
+Original mode transfers the original media bytes for decoding on the frontend.
+
+Movie audio plays on the machine running the frontend. For Mac speakers,
+launch `starfold --ssh user@host` from a **local Mac shell**, or install the
+Kitty bridge below. Running that command after logging into Linux still runs
+the frontend and sound on Linux. A plain SSH TTY does not relay sound to Kitty.
+For movies, **a** opens the audio-track picker (choose Auto or a track; Off
+mutes the stream). **m** toggles mute. The host/local **a** toggle belongs to
+music preview, not movie playback.
 
 ### Launch after an ordinary SSH login
 

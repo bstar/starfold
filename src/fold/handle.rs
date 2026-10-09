@@ -63,6 +63,7 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 /// dispatcher in `ui/app.rs` is a `match` on meaning, not on input.
 #[derive(Debug, Clone)]
 pub enum Command {
+    SyncArchiveEdits,
     LoadPlaces(PathBuf),
     RefreshPlaces,
     UnmountPlace {
@@ -143,6 +144,16 @@ pub enum Command {
     MarkAll,
     InvertMarks,
     ClearMarks,
+    UnlockArchive {
+        location: PathBuf,
+        options: starfold_archive_protocol::Options,
+    },
+    QueueArchive {
+        format: super::archive::Format,
+        sources: Vec<PathBuf>,
+        destination: PathBuf,
+        options: starfold_archive_protocol::Options,
+    },
     QueueOperation {
         kind: super::ops::OpKind,
         sources: Vec<PathBuf>,

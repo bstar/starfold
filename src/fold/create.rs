@@ -50,6 +50,9 @@ pub fn validate_name(name: &str) -> Result<(), &'static str> {
 /// Both calls refuse an existing path, including a symlink, at the point of
 /// creation. An earlier `exists()` check would race another process.
 pub fn create(kind: Kind, dir: &Path, name: &str) -> Result<PathBuf, String> {
+    if super::location::is_archive(dir) {
+        return Err("Create files in a filesystem pane, then copy them into the ZIP".into());
+    }
     validate_name(name).map_err(str::to_owned)?;
     let path = dir.join(name);
     let result = match kind {

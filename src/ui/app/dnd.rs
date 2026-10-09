@@ -317,6 +317,21 @@ impl App {
         if uri_text.is_empty() {
             return;
         }
+        // Virtual members must be streamed even on the same machine: their
+        // URI names are identities rather than local filesystem paths.
+        let identity = if sources.iter().any(|p| crate::fold::location::is_archive(p)) {
+            use sha2::Digest;
+            Some(format!(
+                "{:x}",
+                sha2::Sha256::digest(format!(
+                    "starfold-archive:{}",
+                    wire::machine_id().unwrap_or_default()
+                ))
+            ))
+        } else {
+            wire::machine_id()
+        };
+        let _ = wire::send("t=a:x=1:i=1", identity.as_deref());
         self.dnd.offer = Some(Offer {
             sources,
             uri_text: uri_text.clone(),
@@ -475,6 +490,10 @@ impl App {
             return;
         };
         tracing::debug!(?kind, "Drop choice selected");
+        if kind == OpKind::Move && crate::fold::location::is_archive(&choice.dest) {
+            self.dnd_error_with("Copy into the ZIP, save it, then remove the original; staged edits cannot move a source safely");
+            return;
+        }
         if !choice.internal
             && ((kind == OpKind::Move && choice.allowed & 2 == 0)
                 || (kind == OpKind::Copy && choice.allowed & 1 == 0))
@@ -733,6 +752,7 @@ impl App {
             }
         }
         if m.number("x") == Some(4) {
+            let _ = wire::send("t=a:x=1:i=1", wire::machine_id().as_deref());
             self.dnd.drag_active = false;
             self.dnd.hover = None;
             self.dnd.hover_coords = None;

@@ -291,6 +291,7 @@ pub struct App {
     audio_cell_size: Option<(u16, u16)>,
     editor: Option<Editor>,
     editor_return_focus: Option<ModuleId>,
+    archive_editor_poll: Option<Instant>,
     commander: bool,
     active_pane: usize,
     panes: Vec<PaneView>,
@@ -312,6 +313,10 @@ pub struct App {
     filter: Option<TextInput>,
     g_pending: bool,
     d_pending: bool,
+    archive_activation: Option<PathBuf>,
+    archive_transition: Option<Action>,
+    archive_close_tab: Option<crate::fold::tab::TabId>,
+    archive_resolution: Option<(crate::fold::ops::OpId, Action)>,
     note: Option<(String, NoteLevel, Instant)>,
     view: ViewData,
     seen_version: u64,
@@ -394,6 +399,33 @@ impl App {
         let Some(entry) = state.cursor_entry() else {
             return;
         };
+        // Archive navigation is authoritative even before the audio helper's
+        // supported-extension handshake has completed.
+        if (entry.kind == EntryKind::File || entry.link_kind == Some(EntryKind::File))
+            && (crate::fold::archive::Format::from_path(&entry.path).is_some()
+                || state.preview.as_ref().is_some_and(|(path,preview)|path==&entry.path && matches!(preview.as_ref(),Preview::Document(d) if matches!(d.content,crate::fold::preview::model::Content::Archive(_)))))
+        {
+            drop(state);
+            self.core.send(Command::Enter);
+            return;
+        }
+        let activation_path = if crate::fold::location::is_archive(&entry.path)
+            && entry.kind == EntryKind::File
+            && crate::fold::archive::Format::from_path(&entry.path).is_none()
+        {
+            if let Some(local) = state.archive_materialized.get(&entry.path) {
+                local.clone()
+            } else {
+                let key = entry.path.clone();
+                drop(state);
+                self.archive_activation = Some(key.clone());
+                self.core.send(Command::Preview(key));
+                self.layout.preview_open = true;
+                return;
+            }
+        } else {
+            entry.path.clone()
+        };
         #[cfg(feature = "terminal-graphics")]
         if self
             .graphical
@@ -403,21 +435,27 @@ impl App {
             && crate::fold::file_type::classify(&entry.path, &[])
                 == crate::fold::file_type::FileType::Video
         {
-            let path = entry.path.clone();
+            let path = activation_path.clone();
             drop(state);
             self.activate_video_entry(path);
             return;
         }
         if !self.cfg.preview.audio_player.embeds(&self.cfg.open.command)
             || !(entry.kind == EntryKind::File || entry.link_kind == Some(EntryKind::File))
-            || self.audio.supports(&entry.path) == Some(false)
+            || (self.audio.supports(&entry.path) != Some(true)
+                && crate::fold::file_type::classify(&entry.path, &[])
+                    != crate::fold::file_type::FileType::Audio)
         {
             drop(state);
             self.core.send(Command::Enter);
             return;
         }
-        let path = entry.path.clone();
-        let candidates = audio_candidates(&state);
+        let path = activation_path;
+        let candidates = if crate::fold::location::is_archive(&entry.path) {
+            vec![path.clone()]
+        } else {
+            audio_candidates(&state)
+        };
         drop(state);
         self.audio_generation = self.audio_generation.wrapping_add(1);
         self.audio_activation = self.audio_generation;
@@ -931,6 +969,7 @@ impl App {
             audio_cell_size,
             editor: None,
             editor_return_focus: None,
+            archive_editor_poll: None,
             commander: false,
             active_pane: 0,
             panes: Vec::new(),
@@ -947,6 +986,10 @@ impl App {
             filter: None,
             g_pending: false,
             d_pending: false,
+            archive_activation: None,
+            archive_transition: None,
+            archive_close_tab: None,
+            archive_resolution: None,
             note: None,
             update_notices: crate::updates::Notices::start(),
             pending_update_notices: std::collections::VecDeque::new(),
@@ -1100,7 +1143,9 @@ impl App {
                         TermEvent::Paste(text) => {
                             if self.extension_editor_paste(&text) {
                                 self.repaint = true;
-                            } else if self.editor.is_some() {
+                            } else if self.editor.is_some()
+                                && self.layout.focus() == ModuleId::Preview
+                            {
                                 self.editor_paste(&text);
                             } else if self.overlays.paste(&text) {
                                 self.repaint = true;
@@ -1252,7 +1297,15 @@ impl App {
 
         self.dnd_autoscroll();
 
+        self.follow_preview_editor();
         self.poll_editor();
+        if self
+            .archive_editor_poll
+            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(250))
+        {
+            self.archive_editor_poll = Some(Instant::now());
+            self.core.send(Command::SyncArchiveEdits);
+        }
 
         self.poll_audio();
         self.extension_editor_pump();
@@ -1664,6 +1717,9 @@ impl App {
             _ => (None, None),
         };
 
+        if state.preview.is_none() && self.view.preview.is_some() {
+            self.last_preview_for = None;
+        }
         let preview = if let Some(Preview::Animation(sequence)) = preview.as_deref() {
             if self
                 .preview_animation
@@ -1790,13 +1846,22 @@ impl App {
                 .as_ref()
                 .map_or_else(|| active.dir.clone(), |search| search.root.clone()),
             home: state.home.clone(),
-            location: home_relative(
-                state
-                    .search
-                    .as_ref()
-                    .map_or(active.dir.as_path(), |search| search.root.as_path()),
-                &state.home,
-            ),
+            location: {
+                let mut location = home_relative(
+                    state
+                        .search
+                        .as_ref()
+                        .map_or(active.dir.as_path(), |search| search.root.as_path()),
+                    &state.home,
+                );
+                if let Some(listing) = listing.filter(|l| l.archive_changes > 0) {
+                    location.push_str(&format!(
+                        " · {} pending · Ctrl+S save",
+                        listing.archive_changes
+                    ));
+                }
+                location
+            },
             preview_name,
             preview,
             ops,
@@ -1894,6 +1959,33 @@ impl App {
 
     pub fn key(&mut self, k: KeyEvent) {
         self.refresh();
+        if !self.overlays.is_open()
+            && self.editor.is_none()
+            && k.code == KeyCode::Char('s')
+            && k.modifiers
+                .contains(starkit::crossterm::event::KeyModifiers::CONTROL)
+            && crate::fold::location::is_archive(&self.view.active_dir)
+        {
+            let dir = self.view.active_dir.clone();
+            let writable = self
+                .core
+                .state()
+                .active_listing()
+                .map(|l| l.archive_writable);
+            self.context_action(
+                crate::ui::overlays::context::Target {
+                    clicked: dir.clone(),
+                    directory: true,
+                    sources: vec![],
+                    destination: dir.clone(),
+                    create_dir: dir,
+                    editable: false,
+                    archive_writable: writable,
+                },
+                crate::ui::overlays::context::Action::ArchiveSave,
+            );
+            return;
+        }
         if !self.overlays.is_open() {
             if let Some(action) = keymap::resolve_configured(k, &self.cfg.ui.shortcuts) {
                 if matches!(
@@ -1934,7 +2026,11 @@ impl App {
             self.after_overlay_answer(answer);
             return;
         }
-        if self.editor.is_some() {
+        if self.editor.is_some() && self.layout.focus() == ModuleId::Preview {
+            if k.code == KeyCode::F(6) {
+                self.layout.focus_set(ModuleId::Stack);
+                return;
+            }
             self.editor_key(k);
             return;
         }
@@ -2080,6 +2176,22 @@ impl App {
             Answer::Drop(kind) => self.dnd_choose(kind),
             Answer::Context(target, action) => self.context_action(target, action),
             Answer::Operation(r) => {
+                if r.kind == OpKind::ArchiveTest && r.archive_options.password.is_some() {
+                    self.core.send(Command::UnlockArchive {
+                        location: r.destination,
+                        options: r.archive_options,
+                    });
+                    return;
+                }
+                if let OpKind::Compress(format) = r.kind {
+                    self.core.send(Command::QueueArchive {
+                        format,
+                        sources: r.sources,
+                        destination: r.destination,
+                        options: r.archive_options,
+                    });
+                    return;
+                }
                 if r.kind == OpKind::Extract && r.sources.len() > 1 {
                     for source in r.sources {
                         let folder = crate::fold::archive::destination(&source);
@@ -2099,12 +2211,44 @@ impl App {
             }
             Answer::Consumed => return,
             Answer::Closed => {
+                self.archive_transition = None;
+                self.archive_close_tab = None;
                 self.extension_editor_transition = None;
                 self.extension_transition_wait = false;
                 self.extension_resolving_changes = false;
                 self.dnd_cancel_choice();
             }
-            Answer::EditorChanges(save) => self.editor_resolve_changes(save),
+            Answer::EditorChanges(save) => {
+                if let Some(action) = self.archive_transition.take() {
+                    let key = {
+                        let state = self.core.state();
+                        state
+                            .listings
+                            .values()
+                            .find(|l| l.archive_changes > 0)
+                            .map(|l| l.dir.clone())
+                    };
+                    if let Some(key) = key {
+                        self.core.send(Command::QueueOperation {
+                            kind: if save {
+                                OpKind::ArchiveSave
+                            } else {
+                                OpKind::ArchiveDiscard
+                            },
+                            sources: vec![key],
+                            dest: None,
+                        });
+                        let id = self.core.state().queue.iter().last().map(|op| op.id);
+                        if let Some(id) = id {
+                            self.archive_resolution = Some((id, action));
+                        }
+                    } else {
+                        self.act(action);
+                    }
+                } else {
+                    self.editor_resolve_changes(save);
+                }
+            }
             Answer::Confirmed(pending) => self.on_confirmed(pending),
             Answer::RetryFailedDelete(paths) => {
                 self.overlays
@@ -2162,7 +2306,19 @@ impl App {
             Pending::QueueDelete(sources) => self.core.send(Command::QueueDeleteSources(sources)),
             Pending::ClearQueue => self.core.send(Command::ClearQueue),
             Pending::CancelRunning(op) => self.core.send(Command::StopActive(op)),
-            Pending::Quit => self.quit = true,
+            Pending::Quit => {
+                if self
+                    .core
+                    .state()
+                    .listings
+                    .values()
+                    .any(|l| l.archive_changes > 0)
+                {
+                    self.act(Action::Quit);
+                } else {
+                    self.quit = true;
+                }
+            }
             Pending::CloseTab(id) => {
                 self.finish_tab_close(id);
             }
@@ -2171,6 +2327,57 @@ impl App {
 
     /// One action -- the single place a key or a click becomes a change.
     fn act(&mut self, a: Action) {
+        if a == Action::Quit {
+            if let Some(id) = self.parked_archive_editor() {
+                self.change_tab(Command::SwitchTab(id));
+                self.note = Some((
+                    "Save or discard and exit this tab’s archive editor first".into(),
+                    NoteLevel::Warning,
+                    Instant::now(),
+                ));
+                return;
+            }
+        }
+        if matches!(a, Action::Quit | Action::CloseTab | Action::TogglePreview)
+            && self
+                .editor
+                .as_ref()
+                .is_some_and(|e| e.origin.is_some() && e.interacted)
+        {
+            self.layout.focus_set(ModuleId::Preview);
+            self.note = Some((
+                "Save or discard and exit the editor first".into(),
+                NoteLevel::Warning,
+                Instant::now(),
+            ));
+            return;
+        }
+        if matches!(a, Action::Quit | Action::CloseTab | Action::Pop) {
+            let dirty = {
+                let state = self.core.state();
+                let leaving = if a == Action::Pop {
+                    matches!(crate::fold::location::Location::from_key(&state.active_frame().dir),Ok(crate::fold::location::Location::Archive {directory,member:None,..}) if directory.as_os_str().is_empty())
+                } else {
+                    true
+                };
+                if leaving {
+                    state
+                        .listings
+                        .values()
+                        .find(|l| l.archive_changes > 0)
+                        .and_then(|l| crate::fold::location::Location::from_key(&l.dir).ok())
+                        .map(|l| l.display())
+                } else {
+                    None
+                }
+            };
+            if let Some(name) = dirty {
+                self.archive_transition = Some(a);
+                self.overlays.open_unsaved(name);
+                return;
+            }
+        }
+
         if matches!(
             a,
             Action::Quit
@@ -2186,7 +2393,10 @@ impl App {
         match a {
             Action::NewTab => self.tab_action(super::tabs::Action::New),
             Action::CloseTab => {
-                let id = self.core.state().tabs.active().id;
+                let id = self
+                    .archive_close_tab
+                    .take()
+                    .unwrap_or_else(|| self.core.state().tabs.active().id);
                 self.tab_action(super::tabs::Action::Close(id));
             }
             Action::NextTab => self.cycle_tab(1),
@@ -2227,7 +2437,7 @@ impl App {
             Action::Activate => match self.layout.focus() {
                 ModuleId::Stack => self.activate_entry(),
                 ModuleId::Operations => self.core.send(Command::Run),
-                ModuleId::Preview => {}
+                ModuleId::Preview => self.browse_archive_preview(),
             },
             Action::Back => {
                 if self.filter.is_some() {
@@ -2805,7 +3015,26 @@ impl App {
             return;
         }
 
-        if self.editor.is_some() {
+        if self.editor.is_some()
+            && regions
+                .rect_of(ModuleId::Preview)
+                .contains((m.column, m.row).into())
+        {
+            if kind == MouseEventKind::Down(MouseButton::Left) {
+                self.layout.focus_set(ModuleId::Preview);
+                if let Some(editor) = &mut self.editor {
+                    editor.interacted = true;
+                }
+                self.repaint = true;
+            }
+            let body = super::editor::preview_content_rect(regions.rect_of(ModuleId::Preview));
+            if let Some(Err(error)) = self.editor.as_mut().map(|e| e.mouse(m, body)) {
+                self.note = Some((
+                    format!("Editor pointer input failed: {error:#}"),
+                    NoteLevel::Error,
+                    Instant::now(),
+                ));
+            }
             return;
         }
         if let Some(places) = &mut self.places {
@@ -3194,7 +3423,28 @@ impl App {
         }
     }
 
+    fn archive_preview_available(&self) -> bool {
+        matches!(self.view.preview.as_deref(), Some(Preview::Document(document))
+            if matches!(document.content, crate::fold::preview::model::Content::Archive(_)))
+            && self
+                .core
+                .state()
+                .cursor_entry()
+                .is_some_and(|entry| !entry.is_dir_like())
+    }
+
+    fn browse_archive_preview(&mut self) {
+        if self.archive_preview_available() {
+            self.activate_entry();
+            self.layout.focus_set(ModuleId::Stack);
+            self.repaint = true;
+        }
+    }
+
     fn panel_words(&self, module: ModuleId) -> Vec<panels::Word> {
+        if module == ModuleId::Preview && self.archive_preview_available() {
+            return vec![panels::Word::BrowseArchive, panels::Word::Close];
+        }
         #[cfg(feature = "terminal-graphics")]
         if module == ModuleId::Stack && self.graphical.as_ref().is_some_and(|g| !g.cell_mode) {
             return panels::words(module)
@@ -3232,6 +3482,7 @@ impl App {
 
     fn word_click(&mut self, word: panels::Word) {
         match word {
+            panels::Word::BrowseArchive => self.browse_archive_preview(),
             panels::Word::AudioOutput(_) => {
                 #[cfg(feature = "terminal-graphics")]
                 self.toggle_audio_output();
@@ -3447,6 +3698,46 @@ impl App {
     // -- drawing --------------------------------------------------------
 
     pub fn draw(&mut self, area: Rect, buf: &mut Buffer) {
+        if let Some((id, action)) = self.archive_resolution {
+            let status = self
+                .core
+                .state()
+                .queue
+                .iter()
+                .find(|op| op.id == id)
+                .map(|op| op.status);
+            match status {
+                Some(OpStatus::Done) => {
+                    let dirty = self
+                        .core
+                        .state()
+                        .listings
+                        .values()
+                        .any(|l| l.archive_changes > 0);
+                    if !dirty {
+                        self.archive_resolution = None;
+                        self.act(action);
+                    }
+                }
+                Some(OpStatus::Failed | OpStatus::Cancelled) => {
+                    self.archive_resolution = None;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(key) = self.archive_activation.clone() {
+            let state = self.core.state();
+            let ready = state.archive_materialized.contains_key(&key);
+            let still_selected = state.cursor_entry().is_some_and(|e| e.path == key);
+            drop(state);
+            if !still_selected {
+                self.archive_activation = None;
+            } else if ready {
+                self.archive_activation = None;
+                self.activate_entry();
+            }
+        }
         let bg = Style::default()
             .bg(panels::rgb(self.theme.bg))
             .fg(panels::rgb(self.theme.fg));
@@ -3918,6 +4209,9 @@ fn level_name(dir: &std::path::Path, home: &std::path::Path) -> String {
 
 /// The active directory, with the home prefix replaced by `~`.
 fn home_relative(dir: &std::path::Path, home: &std::path::Path) -> String {
+    if crate::fold::location::is_archive(dir) {
+        return crate::fold::location::display(dir);
+    }
     if dir == home {
         return "~".to_string();
     }
@@ -4266,6 +4560,9 @@ fn running_verb_lower(kind: OpKind) -> &'static str {
         OpKind::Rename => "renaming",
         OpKind::Compress(_) => "compressing",
         OpKind::Extract => "extracting",
+        OpKind::ArchiveSave => "saving archive",
+        OpKind::ArchiveDiscard => "discarding edits",
+        OpKind::ArchiveTest => "testing archive",
     }
 }
 
@@ -4277,6 +4574,9 @@ fn running_verb_upper(kind: OpKind) -> &'static str {
         OpKind::Rename => "RENAMING",
         OpKind::Compress(_) => "COMPRESSING",
         OpKind::Extract => "EXTRACTING",
+        OpKind::ArchiveSave => "SAVING ARCHIVE",
+        OpKind::ArchiveDiscard => "DISCARDING EDITS",
+        OpKind::ArchiveTest => "TESTING ARCHIVE",
     }
 }
 
@@ -4312,6 +4612,326 @@ mod tests {
         let cfg_path = dir.path().join("config.toml");
         let app = App::new(core, cfg, cfg_path, None, Graphics::disabled());
         (app, fk, dir)
+    }
+
+    #[test]
+    fn members_inside_archive_preview_text_image_and_binary_contents() {
+        use std::io::Write;
+        let (app, fake, temp) = app();
+        let archive = temp.path().join("members.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        for (name, bytes) in [
+            ("hello.txt", &b"hello from inside"[..]),
+            ("game.RES", &b"\x00\x01Game\xff"[..]),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.start_file("picture.png", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&std::fs::read(fake.fixture.path("pictures/harbour.png")).unwrap())
+            .unwrap();
+        zip.finish().unwrap();
+        let root = crate::fold::location::Location::Filesystem(archive)
+            .enter_archive()
+            .unwrap()
+            .key();
+        app.core.send(Command::Push(root));
+        fake.pump();
+        let entries = app.core.state().active_listing().unwrap().entries.clone();
+        for entry in entries {
+            app.core.send(Command::Preview(entry.path.clone()));
+            fake.pump();
+            let state = app.core.state();
+            let (path, preview) = state.preview.as_ref().expect("member preview");
+            assert_eq!(path, &entry.path);
+            assert!(state.archive_materialized.contains_key(path));
+            if entry.display == "hello.txt" {
+                assert!(
+                    matches!(preview.as_ref(), Preview::Text { head, .. } if head == "hello from inside")
+                );
+            } else if entry.display == "picture.png" {
+                assert!(matches!(
+                    preview.as_ref(),
+                    Preview::Image {
+                        width: 64,
+                        height: 48,
+                        ..
+                    }
+                ));
+            } else {
+                let Preview::Document(document) = preview.as_ref() else {
+                    panic!("binary preview");
+                };
+                assert_eq!(document.kind, "Binary data");
+                let crate::fold::preview::model::Content::Pages(pages) = &document.content else {
+                    panic!("hex page");
+                };
+                assert!(pages[0].text.contains("00 01 47 61 6d 65 ff"));
+                assert!(document
+                    .fields
+                    .iter()
+                    .any(|f| f.label == "Member" && f.value == "game.RES"));
+                assert!(!document.fields.iter().any(|f| f.label == "Modified"));
+            }
+        }
+    }
+
+    #[test]
+    fn generic_archive_editor_follows_until_input_and_survives_tab_guards() {
+        let (mut app, _fake, temp) = app();
+        let file = temp.path().join("working.txt");
+        std::fs::write(&file, b"text").unwrap();
+        let origin = crate::fold::location::Location::Archive {
+            source: crate::fold::location::ArchiveSource {
+                file: temp.path().join("archive.zip"),
+                nested: vec![],
+            },
+            directory: PathBuf::new(),
+            member: Some(crate::fold::location::Member {
+                index: 0,
+                name: "working.txt".into(),
+            }),
+        }
+        .key();
+        let spawn = || {
+            let mut e = Editor::spawn(
+                file.clone(),
+                (80, 12),
+                vec!["sh".into(), "-c".into(), "cat >/dev/null".into()],
+            )
+            .unwrap();
+            e.origin = Some(origin.clone());
+            e
+        };
+        app.layout.preview_open = true;
+        app.editor = Some(spawn());
+        app.view.cursor_path = Some(file.clone());
+        app.follow_preview_editor();
+        assert!(
+            app.editor.is_none(),
+            "Untouched preview follows the new selection"
+        );
+        let mut e = spawn();
+        e.key(KeyEvent::new(
+            KeyCode::Char('i'),
+            starkit::crossterm::event::KeyModifiers::NONE,
+        ))
+        .unwrap();
+        app.editor = Some(e);
+        app.follow_preview_editor();
+        assert!(app.editor.is_some(), "Input pins the generic editor");
+        let original_tab = app.core.state().tabs.active().id;
+        app.change_tab(Command::NewTab { duplicate: false });
+        assert!(app.editor.is_none());
+        app.act(Action::Quit);
+        assert!(!app.quit);
+        assert_eq!(app.core.state().tabs.active().id, original_tab);
+        assert!(app.editor.is_some());
+        app.act(Action::CloseTab);
+        assert_eq!(app.core.state().tabs.tabs.len(), 2);
+    }
+
+    #[test]
+    fn read_only_archive_member_never_starts_configured_editor() {
+        let (app, fake, temp) = app();
+        let source = temp.path().join("read-only.tar");
+        let file = temp.path().join("settings.cfg");
+        std::fs::write(&file, b"setting=true\n").unwrap();
+        crate::fold::archive::service::request(
+            starfold_archive_protocol::Request::Create {
+                format: starfold_archive_protocol::Format::Tar,
+                output: source.clone(),
+                options: Default::default(),
+                items: vec![starfold_archive_protocol::Item {
+                    from: file,
+                    to: Some("settings.cfg".into()),
+                    kind: starfold_archive_protocol::ItemKind::File(13),
+                }],
+            },
+            &crate::fold::ops::progress::Progress::new(0),
+            None,
+        )
+        .unwrap();
+        let root = crate::fold::location::Location::Filesystem(source)
+            .enter_archive()
+            .unwrap()
+            .key();
+        app.core.send(Command::Push(root));
+        fake.pump();
+        let member = app.core.state().active_listing().unwrap().entries[0]
+            .path
+            .clone();
+        app.core.send(Command::Preview(member.clone()));
+        fake.pump();
+        let state = app.core.state();
+        assert!(!state.archive_editable.contains(&member));
+        let Preview::Document(document) = state.preview.as_ref().unwrap().1.as_ref() else {
+            panic!("readonly document");
+        };
+        assert!(document.extension.is_none());
+        assert!(document.notice.as_ref().unwrap().contains("Extract"));
+        let crate::fold::preview::model::Content::Pages(pages) = &document.content else {
+            panic!("text page");
+        };
+        assert_eq!(pages[0].text, "setting=true");
+    }
+
+    #[test]
+    fn renamed_archive_opens_by_content_without_audio_interception() {
+        use std::io::Write;
+        let (mut app, fake, temp) = app();
+        let file = temp.path().join("archive.data");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+        zip.start_file("note.cfg", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"option=yes").unwrap();
+        zip.finish().unwrap();
+        app.core.send(Command::Push(temp.path().into()));
+        fake.pump();
+        app.refresh();
+        app.activate_entry();
+        fake.pump();
+        app.refresh();
+        assert!(crate::fold::location::is_archive(
+            &app.core.state().active_frame().dir
+        ));
+        assert_eq!(app.core.state().cursor_entry().unwrap().display, "note.cfg");
+        assert!(app.audio_path.is_none());
+    }
+
+    #[test]
+    fn focused_archive_preview_opens_from_enter_and_browse_click() {
+        use std::io::Write;
+        for pointer in [false, true] {
+            let (mut app, fake, temp) = app();
+            let file = temp.path().join("book.zip");
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+            zip.start_file("hello.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"hello").unwrap();
+            zip.finish().unwrap();
+            app.core.send(Command::Push(temp.path().into()));
+            fake.pump();
+            // The fake controller cannot spawn main's private preview worker.
+            // Read the real provider directly, then supply its presentation.
+            let document = crate::fold::preview::providers::build(
+                &file,
+                b"PK\x03\x04",
+                1,
+                &app.cfg.core().preview,
+            )
+            .unwrap();
+            {
+                let mut state = fake.state_mut();
+                state.preview = Some((file, Arc::new(Preview::Document(document))));
+                state.version += 1;
+            }
+            app.refresh();
+            app.layout.preview_open = true;
+            app.layout.focus_set(ModuleId::Preview);
+            assert!(app.archive_preview_available());
+            let area = Rect::new(0, 0, 100, 40);
+            let mut buffer = Buffer::empty(area);
+            app.draw(area, &mut buffer);
+            assert!(dump(&buffer, area).contains("Browse"));
+            if pointer {
+                let rect = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Preview);
+                let (_, slot) = header::slots(rect, &app.panel_words(ModuleId::Preview))
+                    .into_iter()
+                    .find(|(word, _)| *word == panels::Word::BrowseArchive)
+                    .unwrap();
+                app.mouse(mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    slot.x,
+                    slot.y,
+                ));
+            } else {
+                app.key(code(KeyCode::Enter));
+            }
+            assert!(crate::fold::location::is_archive(
+                &app.core.state().active_frame().dir
+            ));
+            assert_eq!(app.layout.focus(), ModuleId::Stack);
+            fake.pump();
+            app.refresh();
+            assert_eq!(
+                app.core.state().cursor_entry().unwrap().display,
+                "hello.txt"
+            );
+        }
+    }
+    #[test]
+    fn archive_activation_enters_browser_before_audio_capabilities_arrive() {
+        use std::io::Write;
+        let (mut app, fake, temp) = app();
+        let file = temp.path().join("book.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+        zip.start_file("hello.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"hello").unwrap();
+        zip.finish().unwrap();
+        app.core.send(Command::Push(temp.path().into()));
+        fake.pump();
+        app.refresh();
+        assert_eq!(app.audio.supports(&file), None);
+        app.activate_entry();
+        assert!(crate::fold::location::is_archive(
+            &app.core.state().active_frame().dir
+        ));
+        assert_eq!(app.audio_generation, 0);
+        fake.pump();
+        app.refresh();
+        assert_eq!(
+            app.core.state().cursor_entry().unwrap().display,
+            "hello.txt"
+        );
+    }
+    #[test]
+    fn archive_delete_keeps_original_and_quit_waits_for_save() {
+        use std::io::Write;
+        let (mut app, fake, temp) = app();
+        fake.pump();
+        let file = temp.path().join("book.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+        for name in ["one.txt", "two.txt"] {
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"hello").unwrap();
+        }
+        writer.finish().unwrap();
+        let original = std::fs::read(&file).unwrap();
+        let root = crate::fold::location::Location::Filesystem(file.clone())
+            .enter_archive()
+            .unwrap()
+            .key();
+        app.core.send(Command::Push(root.clone()));
+        fake.pump();
+        app.refresh();
+        let selected = app.core.state().cursor_entry().unwrap().path.clone();
+        app.request_delete(vec![selected], true);
+        assert!(
+            matches!(app.overlays.current(),Some(Overlay::Confirm(c)) if c.title=="remove from ZIP")
+        );
+        app.key(key('y'));
+        fake.pump();
+        app.refresh();
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+        assert!(app.core.state().listings[&root].archive_changes > 0);
+        app.act(Action::Quit);
+        assert!(!app.quit);
+        assert!(matches!(app.overlays.current(), Some(Overlay::Unsaved(_))));
+        app.key(key('s'));
+        assert!(!app.quit);
+        fake.pump();
+        let area = Rect::new(0, 0, 100, 30);
+        app.refresh();
+        app.draw(area, &mut Buffer::empty(area));
+        assert!(app.quit);
+        let archive = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
+        assert_eq!(archive.len(), 1);
     }
 
     #[cfg(feature = "terminal-graphics")]

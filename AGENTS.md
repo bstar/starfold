@@ -28,7 +28,7 @@ built executable; a debug/test build does not update the user's command.
 Restart running STAR/FOLD instances when desktop testing requires the new
 binary, since existing processes keep the old executable loaded.
 
-There are no separately installed system libraries. `unrar_sys` compiles the bundled RARLAB C++ engine using the compiler in the flake; CI supplies the native C++ toolchain. Its notice is installed from `LICENSES/UnRAR.txt`. `libbz2-rs-sys` is pure Rust despite its name. That is worth stating for a program that
+The archive extension uses native 7-Zip and XAD/unar tools for additional formats. `unrar_sys` compiles the bundled RARLAB C++ engine using the compiler in the flake; CI supplies the native C++ toolchain. Zstandard creation uses bundled `zstd-sys`; its compiler comes from the same build toolchain. The UnRAR notice is installed from `LICENSES/UnRAR.txt`. `libbz2-rs-sys` is pure Rust despite its name. That is worth stating for a program that
 deletes to the trash and draws pictures: trash is the freedesktop
 specification, in pure Rust, on Linux, and `NSFileManager` through the `objc2`
 bindings on macOS — Rust bindings to a system framework, with no `-sys` crate
@@ -306,13 +306,35 @@ It runs with a deadline and its output is decoded under the bounded preview
 size. Ordinary images decode in process, so the helper is not needed for
 normal camera photos.
 
-`fold::archive` is independent of preview presentation. It owns archive entries,
-formats, validation and codec adapters. `archive::operation` plans source trees
-and owns private staging/publishing; `archive::connection` supervises codecs in
-`starfold --archive-worker`, reports progress, and terminates on cancellation.
-Failed or cancelled work cannot publish partial archives/extractions. Codec
-processes share a 768 MiB resource ceiling from `fold::process`. RAR uses bundled
-native UnRAR: the considered Rust port also had GPL terms, so it is not linked.
+`fold::archive` is independent of preview presentation. It owns typed archive
+locations, cached listings, private member materialization, ZIP edit staging and
+transactional publication. All codecs live in `extensions/archive`. Its library
+is built into `starfold`, which starts its own private
+`--archive-extension-stdio` mode in a supervised child process. Do not put codec
+logic in UI/controller code. Building/installing the ordinary FOLD executable
+must provide archive browsing without an adjacent helper. The independent
+`starfold-archive --stdio` executable remains available for other consumers and
+unit-test harnesses. `STARFOLD_ARCHIVE_EXTENSION` overrides the built-in provider.
+Native 7-Zip and XAD/unar tools are configured by the package/devshell.
+Linux extension processes share a 768 MiB address-space ceiling; cancellation
+kills/reaps their process groups.
+
+Existing PathBuf controller APIs carry opaque archive location keys; these are
+identities, never filesystem paths. Decode `fold::location::Location` before
+filesystem IO. Member indices distinguish duplicate archive headers. Rendering
+uses display paths. Archive edit scratch state is worker-owned; UI decisions use
+`Listing::archive_changes`, and all updates still fold through `state::apply`.
+ZIP Save must retain pending changes and the original when rebuilding fails.
+Editable archive members use a private working copy distinct from materialization
+caches. Completed editor writes are snapshotted and journaled; Save archive
+publishes the affected writable ZIP chain at its outermost container. Keep
+configured editor behavior, dirty-buffer transitions and generic-editor pinning.
+Never start interactive editors for members in a read-only chain. Recovery
+manifests contain no passwords and must validate source identity and snapshot
+containment. Missing codec inspection capabilities imply read-only, not suffix-
+based permission to edit. `scripts/test-archive-matrix.py` records verified
+fixtures; untested suffixes are not a support guarantee.
+
 
 Archive destinations must be disjoint from their sources in both directions:
 overwriting a directory containing the source archive would delete it during
@@ -451,3 +473,11 @@ is a session preference, independent of player artwork settings.
 device and optionally the FOLD controller with a simulated remote frontend.
 Physical macOS Kitty audio over the user's SSH connection still needs a
 listening check; generated PCM and headless controller tests do not prove it.
+
+### Video capability locality
+
+Original streaming is negotiated only by a frontend outside an SSH shell.
+`SSH_CONNECTION`/`SSH_TTY` identify the unbridged remote renderer: it must retain
+the bounded video proxy instead of decoding 4K into raw frames over the TTY.
+A local `--ssh` client and registered Kitty bridge remain original-capable.
+`tests/smoke.rs` checks both capability reports without opening a user session.

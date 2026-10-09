@@ -118,7 +118,8 @@
         mkStarfold = { pkgsFor ? pkgs, graphical ? false }:
           pkgsFor.rustPlatform.buildRustPackage {
             # unrar_sys compiles the bundled RARLAB C++ engine.
-            nativeBuildInputs = [ pkgsFor.stdenv.cc pkgsFor.pkg-config pkgsFor.clang ];
+            nativeBuildInputs = [ pkgsFor.stdenv.cc pkgsFor.pkg-config pkgsFor.clang pkgsFor.makeWrapper ];
+            nativeCheckInputs = [ pkgsFor._7zz pkgsFor.unar ];
             buildInputs = [ pkgsFor.ffmpeg ] ++ pkgsFor.lib.optional pkgsFor.stdenv.hostPlatform.isLinux pkgsFor.alsa-lib;
             LIBCLANG_PATH = "${pkgsFor.llvmPackages.libclang.lib}/lib";
             BINDGEN_EXTRA_CLANG_ARGS = "-I${pkgsFor.ffmpeg.dev}/include";
@@ -149,9 +150,11 @@
 
             # freedesktop assets, which mean nothing on macOS.
             postInstall = ''
+              wrapProgram $out/bin/starfold --set STARFOLD_ARCHIVE_7ZZ ${pkgsFor._7zz}/bin/7zz --set STARFOLD_ARCHIVE_UNAR ${pkgsFor.unar}/bin/unar --set STARFOLD_ARCHIVE_LSAR ${pkgsFor.unar}/bin/lsar
+              wrapProgram $out/bin/starfold-archive --set STARFOLD_ARCHIVE_7ZZ ${pkgsFor._7zz}/bin/7zz --set STARFOLD_ARCHIVE_UNAR ${pkgsFor.unar}/bin/unar --set STARFOLD_ARCHIVE_LSAR ${pkgsFor.unar}/bin/lsar
               install -Dm644 NOTICE $out/share/doc/starfold/NOTICE
               cp -R documentation $out/share/doc/starfold/
-              for media_license in LICENSES/ffmpeg-*.txt LICENSES/Hayro-*.txt; do
+              for media_license in LICENSES/ffmpeg-*.txt LICENSES/Hayro-*.txt LICENSES/Archive-*.txt; do
                 install -Dm644 "$media_license" "$out/share/licenses/starfold/$(basename "$media_license")"
               done
               install -Dm644 LICENSES/UnRAR.txt $out/share/licenses/starfold/UnRAR.txt
@@ -225,6 +228,9 @@
         };
 
         devShells.default = pkgs.mkShell {
+          STARFOLD_ARCHIVE_7ZZ = "${pkgs._7zz}/bin/7zz";
+          STARFOLD_ARCHIVE_LSAR = "${pkgs.unar}/bin/lsar";
+          STARFOLD_ARCHIVE_UNAR = "${pkgs.unar}/bin/unar";
           ALSA_PLUGIN_DIR = alsaPluginDir;
           LIBVA_DRIVERS_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.mesa}/lib/dri";
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -235,6 +241,8 @@
             pkg-config
             clang
             ffmpeg
+            _7zz
+            unar
             rustc
             cargo
             rustfmt

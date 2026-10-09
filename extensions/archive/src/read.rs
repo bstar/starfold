@@ -1,6 +1,6 @@
 use super::Entry as ArchiveEntry;
 use super::{safe_path, Format, MAX_ENTRIES, MAX_OUTPUT};
-use crate::fold::ops::progress::Progress;
+use crate::progress::Progress;
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
@@ -13,9 +13,10 @@ fn tar_reader(path: &Path, format: Format) -> anyhow::Result<Box<dyn Read>> {
         Format::Tar => Box::new(f),
         Format::TarGz => Box::new(flate2::read::MultiGzDecoder::new(f)),
         Format::TarXz => Box::new(lzma_rust2::XzReader::new(f, true)),
+        Format::TarLz4 => Box::new(lz4_flex::frame::FrameDecoder::new(f)),
         Format::TarBz2 => Box::new(bzip2::read::MultiBzDecoder::new(f)),
         Format::TarZst => Box::new(ruzstd::decoding::StreamingDecoder::new(f)?),
-        _ => unreachable!(),
+        _ => anyhow::bail!("This format requires a native archive codec"),
     })
 }
 fn entry(name: &str, bytes: u64, directory: bool) -> ArchiveEntry {
@@ -26,7 +27,7 @@ fn entry(name: &str, bytes: u64, directory: bool) -> ArchiveEntry {
     }
 }
 pub fn list(path: &Path, limit: usize) -> anyhow::Result<(Vec<ArchiveEntry>, bool)> {
-    let format = Format::detect(path)?;
+    let format = crate::detect(path)?;
     let limit = limit.min(MAX_ENTRIES);
     let mut entries = vec![];
     match format {
@@ -34,6 +35,14 @@ pub fn list(path: &Path, limit: usize) -> anyhow::Result<(Vec<ArchiveEntry>, boo
             let mut a = zip::ZipArchive::new(File::open(path)?)?;
             for i in 0..a.len().min(limit + 1) {
                 let e = a.by_index_raw(i)?;
+                anyhow::ensure!(
+                    matches!(
+                        e.compression(),
+                        zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
+                    ),
+                    "ZIP method requires native engine"
+                );
+                anyhow::ensure!(!e.is_symlink(), "Archive links are unsupported");
                 entries.push(entry(e.name(), e.size(), e.is_dir()));
             }
         }
@@ -140,7 +149,7 @@ impl Write for CheckedWriter<'_> {
     }
 }
 pub fn extract(path: &Path, root: &Path, progress: &Progress) -> anyhow::Result<()> {
-    let format = Format::detect(path)?;
+    let format = crate::detect(path)?;
     let mut sink = Sink {
         root,
         progress,
@@ -220,6 +229,92 @@ pub fn extract(path: &Path, root: &Path, progress: &Progress) -> anyhow::Result<
                 let size = e.size();
                 sink.copy(&name, t.is_dir(), size, &mut e)?;
             }
+        }
+    }
+    Ok(())
+}
+
+/// Read one exact indexed member; never extract its siblings to disk.
+pub fn copy_member(
+    path: &Path,
+    index: usize,
+    output: &mut dyn Write,
+    password: Option<&str>,
+) -> anyhow::Result<()> {
+    match crate::detect(path)? {
+        Format::Zip => {
+            let mut archive = zip::ZipArchive::new(File::open(path)?)?;
+            let mut member = if let Some(password) = password {
+                archive.by_index_decrypt(index, password.as_bytes())?
+            } else {
+                archive.by_index(index)?
+            };
+            let mode = member.unix_mode().unwrap_or(0) & 0o170000;
+            anyhow::ensure!(
+                matches!(mode, 0 | 0o100000) && !member.is_dir(),
+                "Archive member is not a regular file"
+            );
+            std::io::copy(&mut member, output)?;
+        }
+        Format::SevenZip => {
+            let password = password
+                .map(sevenz_rust2::Password::from)
+                .unwrap_or_else(sevenz_rust2::Password::empty);
+            let mut archive = sevenz_rust2::ArchiveReader::open(path, password)?;
+            let selected = std::ptr::from_ref(
+                archive
+                    .archive()
+                    .files
+                    .get(index)
+                    .ok_or_else(|| anyhow::anyhow!("Archive member disappeared"))?,
+            );
+            let mut found = false;
+            archive.for_each_entries(|member, input| {
+                if found {
+                    return Ok(false);
+                }
+                if !std::ptr::eq(member, selected) {
+                    std::io::copy(input, &mut std::io::sink())
+                        .map_err(sevenz_rust2::Error::from)?;
+                    return Ok(true);
+                }
+                let mode = (member.windows_attributes() >> 16) & 0o170000;
+                if member.is_directory() || member.is_anti_item() || !matches!(mode, 0 | 0o100000) {
+                    return Err(sevenz_rust2::Error::Other(
+                        "Archive member is not a regular file".into(),
+                    ));
+                }
+                std::io::copy(input, output).map_err(sevenz_rust2::Error::from)?;
+                found = true;
+                Ok(false)
+            })?;
+            anyhow::ensure!(found, "Archive member disappeared");
+        }
+        Format::Rar => {
+            let mut archive = super::rar::Reader::open(path, true)?;
+            for i in 0..=index {
+                let member = archive
+                    .next()?
+                    .ok_or_else(|| anyhow::anyhow!("Archive member disappeared"))?;
+                if i == index {
+                    anyhow::ensure!(!member.directory, "Archive member is a directory");
+                    archive.copy(output)?;
+                } else {
+                    archive.skip()?;
+                }
+            }
+        }
+        format => {
+            let mut archive = tar::Archive::new(tar_reader(path, format)?);
+            let mut member = archive
+                .entries()?
+                .nth(index)
+                .ok_or_else(|| anyhow::anyhow!("Archive member disappeared"))??;
+            anyhow::ensure!(
+                member.header().entry_type().is_file(),
+                "Archive member is not a regular file"
+            );
+            std::io::copy(&mut member, output)?;
         }
     }
     Ok(())

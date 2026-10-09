@@ -815,23 +815,46 @@ fn breadcrumb_slots(
     path: &std::path::Path,
     home: &std::path::Path,
 ) -> Vec<(Rect, String, PathBuf)> {
-    let (mut target, first, rest) = if let Ok(rest) = path.strip_prefix(home) {
-        (home.to_path_buf(), "~".to_owned(), rest)
+    let mut parts = if crate::fold::location::is_archive(path) {
+        let mut locations = vec![];
+        let mut location = crate::fold::location::Location::from_key(path).ok();
+        while let Some(current) = location {
+            let key = current.key();
+            let label = if key == home {
+                "~".into()
+            } else {
+                key.file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "/".into())
+            };
+            locations.push((label, key.clone()));
+            if key == home {
+                break;
+            }
+            location = current.parent();
+        }
+        locations.reverse();
+        locations
     } else {
-        (
-            PathBuf::from("/"),
-            "/".to_owned(),
-            path.strip_prefix("/").unwrap_or(path),
-        )
+        let (mut target, first, rest) = if let Ok(rest) = path.strip_prefix(home) {
+            (home.to_path_buf(), "~".to_owned(), rest)
+        } else {
+            (
+                PathBuf::from("/"),
+                "/".to_owned(),
+                path.strip_prefix("/").unwrap_or(path),
+            )
+        };
+        let mut parts = vec![(first, target.clone())];
+        for part in rest.components() {
+            target.push(part.as_os_str());
+            parts.push((
+                part.as_os_str().to_string_lossy().into_owned(),
+                target.clone(),
+            ));
+        }
+        parts
     };
-    let mut parts = vec![(first, target.clone())];
-    for part in rest.components() {
-        target.push(part.as_os_str());
-        parts.push((
-            part.as_os_str().to_string_lossy().into_owned(),
-            target.clone(),
-        ));
-    }
     let width = |parts: &[(String, PathBuf)]| -> usize {
         parts
             .iter()
@@ -849,11 +872,11 @@ fn breadcrumb_slots(
         collapsed = true;
     }
     if collapsed && area.width > 4 {
-        let parent = parts[0]
-            .1
-            .parent()
-            .unwrap_or(std::path::Path::new("/"))
-            .to_path_buf();
+        let parent = crate::fold::location::Location::from_key(&parts[0].1)
+            .ok()
+            .and_then(|l| l.parent())
+            .map(|l| l.key())
+            .unwrap_or_else(|| std::path::PathBuf::from("/"));
         parts.insert(0, ("…".into(), parent));
     }
     let mut x = area.x;
@@ -2783,7 +2806,11 @@ impl App {
             self.video_transport_action(&action, value);
         }
         if let Some(pending) = self.graphical.as_ref().unwrap().video_pending.clone() {
-            if !self.layout.preview_open || self.view.cursor_path.as_ref() != Some(&pending) {
+            let cursor_matches = self.view.cursor_path.as_ref().is_some_and(|cursor| {
+                cursor == &pending
+                    || self.core.state().archive_materialized.get(cursor) == Some(&pending)
+            });
+            if !self.layout.preview_open || !cursor_matches {
                 self.graphical.as_mut().unwrap().video_pending = None;
             } else if matches!(self.view.preview.as_deref(), Some(Preview::Video { path, .. }) if path == &pending)
             {
@@ -2992,7 +3019,7 @@ impl App {
             );
         }
         format!(
-            "SSH stream · Preview · {}p",
+            "SSH stream · Preview · up to {}p · H.264/AAC",
             match video.quality {
                 starkit::media::Quality::Low => 360,
                 starkit::media::Quality::Balanced => 480,
@@ -3809,15 +3836,15 @@ impl App {
         });
         if let Some(video) = state.video.as_ref() {
             let mut text = format!(
-                "{:02}:{:02} / {:02}:{:02} · {}% volume · {}×{} · {}",
+                "{:02}:{:02} / {:02}:{:02} · {}% volume · {} · source {}×{}",
                 position as u64 / 60,
                 position as u64 % 60,
                 poster.duration as u64 / 60,
                 poster.duration as u64 % 60,
                 video.volume,
+                Self::video_stream_label(video),
                 poster.width,
                 poster.height,
-                Self::video_stream_label(video)
             );
             if video.buffering && !video.finished {
                 text = format!(
@@ -4042,6 +4069,48 @@ mod tests {
         assert!(app.resume_video.is_none());
         assert!(app.graphical.as_ref().unwrap().direct_play.is_none());
         assert!(app.note.as_ref().unwrap().0.contains("Movie not found"));
+    }
+
+    #[test]
+    fn archive_video_pending_tracks_member_identity() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            core,
+            cfg,
+            dir.path().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.layout.preview_open = true;
+        let local = dir.path().join("movie.mkv");
+        let key = crate::fold::location::Location::Archive {
+            source: crate::fold::location::ArchiveSource {
+                file: dir.path().join("movies.zip"),
+                nested: vec![],
+            },
+            directory: PathBuf::new(),
+            member: Some(crate::fold::location::Member {
+                index: 0,
+                name: "movie.mkv".into(),
+            }),
+        }
+        .key();
+        fake.state_mut()
+            .archive_materialized
+            .insert(key.clone(), local.clone());
+        app.view.cursor_path = Some(key);
+        app.graphical.as_mut().unwrap().video_pending = Some(local.clone());
+        app.tick_video();
+        assert_eq!(
+            app.graphical.as_ref().unwrap().video_pending.as_ref(),
+            Some(&local)
+        );
+        app.view.cursor_path = Some(dir.path().join("other.txt"));
+        app.tick_video();
+        assert!(app.graphical.as_ref().unwrap().video_pending.is_none());
     }
 
     #[test]
@@ -4871,6 +4940,7 @@ mod tests {
                 };
                 app.overlays
                     .open_destination(crate::ui::overlays::context::Request {
+                        archive_options: Default::default(),
                         kind,
                         sources: vec![source.clone()],
                         destination: dest.clone(),

@@ -152,12 +152,70 @@ pub fn run(kind: OpKind, p: &Plan, policy: ConflictPolicy, progress: &Progress) 
         }
         check_source_overlap(&p.sources, &dest)?;
         let parent = dest.parent().unwrap();
+        if let Some((_, free)) = crate::fold::places::filesystem_space(parent) {
+            let required = p
+                .total_bytes
+                .saturating_mul(
+                    if p.archive_options.password.is_some()
+                        || p.archive_options.volume_bytes.is_some()
+                    {
+                        2
+                    } else {
+                        1
+                    },
+                )
+                .saturating_add(p.items.len() as u64 * 1024);
+            anyhow::ensure!(
+                required <= free,
+                "Not enough free space for archive staging"
+            );
+        }
         let stage = tempfile::Builder::new()
             .prefix(".starfold-archive-")
             .tempdir_in(parent)?;
         let payload = stage.path().join("payload");
         super::connection::run(kind, &payload, p, progress)?;
         anyhow::ensure!(!progress.is_cancelled(), "cancelled");
+        if p.archive_options.volume_bytes.is_some() {
+            let mut volumes = fs::read_dir(stage.path())?.collect::<Result<Vec<_>, _>>()?;
+            volumes.sort_by_key(|e| e.file_name());
+            let mut outputs = vec![];
+            for volume in volumes {
+                let name = volume.file_name();
+                let name = name.to_string_lossy();
+                if let Some(suffix) = name.strip_prefix("payload.") {
+                    anyhow::ensure!(
+                        suffix.len() >= 3 && suffix.chars().all(|c| c.is_ascii_digit()),
+                        "Invalid split volume output"
+                    );
+                    outputs.push((
+                        volume.path(),
+                        dest.with_file_name(format!(
+                            "{}.{}",
+                            dest.file_name().unwrap().to_string_lossy(),
+                            suffix
+                        )),
+                    ));
+                }
+            }
+            anyhow::ensure!(!outputs.is_empty(), "Archive extension produced no volumes");
+            if let Err(error) = publish_volumes(&outputs, stage.path(), policy) {
+                // A failed rollback must never let TempDir remove an original.
+                let has_backup = fs::read_dir(stage.path())
+                    .map(|entries| {
+                        entries.filter_map(Result::ok).any(|entry| {
+                            entry.file_name().to_string_lossy().starts_with("previous-")
+                        })
+                    })
+                    .unwrap_or(true);
+                if has_backup {
+                    let recovery = stage.keep();
+                    anyhow::bail!("{error}; recovery files retained at {}", recovery.display());
+                }
+                return Err(error);
+            }
+            return Ok(true);
+        }
         // Recheck after potentially long compression. Preserve the old target
         // until a successful publish, including rollback on rename failure.
         let backup = stage.path().join("previous");
@@ -207,6 +265,47 @@ pub fn run(kind: OpKind, p: &Plan, policy: ConflictPolicy, progress: &Progress) 
         },
     }
 }
+fn publish_volumes(
+    outputs: &[(PathBuf, PathBuf)],
+    stage: &Path,
+    policy: ConflictPolicy,
+) -> anyhow::Result<()> {
+    let mut backups = vec![];
+    let mut published = vec![];
+    let result = (|| -> anyhow::Result<()> {
+        for (i, (_, target)) in outputs.iter().enumerate() {
+            if fs::symlink_metadata(target).is_ok() {
+                anyhow::ensure!(
+                    policy == ConflictPolicy::Overwrite,
+                    "Split volume already exists: {}",
+                    target.display()
+                );
+                let backup = stage.join(format!("previous-{i}"));
+                fs::rename(target, &backup)?;
+                backups.push((backup, target.clone()));
+            }
+        }
+        for (from, target) in outputs {
+            publish(from, target)?;
+            published.push(target.clone());
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        for target in published {
+            let _ = fs::remove_file(target);
+        }
+        for (backup, target) in backups {
+            if let Err(error) = fs::rename(&backup, &target) {
+                anyhow::bail!(
+                    "Volume rollback failed: {error}; original at {}",
+                    backup.display()
+                );
+            }
+        }
+    }
+    result
+}
 /// Publish without replacing a name that appeared after the conflict check.
 fn publish(from: &Path, to: &Path) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
@@ -234,6 +333,27 @@ fn publish(from: &Path, to: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_split_publication_restores_overwritten_volume() {
+        let temp = tempfile::tempdir().unwrap();
+        let stage = tempfile::tempdir_in(temp.path()).unwrap();
+        let first = stage.path().join("payload.001");
+        let second = stage.path().join("payload.002");
+        let destination = temp.path().join("archive.7z.001");
+        fs::write(&first, b"new first").unwrap();
+        fs::write(&second, b"new second").unwrap();
+        fs::write(&destination, b"original").unwrap();
+        let result = publish_volumes(
+            &[
+                (first, destination.clone()),
+                (second, temp.path().join("missing/archive.7z.002")),
+            ],
+            stage.path(),
+            ConflictPolicy::Overwrite,
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read(destination).unwrap(), b"original");
+    }
     #[test]
     fn extraction_rejects_source_inside_destination_even_through_aliases() {
         let tmp = tempfile::tempdir().unwrap();
@@ -299,7 +419,7 @@ mod tests {
             );
             assert!(out.failed.is_empty(), "{out:?}");
             let renamed = tmp.path().join(format!("archive (2){suffix}"));
-            assert_eq!(Format::detect(&renamed).unwrap(), format);
+            assert_eq!(Format::from_path(&renamed).unwrap(), format);
             let extracted = tmp.path().join("extracted");
             let p = plan(OpKind::Extract, &[renamed], &extracted).unwrap();
             let out = run(

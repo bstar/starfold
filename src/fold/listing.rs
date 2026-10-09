@@ -69,6 +69,8 @@ pub struct Listing {
     /// Filesystem capacity and bytes available to this user, sampled on the
     /// listing worker so a slow mounted volume never stalls drawing.
     pub space: Option<(u64, u64)>,
+    pub archive_changes: usize,
+    pub archive_writable: bool,
 }
 
 impl Listing {
@@ -80,6 +82,8 @@ impl Listing {
             error: Some(message.into()),
             dir_mtime: None,
             space: None,
+            archive_changes: 0,
+            archive_writable: false,
         }
     }
 }
@@ -93,6 +97,9 @@ impl Listing {
 /// is what a panel actually draws, and sorting here would just be thrown away
 /// the first time the view changes.
 pub fn read(dir: &Path, cfg: &ListConfig) -> Listing {
+    if super::location::is_archive(dir) {
+        return super::archive::browser::read(dir, cfg);
+    }
     let read_dir = match std::fs::read_dir(dir) {
         Ok(read_dir) => read_dir,
         Err(err) => return Listing::error(dir, describe(&err)),
@@ -126,6 +133,8 @@ pub fn read(dir: &Path, cfg: &ListConfig) -> Listing {
         error: None,
         dir_mtime,
         space: None,
+        archive_changes: 0,
+        archive_writable: false,
     }
 }
 

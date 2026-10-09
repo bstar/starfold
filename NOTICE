@@ -22,3 +22,25 @@ starfold-preview-pdf uses Hayro 0.8.0 (https://github.com/LaurenzV/hayro),
 licensed under MIT or Apache-2.0. Its embedded standard fonts, character maps
 and color data carry the notices installed as LICENSES/Hayro-*.txt.
 Hayro is isolated in the PDF executable; it is not linked into STAR/FOLD.
+
+Archive extension and native codecs
+
+starfold-archive is a separate, replaceable executable. Its archive engines
+are not linked into STAR/FOLD. Rust/C++ codec notices include UnRAR.txt.
+Zstandard encoding uses Zstandard 1.5.7, distributed under its BSD license;
+source: https://github.com/facebook/zstd/tree/v1.5.7 .
+
+Native 7-Zip: Copyright (C) 1999-2026 Igor Pavlov. Source and component terms:
+https://github.com/ip7z/7zip . LICENSES/Archive-7zip.txt includes its notice;
+LGPL 2.1 terms are also installed as ffmpeg-LGPL-2.1.txt. AppImages use Debian's
+p7zip executable/plugin; their corresponding sources are available from
+https://sources.debian.org/src/p7zip/ . Nix uses its pinned 7-Zip package and
+Arch/Homebrew use the supplying distribution's codec package.
+
+XADMaster / unar: https://github.com/MacPaw/XADMaster/tree/v1.10.8 .
+LICENSES/Archive-XAD.txt supplies its license. Sources for AppImage's shared
+libraries and unar are available from https://sources.debian.org/src/unar/ and
+https://sources.debian.org/ . Native codec binaries and their shared libraries
+remain replaceable. Nix retains store dependencies; Arch/macOS use separately
+installed runtime codec packages. Their licenses do not change the MIT license
+of FOLD or the archive protocol/client code.

@@ -1,5 +1,5 @@
 use super::{safe_path, Format};
-use crate::fold::ops::{progress::Progress, Item, ItemKind};
+use crate::ops::{progress::Progress, Item, ItemKind};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
@@ -61,15 +61,15 @@ fn tar<W: Write>(out: W, items: &[Item], progress: &Progress) -> anyhow::Result<
                 h.set_cksum();
                 a.append_data(&mut h, name(item)?, input(item, progress)?)?;
             }
-            _ => anyhow::bail!("Archive creation does not follow or store symlinks"),
         }
     }
     Ok(a.into_inner()?)
 }
-pub fn create(
+pub fn create_options(
     format: Format,
     out: File,
     items: &[Item],
+    options: &starfold_archive_protocol::Options,
     progress: &Progress,
 ) -> anyhow::Result<()> {
     match format {
@@ -78,14 +78,30 @@ pub fn create(
             for item in items {
                 anyhow::ensure!(!progress.is_cancelled(), "cancelled");
                 let opts = zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Deflated);
+                    .compression_method(
+                        if options.preset == starfold_archive_protocol::Preset::Store {
+                            zip::CompressionMethod::Stored
+                        } else {
+                            zip::CompressionMethod::Deflated
+                        },
+                    )
+                    .compression_level(
+                        if options.preset == starfold_archive_protocol::Preset::Store {
+                            None
+                        } else {
+                            Some(match options.preset {
+                                starfold_archive_protocol::Preset::Fast => 1,
+                                starfold_archive_protocol::Preset::Maximum => 9,
+                                _ => 6,
+                            })
+                        },
+                    );
                 match item.kind {
                     ItemKind::Dir => a.add_directory(name(item)?, opts)?,
                     ItemKind::File(_) => {
                         a.start_file(name(item)?, opts)?;
                         std::io::copy(&mut input(item, progress)?, &mut a)?;
                     }
-                    _ => anyhow::bail!("Archive links unsupported"),
                 }
             }
             a.finish()?.sync_all()?;
@@ -95,7 +111,15 @@ pub fn create(
         }
         Format::TarGz => {
             tar(
-                flate2::write::GzEncoder::new(out, flate2::Compression::fast()),
+                flate2::write::GzEncoder::new(
+                    out,
+                    flate2::Compression::new(match options.preset {
+                        starfold_archive_protocol::Preset::Store => 0,
+                        starfold_archive_protocol::Preset::Fast => 1,
+                        starfold_archive_protocol::Preset::Balanced => 6,
+                        starfold_archive_protocol::Preset::Maximum => 9,
+                    }),
+                ),
                 items,
                 progress,
             )?
@@ -103,26 +127,44 @@ pub fn create(
             .sync_all()?;
         }
         Format::TarZst => {
-            // The Rust encoder consumes a Read. Spool tar privately to disk,
-            // keeping memory bounded even for very large source trees.
-            let mut spool = tar(tempfile::tempfile()?, items, progress)?;
-            spool.seek(SeekFrom::Start(0))?;
-            let mut out = out;
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if options.preset == starfold_archive_protocol::Preset::Store {
+                let mut spool = tar(tempfile::tempfile()?, items, progress)?;
+                spool.seek(SeekFrom::Start(0))?;
+                let mut out = out;
                 ruzstd::encoding::compress(
-                    Input {
-                        file: spool,
-                        progress,
-                    },
+                    spool,
                     &mut out,
-                    ruzstd::encoding::CompressionLevel::Fastest,
-                )
-            }));
-            anyhow::ensure!(result.is_ok(), "Zstandard compression failed");
-            out.sync_all()?;
+                    ruzstd::encoding::CompressionLevel::Uncompressed,
+                );
+                out.sync_all()?;
+            } else {
+                let level = match options.preset {
+                    starfold_archive_protocol::Preset::Fast => 1,
+                    starfold_archive_protocol::Preset::Maximum => 19,
+                    _ => 6,
+                };
+                tar(
+                    zstd::stream::write::Encoder::new(out, level)?,
+                    items,
+                    progress,
+                )?
+                .finish()?
+                .sync_all()?;
+            }
         }
         Format::SevenZip => {
             let mut a = sevenz_rust2::ArchiveWriter::new(out)?;
+            let method = if options.preset == starfold_archive_protocol::Preset::Store {
+                sevenz_rust2::EncoderConfiguration::new(sevenz_rust2::EncoderMethod::COPY)
+            } else {
+                sevenz_rust2::encoder_options::Lzma2Options::from_level(match options.preset {
+                    starfold_archive_protocol::Preset::Fast => 1,
+                    starfold_archive_protocol::Preset::Maximum => 9,
+                    _ => 6,
+                })
+                .into()
+            };
+            a.set_content_methods(vec![method]);
             for item in items {
                 anyhow::ensure!(!progress.is_cancelled(), "cancelled");
                 let n = name(item)?;
@@ -142,7 +184,6 @@ pub fn create(
                             Some(input(item, progress)?),
                         )?;
                     }
-                    _ => anyhow::bail!("Archive links unsupported"),
                 }
             }
             a.finish()?.sync_all()?;

@@ -69,6 +69,8 @@ pub struct State {
     /// cursor has since left is told apart from the current one by the path
     /// rather than trusted.
     pub preview: Option<(PathBuf, Arc<Preview>)>,
+    pub archive_materialized: HashMap<PathBuf, PathBuf>,
+    pub archive_editable: std::collections::HashSet<PathBuf>,
     pub sort: SortOrder,
     /// Commander panes keep independent ordering from Fold and each other.
     pub pane_sorts: [SortOrder; 2],
@@ -137,6 +139,8 @@ impl State {
             search_generation: 0,
             queue: Queue::new(),
             preview: None,
+            archive_materialized: HashMap::new(),
+            archive_editable: Default::default(),
             sort: cfg.list.sort,
             pane_sorts: [cfg.list.sort; 2],
             show_hidden: cfg.list.show_hidden,
@@ -626,6 +630,29 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
         Command::MarkAll => cmd_mark_all(state),
         Command::InvertMarks => cmd_invert_marks(state),
         Command::ClearMarks => cmd_clear_marks(state),
+        Command::SyncArchiveEdits => Effects {
+            jobs: vec![Job::SyncArchiveEdits],
+            events: vec![],
+        },
+        Command::UnlockArchive { location, options } => Effects {
+            jobs: vec![Job::UnlockArchive { location, options }],
+            events: vec![],
+        },
+        Command::QueueArchive {
+            format,
+            sources,
+            destination,
+            options,
+        } => {
+            let id = state.queue.enqueue(
+                OpKind::Compress(format),
+                sources,
+                Some(destination),
+                state.conflicts,
+            );
+            state.queue.get_mut(id).unwrap().archive_options = options;
+            queued_effects(state, id)
+        }
         Command::QueueOperation {
             kind,
             sources,
@@ -735,15 +762,24 @@ fn apply_command(state: &mut State, command: Command) -> Effects {
             }
             entry.progress.finish_receiving();
             entry.sources = sources.clone();
-            entry.kind = OpKind::Move;
+            entry.kind = if entry
+                .dest
+                .as_deref()
+                .is_some_and(super::location::is_archive)
+            {
+                OpKind::Copy
+            } else {
+                OpKind::Move
+            };
             entry.status = OpStatus::Planning;
             Effects {
                 jobs: vec![Job::Plan {
                     op,
-                    kind: OpKind::Move,
+                    kind: entry.kind,
                     sources,
                     dest: entry.dest.clone(),
                     expected: Vec::new(),
+                    archive_options: Default::default(),
                 }],
                 events: vec![Event::Queue(op)],
             }
@@ -1162,6 +1198,40 @@ fn apply_done(state: &mut State, done: Done) -> Effects {
             result,
         } => done_created(state, path, kind, origin, result),
         Done::Summarized { dir, summary } => done_summarized(state, dir, summary),
+        Done::ArchiveOpened { path, location } => {
+            if state.cursor_entry().is_some_and(|e| e.path == path) {
+                push_dir(state, location)
+            } else {
+                Effects::default()
+            }
+        }
+        Done::ArchiveEditsSynced { directories, error } => Effects {
+            jobs: directories.into_iter().map(Job::List).collect(),
+            events: error
+                .into_iter()
+                .map(|e| Event::Note(Note::error("archive editor", e)))
+                .collect(),
+        },
+        Done::ArchivePreviewed {
+            tab,
+            path,
+            local,
+            editable,
+            generation,
+            preview,
+        } => {
+            if tab == state.tabs.active().id && generation == state.preview_generation {
+                if editable {
+                    state.archive_editable.insert(path.clone());
+                } else {
+                    state.archive_editable.remove(&path);
+                }
+                state.archive_materialized.insert(path.clone(), local);
+                done_previewed(state, path, generation, preview)
+            } else {
+                Effects::default()
+            }
+        }
         Done::Previewed {
             tab,
             path,
@@ -1451,7 +1521,9 @@ fn all_frame_dirs(state: &State) -> BTreeSet<PathBuf> {
 /// that was popped, or a forward trail a fresh push just truncated.
 fn evict_unreferenced_listings(state: &mut State) {
     let referenced = all_frame_dirs(state);
-    state.listings.retain(|dir, _| referenced.contains(dir));
+    state
+        .listings
+        .retain(|dir, listing| referenced.contains(dir) || listing.archive_changes > 0);
 }
 
 /// Once a volume is gone, no pane may keep drawing its cached directory or
@@ -1579,6 +1651,18 @@ fn cmd_enter(state: &mut State) -> Effects {
     let Some(entry) = state.cursor_entry() else {
         return Effects::default();
     };
+    if !is_dir_like(entry) && super::archive::Format::from_path(&entry.path).is_some() {
+        let path = entry.path.clone();
+        match super::location::Location::from_key(&path).and_then(|l| l.enter_archive()) {
+            Ok(location) => return push_dir(state, location.key()),
+            Err(error) => {
+                return Effects {
+                    jobs: vec![],
+                    events: vec![Event::Note(Note::error("archive", error.to_string()))],
+                }
+            }
+        }
+    }
     if is_dir_like(entry) {
         push_dir(state, entry.path.clone())
     } else {
@@ -2205,7 +2289,10 @@ fn copy_lock_conflict(
     match kind {
         OpKind::Copy => reads.extend_from_slice(sources),
         OpKind::Move | OpKind::Delete(_) | OpKind::Rename => writes.extend_from_slice(sources),
-        OpKind::Compress(_) | OpKind::Extract => reads.extend_from_slice(sources),
+        OpKind::ArchiveTest | OpKind::Compress(_) | OpKind::Extract => {
+            reads.extend_from_slice(sources)
+        }
+        OpKind::ArchiveSave | OpKind::ArchiveDiscard => writes.extend_from_slice(sources),
     }
     if let Some(dest) = dest {
         match kind {
@@ -2213,7 +2300,10 @@ fn copy_lock_conflict(
             OpKind::Rename | OpKind::Compress(_) | OpKind::Extract => {
                 writes.push(dest.to_path_buf())
             }
-            OpKind::Delete(_) => {}
+            OpKind::ArchiveSave
+            | OpKind::ArchiveDiscard
+            | OpKind::ArchiveTest
+            | OpKind::Delete(_) => {}
         }
     }
     copy_lock_conflict_paths(state, &reads, &writes)
@@ -2231,7 +2321,19 @@ fn copy_targets(sources: &[PathBuf], dest: &Path) -> Vec<PathBuf> {
 }
 
 fn paths_overlap(a: &Path, b: &Path) -> bool {
-    a.starts_with(b) || b.starts_with(a)
+    fn physical(path: &Path) -> PathBuf {
+        match super::location::Location::from_key(path) {
+            Ok(super::location::Location::Archive { source, .. }) => source.file,
+            _ => path.into(),
+        }
+    }
+    if super::location::is_archive(a) || super::location::is_archive(b) {
+        let a = physical(a);
+        let b = physical(b);
+        a.starts_with(&b) || b.starts_with(&a)
+    } else {
+        a.starts_with(b) || b.starts_with(a)
+    }
 }
 
 fn copy_lock_conflict_paths(
@@ -2240,7 +2342,14 @@ fn copy_lock_conflict_paths(
     writes: &[PathBuf],
 ) -> Option<PathBuf> {
     for op in state.queue.iter().filter(|op| {
-        (op.kind == OpKind::Copy || op.import_sources.is_some())
+        (matches!(
+            op.kind,
+            OpKind::Copy
+                | OpKind::Compress(_)
+                | OpKind::Extract
+                | OpKind::ArchiveSave
+                | OpKind::ArchiveTest
+        ) || op.import_sources.is_some())
             && matches!(
                 op.status,
                 OpStatus::Planning | OpStatus::NeedsPolicy | OpStatus::Running
@@ -2442,6 +2551,7 @@ fn run_next(state: &mut State) -> Effects {
         sources: op.sources.clone(),
         dest: op.dest.clone(),
         expected: op.expected.clone(),
+        archive_options: op.archive_options.clone(),
     };
     Effects {
         jobs: vec![job],
@@ -2895,6 +3005,7 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
             if op.kind == OpKind::Delete(DeleteHow::Trash)
                 && state.trash == TrashMode::Auto
                 && op.sources.len() == 1
+                && !op.sources.iter().any(|p| super::location::is_archive(p))
             {
                 op.trash_failure = Some(outcome.failed[0].1.clone());
             }
@@ -2918,6 +3029,14 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
             }
         }
 
+        if matches!(op.kind, OpKind::ArchiveSave | OpKind::ArchiveDiscard)
+            && op.status == OpStatus::Done
+        {
+            state.archive_materialized.clear();
+            state.archive_editable.clear();
+            state.preview = None;
+            state.preview_generation += 1;
+        }
         if let Some(dest) = &op.dest {
             touch_dirs.insert(dest.clone());
             if matches!(op.kind, OpKind::Compress(_) | OpKind::Extract) {
@@ -2955,7 +3074,20 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
         events.push(Event::Selection);
     }
 
-    let frame_dirs = all_frame_dirs(state);
+    let mut frame_dirs = all_frame_dirs(state);
+    frame_dirs.extend(
+        state
+            .listings
+            .values()
+            .filter(|l| l.archive_changes > 0)
+            .map(|l| l.dir.clone()),
+    );
+    touch_dirs.extend(
+        frame_dirs
+            .iter()
+            .filter(|d| super::location::is_archive(d))
+            .cloned(),
+    );
     let jobs: Vec<Job> = touch_dirs
         .into_iter()
         .filter(|dir| frame_dirs.contains(dir))
@@ -3060,6 +3192,44 @@ mod tests {
         assert_eq!(state.queue.len(), 1);
     }
 
+    #[test]
+    fn remote_zip_import_plans_staged_copy_instead_of_move() {
+        let mut state = state_at("/home");
+        let dest = super::super::location::Location::Filesystem("/home/data.zip".into())
+            .enter_archive()
+            .unwrap()
+            .key();
+        apply(
+            &mut state,
+            Change::Command(Command::BeginImport {
+                sources: vec!["/remote/photo.jpg".into()],
+                dest,
+            }),
+        );
+        let id = state.queue.iter().last().unwrap().id;
+        apply(
+            &mut state,
+            Change::Done(Done::ImportChecked {
+                op: id,
+                result: Ok(vec![]),
+            }),
+        );
+        let completed = apply(
+            &mut state,
+            Change::Command(Command::CompleteImport {
+                op: id,
+                sources: vec!["/home/.starfold-drop/photo.jpg".into()],
+            }),
+        );
+        assert!(matches!(
+            completed.jobs.as_slice(),
+            [Job::Plan {
+                kind: OpKind::Copy,
+                ..
+            }]
+        ));
+        assert_eq!(state.queue.get_mut(id).unwrap().kind, OpKind::Copy);
+    }
     #[test]
     fn remote_collision_waits_for_policy_before_receiving() {
         let mut state = state_at("/home");
@@ -3221,6 +3391,8 @@ mod tests {
             error: None,
             dir_mtime: None,
             space: None,
+            archive_changes: 0,
+            archive_writable: false,
         }
     }
 

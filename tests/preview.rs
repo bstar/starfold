@@ -1,5 +1,4 @@
 //! Real-process coverage of the private preview protocol. No installed helpers.
-use serde_json::{json, Value};
 use starfold_preview_protocol as wire;
 use std::{
     os::unix::ffi::OsStrExt,
@@ -139,34 +138,53 @@ fn pdf_extension_retains_document_and_exits_on_eof_without_creating_config() {
 }
 
 #[test]
-fn archive_worker_creates_an_interoperable_zip_and_extracts_it() {
+fn archive_extension_creates_an_interoperable_zip_and_extracts_it() {
     let tmp = tempfile::tempdir().unwrap();
     let source = tmp.path().join("note.txt");
     std::fs::write(&source, b"A note\n").unwrap();
     let archive = tmp.path().join("result.zip");
-    let run = |request: Value| {
-        let path = tmp.path().join("request.json");
-        std::fs::write(&path, request.to_string()).unwrap();
-        let out = Command::new(env!("CARGO_BIN_EXE_starfold"))
-            .arg("--archive-worker")
-            .arg(path)
-            .output()
+    let run = |request: starfold_archive_protocol::Request| {
+        use starfold_archive_protocol::{receive, send, Reply};
+        let helper =
+            std::path::Path::new(env!("CARGO_BIN_EXE_starfold")).with_file_name("starfold-archive");
+        let mut child = Command::new(helper)
+            .arg("--stdio")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
             .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let last = String::from_utf8(out.stdout).unwrap();
-        let reply: Value = serde_json::from_str(last.lines().last().unwrap()).unwrap();
-        assert!(reply["Done"].get("Ok").is_some(), "{reply}");
+        let mut output = child.stdout.take().unwrap();
+        assert!(matches!(
+            receive::<Reply>(&mut output).unwrap(),
+            Reply::Hello { version: 1, .. }
+        ));
+        send(&mut child.stdin.take().unwrap(), &request).unwrap();
+        loop {
+            match receive::<Reply>(&mut output).unwrap() {
+                Reply::Done => break,
+                Reply::Progress(_) => {}
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(child.wait().unwrap().success());
     };
-    run(
-        json!({"Create":{"format":"Zip","output":archive,"items":[{"from":source,"name":"note.txt","bytes":7}]}}),
-    );
+    run(starfold_archive_protocol::Request::Create {
+        format: starfold_archive_protocol::Format::Zip,
+        output: archive.clone(),
+        items: vec![starfold_archive_protocol::Item {
+            from: source,
+            to: Some("note.txt".into()),
+            kind: starfold_archive_protocol::ItemKind::File(7),
+        }],
+        options: Default::default(),
+    });
     let mut zip = zip::ZipArchive::new(std::fs::File::open(&archive).unwrap()).unwrap();
     assert_eq!(zip.by_index(0).unwrap().name(), "note.txt");
     let dest = tmp.path().join("extracted");
-    run(json!({"Extract":{"source":archive,"output":dest}}));
+    run(starfold_archive_protocol::Request::Extract {
+        source: archive,
+        output: dest.clone(),
+        password: None,
+    });
     assert_eq!(std::fs::read(dest.join("note.txt")).unwrap(), b"A note\n");
 }

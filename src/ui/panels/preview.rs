@@ -274,7 +274,15 @@ pub fn render(
     v: &mut View<'_>,
     bars: &mut Bars,
 ) -> Option<Placement> {
-    let word_list = words(ModuleId::Preview);
+    let word_list = if matches!(v.preview, Some(Preview::Document(document))
+        if matches!(document.content, crate::fold::preview::model::Content::Archive(_)))
+        && v.name.is_some_and(|name| {
+            crate::fold::archive::Format::from_path(std::path::Path::new(name)).is_some()
+        }) {
+        vec![super::Word::BrowseArchive, super::Word::Close]
+    } else {
+        words(ModuleId::Preview)
+    };
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
     let core: &starkit::theme::Theme = v.theme;
@@ -700,6 +708,11 @@ fn document_lines(d: &crate::fold::preview::model::Document, width: u16) -> Vec<
             }
         }
         Content::Archive(entries) => {
+            if d.kind != "Archive folder" {
+                lines
+                    .push("Enter or Browse to navigate files · Space marks · Copy extracts".into());
+                lines.push(String::new());
+            }
             for e in entries {
                 let icon = if e.directory {
                     "▸"

@@ -14,7 +14,7 @@ esac
 
 . scripts/dist/deps-debian.sh
 . "$HOME/.cargo/env"
-apt-get install -y -qq --no-install-recommends patchelf squashfs-tools
+apt-get install -y -qq --no-install-recommends patchelf squashfs-tools p7zip-full unar
 
 ver=$(sed -n '0,/^version = /s/^version = "\(.*\)"/\1/p' Cargo.toml)
 out=${DIST_DIR:-dist}
@@ -39,9 +39,18 @@ scripts/dist/glibc-floor.sh "$bin"
 
 appdir=$work/AppDir
 install -Dm755 "$bin"                         "$appdir/usr/bin/starfold"
-for helper in starfold-preview-pdf starfold-preview-video starfold-preview-nvim; do
+for helper in starfold-preview-pdf starfold-preview-video starfold-preview-nvim starfold-archive; do
   install -Dm755 "$(dirname "$bin")/$helper" "$appdir/usr/bin/$helper"
 done
+install -Dm755 /usr/lib/p7zip/7z "$appdir/usr/lib/p7zip/7z"
+cat > "$appdir/usr/bin/7zz" <<'CODEC'
+#!/bin/sh
+exec "$(dirname "$0")/../lib/p7zip/7z" "$@"
+CODEC
+chmod +x "$appdir/usr/bin/7zz"
+install -Dm755 /usr/bin/unar "$appdir/usr/bin/unar"
+install -Dm755 /usr/bin/lsar "$appdir/usr/bin/lsar"
+cp -R /usr/lib/p7zip "$appdir/usr/lib/"
 install -Dm644 packaging/starfold.desktop     "$appdir/starfold.desktop"
 install -Dm644 packaging/starfold.png         "$appdir/starfold.png"
 install -Dm644 packaging/starfold.desktop     "$appdir/usr/share/applications/starfold.desktop"
@@ -51,7 +60,7 @@ install -Dm644 README.md LICENSE NOTICE -t           "$appdir/usr/share/doc/star
 cp -R documentation "$appdir/usr/share/doc/starfold/"
 install -Dm644 LICENSES/UnRAR.txt "$appdir/usr/share/doc/starfold/LICENSES/UnRAR.txt"
 install -Dm644 LICENSES/OFL-Liberation.txt "$appdir/usr/share/doc/starfold/LICENSES/OFL-Liberation.txt"
-for media_license in LICENSES/ffmpeg-*.txt LICENSES/Hayro-*.txt; do
+for media_license in LICENSES/ffmpeg-*.txt LICENSES/Hayro-*.txt LICENSES/Archive-*.txt; do
   install -Dm644 "$media_license" "$appdir/usr/share/doc/starfold/LICENSES/$(basename "$media_license")"
 done
 cp "$appdir/starfold.png" "$appdir/.DirIcon"
@@ -68,7 +77,7 @@ keep_out='^(ld-linux|libc\.so|libm\.so|libdl\.so|libpthread\.so|librt\.so|libres
 
 # Walk NEEDED transitively. ldd on the binary already reports the whole graph,
 # so one pass is enough; the loop is over what it found, not over levels.
-libraries=("$appdir/usr/bin/starfold" "$STARFOLD_BUNDLE_STARAMP")
+libraries=("$appdir/usr/bin/starfold" "$STARFOLD_BUNDLE_STARAMP" "$appdir/usr/bin/starfold-archive" "$appdir/usr/bin/unar" "$appdir/usr/bin/lsar" "$appdir/usr/lib/p7zip/7z")
 if [ "$prefix" = starfold-graphical ]; then
   mkdir -p "$appdir/usr/share/starfold"
   touch "$appdir/usr/share/starfold/graphical"
@@ -92,9 +101,10 @@ done
 # RUNPATH beats ld.so.cache, so a host library cannot shadow ours even when the
 # soname matches exactly. Harmless while usr/lib is empty, and correct the day
 # it is not.
-for executable in starfold starfold-preview-pdf starfold-preview-video starfold-preview-nvim; do
+for executable in starfold starfold-preview-pdf starfold-preview-video starfold-preview-nvim starfold-archive unar lsar; do
   patchelf --set-rpath '$ORIGIN/../lib' "$appdir/usr/bin/$executable"
 done
+patchelf --set-rpath '$ORIGIN/..' "$appdir/usr/lib/p7zip/7z"
 for so in "$appdir"/usr/lib/*.so*; do
   [ -e "$so" ] || continue
   patchelf --set-rpath '$ORIGIN' "$so"
@@ -113,7 +123,7 @@ cat > "$appdir/AppRun" <<'EOF'
 HERE=$(dirname "$(readlink -f "$0")")
 if [ -f "$HERE/usr/share/starfold/graphical" ]; then
   case "${1-}" in
-    list|update|help|graphical|--graphical-*|--preview-worker|--archive-worker|--elevated-delete|--bundled-amp-version|--version|-V|--help|-h) ;;
+    list|update|help|graphical|--graphical-*|--preview-worker|--elevated-delete|--bundled-amp-version|--version|-V|--help|-h) ;;
     *) set -- graphical "$@" ;;
   esac
 fi

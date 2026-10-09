@@ -227,3 +227,7 @@ mod movie_tests {
         assert!(imdb_id("tt123 tt123456789012 xtt0089839 tt0089839x").is_none());
     }
 }
+
+pub fn archive_document(path: &Path, cfg: &PreviewConfig) -> anyhow::Result<Document> {
+    Archive.open(path)?.read(1, cfg)
+}

@@ -88,6 +88,10 @@ rest of it.
   Edit runs the terminal editor in Preview. Physical right-click is enabled by default
   and can be disabled in configuration.
   Archive jobs appear in OPERATIONS.
+  Archives open as navigable folders through the built-in archive extension,
+  with selective extraction, member previews/editing, nested ZIP staging and compression options.
+  Content detection handles renamed archives. Save As can convert read-only formats to ZIP;
+  see the [tested format matrix](docs/archive-formats.md).
   See [previews and archives](docs/previews-and-archives.md).
 - **Recursive filename and content search.** Press F3 or Ctrl+F to search below
   the active directory; Tab in the prompt switches modes. Content results show
