@@ -5,6 +5,10 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Framework
+
+- Shared KIT pane allocation, focus traversal, hit geometry and divider capture in both presentations.
+
 ### Added
 
 - Trash recovery and session-only undo for eligible completed moves and renames,

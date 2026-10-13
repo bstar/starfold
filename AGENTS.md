@@ -50,9 +50,10 @@ keymap/help, chrome, text entry, wrapping, terminal graphics — lives in
 pinned to a tag, and the flake takes it from the revision `Cargo.lock` names
 through `cargoLock.allowBuiltinFetchGit`.
 
-STAR/KIT's dock layout engine is not used here. `src/ui/layout.rs` lays out
-the browser, preview, and operations vertically; Commander divides the
-browser rectangle into two equal-width directory panes.
+`src/ui/layout.rs` supplies application policy to KIT's `panes` engine.
+KIT owns allocation, visibility reasons, hit geometry, focus traversal and
+`ResizeCapture`; Commander keeps two equal-width file panes. The legacy
+`dock` API is not used.
 
 ## Framework alignment
 

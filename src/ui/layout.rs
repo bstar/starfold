@@ -1,47 +1,17 @@
-//! Where everything is, worked out once a frame.
+//! FOLD's pane policy over KIT's shared responsive layout engine.
 //!
-//! [`LayoutState::regions`] is the only place in the program that decides a
-//! rectangle. It is called at the top of `draw`, its answer is kept in
-//! `layout.last`, and `handle_mouse` reads that rather than recomputing
-//! anything. Two pieces of code that have to agree about geometry, one of
-//! which is only ever exercised by a pointer, is where a layout bug lives;
-//! there is one here.
+//! The browser remains primary. Preview opens independently of Operations;
+//! media/editor activity and queue state supply preferred heights. KIT owns
+//! allocation, gaps, visibility reasons, focus traversal and resize arithmetic.
+//! `regions` solves once per frame; painting and hit testing read the same result.
 //!
-//! ## One column
-//!
-//! ```text
-//! STACK          the crumbs and the active level's listing, takes the slack
-//! PREVIEW        folds to one line, or opens beside the stack
-//! OPERATIONS     folds to one line, or opens beside the stack
-//! status         one row, never anything else
-//! ```
-//!
-//! Every module is always there, in the order you drill through them, and the
-//! arithmetic below is the whole of it: a plain top-down stack, no tree and no
-//! `Layout`. Unlike STAR/CORD, where at most one list is open at a time, here
-//! the stack never folds -- it is always the thing being drilled through --
-//! and PREVIEW and OPERATIONS each fold independently of the other.
-//!
-//! ## What each module gets
-//!
-//! The stack keeps at least [`STACK_MIN_ROWS`] and takes whatever is left
-//! over once the other two have what they want. PREVIEW is [`COLLAPSED_ROWS`]
-//! folded; open it grows by `[ui] preview_rows`, independent of focus.
-//! OPERATIONS grows to show up to `[ui] ops_rows` of the queue (one entry already shows in its folded
-//! line, so the extra is `min(queued, ops_rows) - 1`). An op running in the
-//! background changes nothing here -- the module stays folded and its one
-//! line shows the bar instead of a queue count, which is the panel's business
-//! and not this one's.
-//!
-//! ## Short terminals
-//!
-//! There is no degradation ladder. Below [`MIN_COLS`] or [`MIN_ROWS`] the
-//! caller draws one line saying so. Above the floor, PREVIEW's extra rows are
-//! served first (so they are the last thing lost as the terminal shrinks),
-//! whatever is left goes to OPERATIONS' extra, and whatever remains after
-//! both goes to the stack.
+//! Cell presentation keeps its established 60x21 floor and vertical stack.
+//! Native presentation uses a lower Preview/Operations deck in roomy windows;
+//! KIT pixel placements preserve its physical browser density. User preview
+//! height survives temporary window clamping and focus never reallocates panes.
 
 use starkit::chrome::header;
+use starkit::panes::{self, Focus, FocusPolicy, Node, ResizeCapture, ResizeEdge, Size, Visibility};
 use starkit::ratatui::layout::Rect;
 
 use super::panels::{ModuleId, COLUMN};
@@ -104,6 +74,7 @@ pub struct Regions {
     /// One rect per module, indexed by [`ModuleId::index`], in [`COLUMN`]
     /// order. Every one of them is the full width of the area.
     modules: [Rect; 3],
+    pub panes: panes::Layout<ModuleId>,
     pub status: Rect,
     pub tabs: Option<Rect>,
 }
@@ -115,31 +86,14 @@ impl Regions {
 
     /// Which module a cell is in.
     pub fn hit(&self, x: u16, y: u16) -> Option<ModuleId> {
-        COLUMN.into_iter().find(|m| {
-            let r = self.rect_of(*m);
-            x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
-        })
-    }
-}
-
-/// A divider gesture keeps its origin across repaints in either presentation.
-#[derive(Clone, Copy)]
-pub struct PreviewResize {
-    origin_y: i32,
-    rows: i32,
-    max_rows: i32,
-    row_pixels: i32,
-}
-impl PreviewResize {
-    pub fn rows_at(self, y: i32) -> u16 {
-        (self.rows + (self.origin_y - y) / self.row_pixels).clamp(2, self.max_rows.max(2)) as u16
+        self.panes.hit(x, y)
     }
 }
 
 /// Which module has the keyboard, whether PREVIEW is open, and what each
 /// module is configured to grow to.
 pub struct LayoutState {
-    focus: ModuleId,
+    focus: Focus<ModuleId>,
     /// Whether PREVIEW draws more than its folded line. Unlike STAR/CORD's
     /// lists, this is not an accordion against OPERATIONS: the two fold
     /// independently, so this is its own flag rather than an `Option` shared
@@ -163,7 +117,7 @@ pub struct LayoutState {
     pub preview_rows: u16,
     /// User-sized preview in either presentation; focus never changes it.
     pub native_preview_rows: Option<u16>,
-    pub preview_resize: Option<PreviewResize>,
+    pub preview_resize: Option<ResizeCapture>,
     /// `[ui] ops_rows`: how far OPERATIONS grows while focused, up to its own
     /// queue length.
     pub ops_rows: u16,
@@ -179,7 +133,7 @@ pub struct LayoutState {
 impl LayoutState {
     pub fn new(preview_rows: u16, ops_rows: u16, fold_rows: u16) -> Self {
         Self {
-            focus: ModuleId::Stack,
+            focus: Focus::new(Some(ModuleId::Stack)),
             preview_open: true,
             tabs_visible: false,
             tab_rows: 1,
@@ -283,13 +237,23 @@ impl LayoutState {
                 body.width,
                 (stack_rows * 4 / 5).max(18).min(stack_rows),
             );
-            let deck_area = Rect::new(body.x, stack.bottom() + gap, body.width, deck);
-            self.last = Some(Regions {
-                area,
-                modules: [stack, pane_rect(deck_area, 0), pane_rect(deck_area, 1)],
-                status,
-                tabs,
-            });
+            let deck_node = Node::row(vec![
+                Node::pane(ModuleId::Preview).height(Size::fixed(deck)),
+                Node::pane(ModuleId::Operations)
+                    .height(Size::fixed(deck))
+                    .focus(FocusPolicy::Direct),
+            ])
+            .gap(extra)
+            .height(Size::fixed(deck));
+            let tree = Node::column(vec![
+                Node::pane(ModuleId::Stack).height(Size::fixed(stack.height)),
+                deck_node,
+            ])
+            .gap(gap);
+            // Logical browser density is preserved; KIT's pixel placements use
+            // the remaining physical height without scaling terminal glyphs.
+            let logical_body = Rect::new(body.x, body.y, body.width, stack.height + gap + deck);
+            self.finish(tree, logical_body, area, status, tabs);
             return self.last.as_ref();
         }
 
@@ -320,8 +284,6 @@ impl LayoutState {
         } else {
             0
         };
-        let audio_reserved = if self.audio_active { room.min(9) } else { 0 };
-        let ops_extra = ops_desired.min(room - audio_reserved);
 
         // PREVIEW takes what it asked for, but never more than half the room
         // while the stack has focus: at thirty rows the room is nine, and a
@@ -344,36 +306,57 @@ impl LayoutState {
             self.native_preview_rows
                 .unwrap_or_else(|| self.preview_rows.min(room / 2))
         };
-        let preview_extra = preview_desired.min(room - ops_extra);
-
-        // Whatever is left over goes to the stack.
-        let stack_extra = room - preview_extra - ops_extra;
-
-        let height = |m: ModuleId| match m {
-            ModuleId::Stack => stack_min + stack_extra,
-            ModuleId::Preview => collapsed_rows + preview_extra,
-            ModuleId::Operations => ops_floor + ops_extra,
+        let preview = Node::pane(ModuleId::Preview)
+            .height(Size::bounded(
+                collapsed_rows,
+                collapsed_rows.saturating_add(preview_desired),
+                collapsed_rows.saturating_add(preview_desired),
+            ))
+            .priority(if self.audio_active { 3 } else { 1 });
+        let preview = if self.preview_open {
+            preview
+        } else {
+            preview
+                .visibility(Visibility::Collapsed)
+                .compact(Size::fill(1), Size::fixed(collapsed_rows))
         };
+        let tree = Node::column(vec![
+            Node::pane(ModuleId::Stack).height(Size::fill(stack_min)),
+            preview,
+            Node::pane(ModuleId::Operations)
+                .height(Size::bounded(
+                    ops_floor,
+                    ops_floor.saturating_add(ops_desired),
+                    ops_floor.saturating_add(ops_desired),
+                ))
+                .priority(2)
+                .focus(FocusPolicy::Direct),
+        ])
+        .gap(gap);
+        self.finish(tree, body, area, status, tabs);
+        self.last.as_ref()
+    }
 
-        let mut modules = [Rect::new(0, 0, 0, 0); 3];
-        let mut y = body.y;
-        for m in COLUMN {
-            let h = height(m);
-            modules[m.index()] = Rect {
-                y,
-                height: h,
-                ..body
-            };
-            y += h + if m == ModuleId::Operations { 0 } else { gap };
-        }
-
+    fn finish(
+        &mut self,
+        tree: Node<ModuleId>,
+        body: Rect,
+        area: Rect,
+        status: Rect,
+        tabs: Option<Rect>,
+    ) {
+        let panes = tree
+            .layout(body)
+            .expect("unique, bounded application pane tree");
+        let modules = COLUMN.map(|id| panes.rect_of(id).unwrap_or_default());
+        self.focus.reconcile(&panes);
         self.last = Some(Regions {
             area,
             modules,
+            panes,
             status,
             tabs,
         });
-        self.last.as_ref()
     }
 
     /// Begin from the painted allocation, never from a configured preference.
@@ -397,12 +380,10 @@ impl LayoutState {
                 .height
                 .saturating_sub(floor),
         );
-        self.preview_resize = Some(PreviewResize {
-            origin_y: y,
-            rows: i32::from(rows),
-            max_rows: i32::from(max_rows),
-            row_pixels: row_pixels.max(1),
-        });
+        self.preview_resize = Some(
+            ResizeCapture::new(y, rows, 2, max_rows, ResizeEdge::Leading)
+                .step(row_pixels.clamp(1, i32::from(u16::MAX)) as u16),
+        );
         true
     }
 
@@ -410,14 +391,14 @@ impl LayoutState {
         let Some(capture) = self.preview_resize else {
             return false;
         };
-        let rows = capture.rows_at(y);
+        let rows = capture.size_at(y);
         let changed = self.native_preview_rows != Some(rows);
         self.native_preview_rows = Some(rows);
         changed
     }
 
     pub fn focus(&self) -> ModuleId {
-        self.focus
+        self.focus.active().unwrap_or(ModuleId::Stack)
     }
 
     /// Focus a module. Focusing PREVIEW opens it -- a module you are about to
@@ -426,21 +407,27 @@ impl LayoutState {
         if m == ModuleId::Preview {
             self.preview_open = true;
         }
-        self.focus = m;
+        self.focus.request(m);
     }
 
     pub fn focus_next(&mut self) {
-        self.focus_set(match self.focus {
-            ModuleId::Stack => ModuleId::Preview,
-            ModuleId::Preview | ModuleId::Operations => ModuleId::Stack,
-        });
+        self.step_focus(true);
     }
 
     pub fn focus_prev(&mut self) {
-        self.focus_set(match self.focus {
-            ModuleId::Stack | ModuleId::Operations => ModuleId::Preview,
-            ModuleId::Preview => ModuleId::Stack,
-        });
+        self.step_focus(false);
+    }
+
+    fn step_focus(&mut self, forward: bool) {
+        let next = if let Some(last) = &self.last {
+            self.focus.step(&last.panes, forward)
+        } else {
+            self.focus
+                .step_in(&[ModuleId::Stack, ModuleId::Preview], forward)
+        };
+        if let Some(next) = next {
+            self.focus_set(next);
+        }
     }
 
     /// `i`: open PREVIEW if it was folded; fold it, landing focus on the
@@ -450,8 +437,8 @@ impl LayoutState {
     pub fn toggle_preview(&mut self) {
         if self.preview_open {
             self.preview_open = false;
-            if self.focus == ModuleId::Preview {
-                self.focus = ModuleId::Stack;
+            if self.focus() == ModuleId::Preview {
+                self.focus.request(ModuleId::Stack);
             }
         } else {
             self.preview_open = true;
@@ -464,7 +451,7 @@ impl LayoutState {
             ModuleId::Stack => true,
             ModuleId::Preview => self.preview_open,
             ModuleId::Operations => {
-                self.focus == ModuleId::Operations
+                self.focus() == ModuleId::Operations
                     || self.ops_active
                     || self.last.as_ref().is_some_and(|r| {
                         r.rect_of(ModuleId::Operations).height
@@ -620,7 +607,7 @@ mod tests {
                     for preview_open in [false, true] {
                         for queued in [0u16, 2, 9] {
                             let mut s = state();
-                            s.focus = focus;
+                            s.focus_set(focus);
                             s.preview_open = preview_open;
                             let full = Rect::new(0, 0, width, height);
                             let Some(r) = s.regions(full, (0, 0), queued).cloned() else {
@@ -693,7 +680,7 @@ mod tests {
             for focus in COLUMN {
                 for queued in [0u16, 5, 200] {
                     let mut s = state();
-                    s.focus = focus;
+                    s.focus_set(focus);
                     let r = s
                         .regions(Rect::new(0, 0, 100, height), (0, 0), queued)
                         .cloned()
@@ -763,7 +750,7 @@ mod tests {
     #[test]
     fn a_thirty_row_terminal_shares_the_room_between_the_stack_and_the_preview() {
         let mut s = state();
-        s.focus = ModuleId::Stack;
+        s.focus_set(ModuleId::Stack);
         let full = Rect::new(0, 0, 100, 30);
         let r = s.regions(full, (0, 0), 0).cloned().unwrap();
         assert_eq!(r.rect_of(ModuleId::Preview).height, COLLAPSED_ROWS + 4);
@@ -783,7 +770,7 @@ mod tests {
     #[test]
     fn the_preview_takes_half_the_body_when_focused() {
         let mut s = state();
-        s.focus = ModuleId::Stack;
+        s.focus_set(ModuleId::Stack);
         let full = Rect::new(0, 0, 100, 60);
         let r = s.regions(full, (0, 0), 0).cloned().unwrap();
         assert_eq!(
