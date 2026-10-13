@@ -118,14 +118,19 @@ if args.starfold:
             if isinstance(value, list):
                 return ''.join(scene_text(v) for v in value)
             return ''
+        latest_scene=[None]
         def wait_controller(predicate, timeout=10):
             deadline = time.monotonic() + timeout
             while True:
-                message = messages.get(timeout=max(.01, deadline - time.monotonic()))
+                try:
+                    message = messages.get(timeout=max(.01, deadline - time.monotonic()))
+                except queue.Empty:
+                    raise AssertionError('Controller timeout; latest scene: '+scene_text(latest_scene[0])[-2000:]) from None
                 if message['type'] == 'error':
                     raise AssertionError(message['message'])
                 if message['type'] == 'scene':
                     scene = message['scene']
+                    latest_scene[0]=scene
                     send_controller(dict(type='presented', revision=scene['revision'], generation=scene['viewport']['generation']))
                 if predicate(message):
                     return message
@@ -143,15 +148,20 @@ if args.starfold:
             server_pid = int(greeting['epoch'].split('-')[0])
             wait_controller(lambda m: m['type'] == 'scene')
             key_controller(1, 'enter')
-            wait_controller(lambda m: m['type'] == 'scene' and 'audio: host' in scene_text(m) and '0:0' in scene_text(m))
-            key_controller(2, 'char:2', modifiers=2)
-            key_controller(3, 'char:a')
+            # Negotiated speaker output starts on the frontend by default.
             opened = wait_controller(lambda m: m['type'] == 'media' and m['message']['kind'] == 'audio_open')['message']
             send_controller(dict(type='media', message=dict(kind='audio_credit', session=opened['session'], epoch=opened['epoch'], blocks=8)))
             block = wait_controller(lambda m: m['type'] == 'media' and m['message']['kind'] == 'audio_chunk')['message']
             assert block['epoch'] == opened['epoch'] and 0 < len(block['samples']) <= 1920
-            key_controller(4, 'char:a')
+            key_controller(2, 'char:2', modifiers=2)
+            key_controller(3, 'char:a')
             wait_controller(lambda m: m['type'] == 'media' and m['message']['kind'] == 'audio_close')
+            wait_controller(lambda m: m['type'] == 'scene' and 'audio: host' in scene_text(m))
+            key_controller(4, 'char:a')
+            reopened = wait_controller(lambda m: m['type'] == 'media' and m['message']['kind'] == 'audio_open')['message']
+            send_controller(dict(type='media', message=dict(kind='audio_credit', session=reopened['session'], epoch=reopened['epoch'], blocks=1)))
+            block = wait_controller(lambda m: m['type'] == 'media' and m['message']['kind'] == 'audio_chunk')['message']
+            assert block['epoch'] == reopened['epoch'] and block['session'] == reopened['session']
             key_controller(5, 'char:q')
             wait_controller(lambda m: m['type'] == 'closed')
             assert process.wait(timeout=3) == 0
