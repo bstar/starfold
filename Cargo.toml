@@ -20,6 +20,10 @@ members = ["extensions/protocol", "extensions/pdf", "extensions/video", "extensi
 default-members = [".", "extensions/pdf", "extensions/video", "extensions/nvim", "extensions/archive"]
 resolver = "2"
 
+[workspace.dependencies]
+# One release pin for the application and every preview helper.
+starkit = { git = "https://github.com/bstar/starkit", tag = "v0.6.1", version = "0.6", default-features = false }
+
 [dependencies]
 starfold-archive = { version = "0.1", path = "extensions/archive" }
 starfold-archive-protocol = { version = "0.1", path = "extensions/archive-protocol" }
@@ -43,7 +47,7 @@ starfold-preview-protocol = { version = "0.1", path = "extensions/protocol" }
 # The `version` is not redundant with the tag: cargo-deny counts a dependency
 # with no version requirement as a wildcard and `wildcards = "deny"` refuses
 # it, whether or not the source is a git URL pinned to a tag.
-starkit = { git = "https://github.com/bstar/starkit", rev = "9245a2971ca46d95aec23acc5ab0e643ce849077", version = "0.3", default-features = false, features = [
+starkit = { workspace = true, features = [
     "image",
     "bmp",
     "gif",
