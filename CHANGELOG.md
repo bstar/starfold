@@ -7,6 +7,8 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Framework
 
+- Video controls and track pickers use KIT directly, removing the render-only AMP subprocess and its worker queues. Music embedding retains the AMP player.
+
 - Shared KIT pane allocation, focus traversal, hit geometry and divider capture in both presentations.
 
 ### Added

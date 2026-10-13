@@ -72,10 +72,10 @@ On the Linux workstation, `~/.local/bin/star-kit-terminal` must execute this
 checkout's release binary, like `starfold` and `starfold-graphical`, rather than
 an older graphics worktree. Preserve its media environment when updating it.
 
-The next framework phase is shared responsive panes, visibility and interaction.
-Large terminal-font zoom still needs embedded AMP typography polish; private
-Kitty startup/preview captures do not establish all densities or physical macOS
-rendering/audio correctness.
+Responsive panes are shared with KIT. Generic movie transport and track pickers
+render in-process through KIT; only music playback/metadata uses the AMP helper.
+Private Kitty captures exercise normal and zoomed embedded AMP typography;
+they do not establish every density or physical macOS rendering/audio correctness.
 
 ## Commander and Places
 

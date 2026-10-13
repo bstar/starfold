@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise AMP artwork and FOLD video controls with a silent temporary video."""
+"""Exercise shared KIT artwork and FOLD video controls with a silent temporary video."""
 import argparse
 import json
 import os
@@ -18,6 +18,8 @@ parser.add_argument('--staramp', required=True)
 parser.add_argument('--starfold', required=True)
 parser.add_argument('--video', required=True, help='Generated silent video fixture')
 parser.add_argument('--pixel-layout', action='store_true')
+parser.add_argument('--without-amp', action='store_true', help='Copy FOLD without its adjacent music helper and reject any AMP invocation')
+parser.add_argument('--cells', action='store_true', help='Exercise cell grids and movie track pickers')
 parser.add_argument('--movie-player', action='store_true')
 parser.add_argument('--original', action='store_true', help='Negotiate original media and exercise quality modes')
 args = parser.parse_args()
@@ -30,7 +32,20 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
     env = dict(os.environ, STARFOLD_DIR=str(root / 'fold'), STARAMP_DIR=str(root / 'amp'),
                STARAMP_CONFIG_DIR=str(root / 'amp-config'),
                PATH=str(Path(args.staramp).absolute().parent) + os.pathsep + os.environ['PATH'])
-    process = subprocess.Popen([str(Path(args.starfold).resolve()), '--graphical-relay', 'video-proof', '--directory', str(files)],
+    binary = Path(args.starfold).resolve()
+    if args.without_amp:
+        private_bin = root / 'bin'
+        private_bin.mkdir()
+        for helper in binary.parent.glob('starfold-preview-*'):
+            if helper.is_file() and os.access(helper, os.X_OK):
+                (private_bin / helper.name).symlink_to(helper)
+        shutil.copy2(binary, private_bin / 'starfold')
+        binary = private_bin / 'starfold'
+        rejected = private_bin / 'staramp'
+        rejected.write_text('#!/bin/sh\necho invoked > "' + str(root / 'amp-invoked') + '"\nexit 77\n')
+        rejected.chmod(0o700)
+        env['PATH'] = str(private_bin) + os.pathsep + env['PATH']
+    process = subprocess.Popen([str(binary), '--graphical-relay', 'video-proof', '--directory', str(files)],
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     messages = queue.Queue()
     def read():
@@ -49,7 +64,10 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
         global scene
         deadline = time.monotonic() + 10
         while True:
-            message = messages.get(timeout=max(.01, deadline - time.monotonic()))
+            try:
+                message = messages.get(timeout=max(.01, deadline - time.monotonic()))
+            except queue.Empty:
+                raise AssertionError('Timed out; latest scene: ' + texts(scene)[-2000:] + '\nSurface actions: ' + repr([[h['action'] for h in c['surface']['hits']] for c in (scene or {}).get('components', []) if c['kind']=='surface'])) from None
             if message['type'] == 'error':
                 raise AssertionError(message)
             if message['type'] == 'media':
@@ -105,6 +123,23 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
         if isinstance(value, list):
             return ''.join(texts(v) for v in value)
         return ''
+    def playing_scene():
+        def playing(value):
+            component=controls(value)
+            actions=[h['action'] for h in component['surface']['hits']] if component else []
+            return component and ('Pause' in texts(value) or (args.movie_player and 'pause' in actions and 'play' not in actions))
+        if scene and playing(scene): return scene
+        return wait(lambda m: m['type']=='scene' and playing(m['scene']))
+    def paused_scene():
+        # This protocol fixture does not decode frontend media. Starting/buffering
+        # notices may remain; the authoritative transport toggle still reports pause.
+        def paused(value):
+            component = controls(value)
+            actions = [h['action'] for h in component['surface']['hits']] if component else []
+            return component and ('paused' in texts(value) or (args.movie_player and 'play' in actions and 'pause' not in actions))
+        if scene and paused(scene):
+            return scene
+        return wait(lambda m: m['type']=='scene' and paused(m['scene']))
     def scene_with(text):
         if scene and text in texts(scene) and controls(scene):
             return scene
@@ -112,7 +147,7 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
     try:
         send(dict(type='hello', version=1, client='video-proof',
             viewport=dict(columns=100, rows=40, width=1000, height=800, generation=1),
-            capabilities=dict(image_transport='kitty', pixel_geometry='measured', pointer_precision='cells',
+            capabilities=dict(image_transport='none' if args.cells else 'kitty', cell_presentation=args.cells, pixel_geometry='measured', pointer_precision='cells',
                               keyboard=True, paste=True, native_surfaces=True, pixel_layout=args.pixel_layout,
                               presentation_ack=True, video=True, video_player=args.movie_player,
                               original_media=args.original, local_media=False)))
@@ -131,7 +166,7 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
             scene_with('mode: Auto')
             assert 'original_open' in media_kinds
         click('pause')
-        scene_with('paused')
+        paused_scene()
         click('next')
         scene_with('00:05')
         click('previous')
@@ -140,17 +175,19 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
         wait(lambda m: m['type'] == 'scene' and controls(m['scene']) and
              any(40 <= int(v) <= 60 for v in re.findall(r'(\d+)% volume', texts(m['scene']))))
         click('play')
-        scene_with('Pause')
+        playing_scene()
         timeline = next(c['rect'] for c in scene['components'] if c['kind'] == 'surface'
-                        and len(c['surface']['nodes']) == 2
+                        and c['rect']['height']==1 and c['rect'] in scene.get('pointer_regions',[]) and len(c['surface']['nodes']) == 2
                         and all(n['kind'] == 'fill' for n in c['surface']['nodes']))
-        pointer('down', timeline['x'], timeline['y'])
-        scene_with('paused')
+        pointer('down', timeline['x']+1, timeline['y'])
+        # Scrubbing's pause is internal; its on-screen toggle reflects the saved
+        # play state until release. Assert the seek result and restored playback.
         for offset in range(1, 6):
             pointer('drag', timeline['x'] + offset, timeline['y'])
         pointer('up', timeline['x'] + (timeline['width'] + 1) // 2, timeline['y'])
         wait(lambda m: m['type'] == 'scene' and controls(m['scene']) and
-             '00:10' in texts(m['scene']) and 'Pause' in texts(m['scene']))
+             '00:10' in texts(m['scene']))
+        playing_scene()
         if args.movie_player:
             click('fullscreen')
             wait(lambda m: m['type']=='scene' and not m['scene'].get('placements') and controls(m['scene']))
@@ -163,15 +200,16 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
             click('track:1')
             wait(lambda m: m['type']=='scene' and not any(c['kind']=='surface' and any(h['action'].startswith('track:') for h in c['surface']['hits']) for c in m['scene']['components']))
             input(dict(kind='key', code='escape', modifiers=0))
-            wait(lambda m: m['type']=='scene' and m['scene'].get('placements') and controls(m['scene']))
+            wait(lambda m: m['type']=='scene' and (not args.pixel_layout or m['scene'].get('placements')) and controls(m['scene']))
         click('stop')
-        scene_with('Play')
+        wait(lambda m: m['type']=='scene' and controls(m['scene']) is None)
         input(dict(kind='key', code='char:q', modifiers=0))
         wait(lambda m: m['type'] == 'closed')
         assert process.wait(timeout=3) == 0
         server_pid = None
         assert not (root / 'amp').exists() and not (root / 'amp-config').exists()
-        print('Video transport: AMP artwork, play/pause, seek, drag/release, volume, stop, shutdown and no AMP files passed')
+        assert not (root / 'amp-invoked').exists(), 'Generic video controls invoked the AMP music helper'
+        print('Video transport: shared KIT artwork, play/pause, seek, drag/release, volume, stop, shutdown and no AMP files passed')
     finally:
         if process.poll() is None:
             process.kill()
