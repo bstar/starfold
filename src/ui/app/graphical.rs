@@ -68,7 +68,6 @@ pub(super) struct State {
     rendered_version: u64,
     drag: Option<Drag>,
     resize_handle: Option<starkit::native_surface::PixelRect>,
-    preview_resize: Option<PreviewResize>,
     authorization: Option<Authorization>,
     pub(super) wire: Option<crossbeam_channel::Receiver<wire_dnd::Outgoing>>,
 }
@@ -85,13 +84,6 @@ impl State {
     pub(super) fn uses_pixel_layout(&self) -> bool {
         self.pixel_layout && self.padded_chrome && self.surface_mode && !self.cell_mode
     }
-}
-#[derive(Clone, Copy)]
-struct PreviewResize {
-    origin_y: i32,
-    rows: i32,
-    max_rows: i32,
-    row_pixels: i32,
 }
 struct Drag {
     regions: Option<Regions>,
@@ -330,6 +322,9 @@ impl App {
         y: u16,
     ) -> bool {
         let state = self.graphical.as_ref().unwrap();
+        if !state.uses_pixel_layout() {
+            return false;
+        }
         let Some(v) = state.viewport else {
             return false;
         };
@@ -337,16 +332,13 @@ impl App {
             (u32::from(x) * 2 + 1) * v.width / (u32::from(v.columns).max(1) * 2),
             (u32::from(y) * 2 + 1) * v.height / (u32::from(v.rows).max(1) * 2),
         ]);
-        if let Some(capture) = state.preview_resize {
+        if self.layout.preview_resize.is_some() {
             if matches!(action, "drag" | "up") {
-                let delta = (capture.origin_y - py as i32) / capture.row_pixels;
-                let rows = (capture.rows + delta).clamp(2, capture.max_rows.max(2)) as u16;
-                if self.layout.native_preview_rows != Some(rows) {
-                    self.layout.native_preview_rows = Some(rows);
+                if self.layout.resize_preview(py as i32) {
                     self.repaint = true;
                 }
                 if action == "up" {
-                    self.graphical.as_mut().unwrap().preview_resize = None;
+                    self.layout.preview_resize = None;
                 }
             }
             return true;
@@ -370,22 +362,10 @@ impl App {
         if !hit {
             return false;
         }
-        let Some(regions) = &self.layout.last else {
-            return false;
-        };
-        let rows = regions
-            .rect_of(ModuleId::Preview)
-            .height
-            .saturating_sub(layout::COLLAPSED_ROWS + starkit::chrome::frame::extra_rows());
-        let max_rows =
-            rows.saturating_add(regions.rect_of(ModuleId::Stack).height.saturating_sub(10));
-        self.graphical.as_mut().unwrap().preview_resize = Some(PreviewResize {
-            origin_y: py as i32,
-            rows: i32::from(rows),
-            max_rows: i32::from(max_rows),
-            row_pixels: (v.height / u32::from(v.rows).max(1)).max(1) as i32,
-        });
-        true
+        self.layout.begin_preview_resize(
+            py as i32,
+            (v.height / u32::from(v.rows).max(1)).max(1) as i32,
+        )
     }
 
     fn graphical_pointer(&mut self, action: &str, button: u8, x: u16, y: u16, modifiers: u8) {
@@ -1103,7 +1083,7 @@ impl Controller for App {
         state.base_buffer = None;
         state.base_scrollbars.clear();
         state.resize_handle = None;
-        state.preview_resize = None;
+        self.layout.preview_resize = None;
         self.layout.last = None;
         self.extension_viewport_sent = None;
         self.bars.release();
@@ -2369,7 +2349,7 @@ impl Controller for App {
                 }
                 // Navigation or opening a modal ends the captured file gesture.
                 if self.graphical.as_ref().unwrap().drag.is_some()
-                    || self.graphical.as_ref().unwrap().preview_resize.is_some()
+                    || self.layout.preview_resize.is_some()
                 {
                     Controller::input(self, Input::CancelPointer);
                     if code == "escape" {
@@ -2511,7 +2491,7 @@ impl Controller for App {
             }
             Input::CancelPointer => {
                 self.cancel_video_scrub();
-                self.graphical.as_mut().unwrap().preview_resize = None;
+                self.layout.preview_resize = None;
                 self.graphical.as_mut().unwrap().pointer_capture = None;
                 if self
                     .graphical
@@ -5822,7 +5802,7 @@ mod tests {
             )
         };
         send(&mut app, "down", y);
-        assert!(app.graphical.as_ref().unwrap().preview_resize.is_some());
+        assert!(app.layout.preview_resize.is_some());
         assert!(app.graphical.as_ref().unwrap().drag.is_none());
         send(&mut app, "drag", y - 64);
         Controller::scene(&mut app, v);
@@ -5843,7 +5823,7 @@ mod tests {
             "redraw must not move the drag origin"
         );
         send(&mut app, "up", y - 64);
-        assert!(app.graphical.as_ref().unwrap().preview_resize.is_none());
+        assert!(app.layout.preview_resize.is_none());
         app.layout.focus_set(ModuleId::Preview);
         Controller::scene(&mut app, v);
         assert_eq!(enlarged, app.layout.last.clone().unwrap());
@@ -5863,10 +5843,131 @@ mod tests {
                 >= 8
         );
         Controller::input(&mut app, Input::CancelPointer);
-        assert!(app.graphical.as_ref().unwrap().preview_resize.is_none());
+        assert!(app.layout.preview_resize.is_none());
         assert!(app.bars.held().is_none());
         assert!(!app.dnd.drag_active);
         assert!(app.core.state().queue.is_empty());
+    }
+
+    #[test]
+    fn cell_frontend_divider_drag_keeps_cell_coordinates() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().pixel_layout = true;
+        Controller::presentation(&mut app, true);
+        let viewport = Viewport::default();
+        Controller::scene(&mut app, viewport);
+        let preview = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Preview);
+        for (action, y) in [
+            ("down", preview.y),
+            ("drag", preview.y - 3),
+            ("up", preview.y - 3),
+        ] {
+            Controller::input(
+                &mut app,
+                Input::Pointer {
+                    action: action.into(),
+                    button: 0,
+                    x: preview.x + 10,
+                    y,
+                    pixel: None,
+                    modifiers: 0,
+                },
+            );
+            Controller::scene(&mut app, viewport);
+        }
+        assert_eq!(
+            app.layout
+                .last
+                .as_ref()
+                .unwrap()
+                .rect_of(ModuleId::Preview)
+                .height,
+            preview.height + 3
+        );
+        assert!(app.layout.preview_resize.is_none());
+        assert!(app.graphical.as_ref().unwrap().drag.is_none());
+    }
+
+    #[test]
+    fn wide_native_deck_can_be_dragged_smaller_and_larger() {
+        let cfg = Config::default();
+        let (core, fake) = crate::ui::fake::handle(cfg.core());
+        let mut app = App::new(
+            core,
+            cfg,
+            fake.home().join("config.toml"),
+            None,
+            Graphics::disabled(),
+        );
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().pixel_layout = true;
+        let viewport = Viewport {
+            columns: 160,
+            rows: 60,
+            width: 1600,
+            height: 960,
+            ..Viewport::default()
+        };
+        let initial = Controller::scene(&mut app, viewport);
+        let before = app.layout.last.clone().unwrap();
+        let preview = before.rect_of(ModuleId::Preview);
+        assert_eq!(preview.y, before.rect_of(ModuleId::Operations).y);
+        let handle = initial.resize_handles[0];
+        let origin = u32::from(handle.y) + 8;
+        for (action, y) in [("down", origin), ("drag", origin + 64), ("up", origin + 64)] {
+            Controller::input(
+                &mut app,
+                Input::Pointer {
+                    action: action.into(),
+                    button: 0,
+                    x: 40,
+                    y: 0,
+                    pixel: Some([400, y]),
+                    modifiers: 0,
+                },
+            );
+            Controller::scene(&mut app, viewport);
+        }
+        let smaller = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Preview);
+        assert_eq!(smaller.height, preview.height - 4);
+        assert_eq!(app.layout.focus(), ModuleId::Stack);
+        assert!(app.layout.preview_resize.is_none());
+        let scene = Controller::scene(&mut app, viewport);
+        let handle = scene.resize_handles[0];
+        let origin = u32::from(handle.y) + 8;
+        for (action, y) in [("down", origin), ("drag", origin - 64), ("up", origin - 64)] {
+            Controller::input(
+                &mut app,
+                Input::Pointer {
+                    action: action.into(),
+                    button: 0,
+                    x: 40,
+                    y: 0,
+                    pixel: Some([400, y]),
+                    modifiers: 0,
+                },
+            );
+            Controller::scene(&mut app, viewport);
+        }
+        assert_eq!(
+            app.layout
+                .last
+                .as_ref()
+                .unwrap()
+                .rect_of(ModuleId::Preview)
+                .height,
+            preview.height
+        );
+        assert!(app.graphical.as_ref().unwrap().drag.is_none());
     }
 
     #[test]

@@ -1135,6 +1135,7 @@ impl App {
                         // A font zoom arrives as a resize, and it changes the
                         // cell size any built protocol was sized for.
                         TermEvent::Resize(..) => {
+                            self.layout.preview_resize = None;
                             self.graphics.remeasure();
                             self.audio_cell_size = transport_cell_size(&mut self.graphics);
                             self.audio_graphics.clear(&mut self.graphics);
@@ -1155,7 +1156,10 @@ impl App {
                                 self.core.send(Command::SetFilter(text));
                             }
                         }
-                        TermEvent::FocusGained | TermEvent::FocusLost => {}
+                        TermEvent::FocusLost => {
+                            self.layout.preview_resize = None;
+                        }
+                        TermEvent::FocusGained => {}
                         _ => {}
                     }
                     if batch_started.elapsed() >= Duration::from_millis(16)
@@ -1970,6 +1974,7 @@ impl App {
     // -- keys -------------------------------------------------------------
 
     pub fn key(&mut self, k: KeyEvent) {
+        self.layout.preview_resize = None;
         self.refresh();
         if !self.overlays.is_open()
             && self.editor.is_none()
@@ -2942,6 +2947,35 @@ impl App {
         } else {
             m.kind
         };
+        let modal = self.overlays.is_open() || self.places.is_some() || self.tab_picker.is_some();
+        if modal {
+            self.layout.preview_resize = None;
+        } else if self.layout.preview_resize.is_some() {
+            // A divider press owns the gesture, even outside Preview.
+            if matches!(
+                kind,
+                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+            ) {
+                self.repaint |= self.layout.resize_preview(i32::from(m.row));
+                if kind == MouseEventKind::Up(MouseButton::Left) {
+                    self.layout.preview_resize = None;
+                }
+            }
+            return;
+        } else if self.layout.preview_open
+            && kind == MouseEventKind::Down(MouseButton::Left)
+            && !modal
+            && self.bars.held().is_none()
+            && !self.dnd.drag_active
+            && self.dnd.hover_coords.is_none()
+        {
+            let preview = regions.rect_of(ModuleId::Preview);
+            if m.row == preview.y && m.column >= preview.x && m.column < preview.right() {
+                self.layout.begin_preview_resize(i32::from(m.row), 1);
+                self.suppress_dnd_offer_until_press = true;
+                return;
+            }
+        }
         let extension_pointer = match kind {
             MouseEventKind::ScrollDown => Some(("scroll_down", 0)),
             MouseEventKind::ScrollUp => Some(("scroll_up", 0)),
@@ -4665,6 +4699,81 @@ mod tests {
         let cfg_path = dir.path().join("config.toml");
         let app = App::new(core, cfg, cfg_path, None, Graphics::disabled());
         (app, fk, dir)
+    }
+
+    #[test]
+    fn cell_preview_border_drag_resizes_without_changing_focus_or_starting_file_drag() {
+        let (mut app, _fake, _temp) = app();
+        let area = Rect::new(0, 0, 100, 50);
+        let draw = |app: &mut App| app.draw(area, &mut Buffer::empty(area));
+        draw(&mut app);
+        let before = app.layout.last.clone().unwrap();
+        let preview = before.rect_of(ModuleId::Preview);
+        let focus = app.layout.focus();
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            preview.x + 10,
+            preview.y,
+        ));
+        assert!(app.layout.preview_resize.is_some());
+        for _ in 0..2 {
+            app.mouse(mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                0,
+                preview.y - 4,
+            ));
+            draw(&mut app);
+            let resized = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Preview);
+            assert_eq!(resized.height, preview.height + 4);
+            assert_eq!(resized.bottom(), preview.bottom());
+        }
+        app.mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            0,
+            preview.y - 4,
+        ));
+        assert!(app.layout.preview_resize.is_none());
+        assert_eq!(app.layout.focus(), focus);
+        assert!(!app.dnd.drag_active);
+        assert!(app.core.state().queue.is_empty());
+        let top = app
+            .layout
+            .last
+            .as_ref()
+            .unwrap()
+            .rect_of(ModuleId::Preview)
+            .y;
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            preview.x + 10,
+            top,
+        ));
+        app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 0, 0));
+        draw(&mut app);
+        assert!(
+            app.layout
+                .last
+                .as_ref()
+                .unwrap()
+                .rect_of(ModuleId::Stack)
+                .height
+                >= layout::STACK_MIN_ROWS
+        );
+        app.key(code(KeyCode::Esc));
+        assert!(app.layout.preview_resize.is_none());
+        app.mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            preview.x + 10,
+            app.layout
+                .last
+                .as_ref()
+                .unwrap()
+                .rect_of(ModuleId::Preview)
+                .y,
+        ));
+        let smaller = Rect::new(0, 0, 100, 40);
+        app.draw(smaller, &mut Buffer::empty(smaller));
+        assert!(app.layout.preview_resize.is_none());
     }
 
     #[test]

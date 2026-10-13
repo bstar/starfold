@@ -57,4 +57,10 @@ there:
 
 [Presentation modes and shortcuts](../documentation/presentation.html) describes live switching, F8/F9 and styled editor cells.
 
-For coordinated unreleased KIT/AMP changes, run `scripts/build-local.sh`. It uses the sibling KIT and `staramp-ssh-audio` checkouts, builds through Nix, restores the git-sourced lockfiles and installs the matching private AMP helper beside FOLD. Published distributions use pinned revisions; update those pins after the shared changes are released.
+For a coordinated local build, run `scripts/build-local.sh`. It builds FOLD and
+the sibling `staramp` checkout through their Nix devshells with locked, published
+KIT pins, then installs the matching private AMP helper beside FOLD. On the Linux
+workstation it uses the active `staramp-graphical` checkout when present.
+`STARFOLD_AMP_SOURCE` overrides the AMP source. For unreleased KIT development,
+set `STARFOLD_KIT_SOURCE` explicitly; the script restores both git-sourced
+lockfiles after the temporary path override. Never commit a path-patched lockfile.

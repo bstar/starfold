@@ -11,13 +11,13 @@ expression: "render(&mut app, 100, 30)"
 ║    ◇ blo║  ctrl+pgup     previous tab         right-click          actions menu        ║ 10      ║
 ║    ↗ dan║  ctrl+p        tabs and actions     click a crumb        jump there          ║ 10      ║
 ║    ↗ not║  navigation                         wheel                scroll three rows   ║ 10      ║
-║         ║  tab           next module          modules                                  ║         ║
-║         ║  shift+tab     previous module      click a fold         open it             ║         ║
-║         ║  alt+1         the stack            click a word         what it says        ║         ║
-║         ║  F7/alt+2      the preview          status                                   ║         ║
-║         ║  alt+3         operations           click the bar        open operations     ║         ║
-║         ║  up/k          up one                                                        ║         ║
-║         ║  down/j        down one                                                      ║         ║
+║         ║  tab           next module          preview                                  ║         ║
+║         ║  shift+tab     previous module      drag top border      resize preview      ║         ║
+║         ║  alt+1         the stack            modules                                  ║         ║
+║         ║  F7/alt+2      the preview          click a fold         open it             ║         ║
+║         ║  alt+3         operations           click a word         what it says        ║         ║
+║         ║  up/k          up one               status                                   ║         ║
+║         ║  down/j        down one             click the bar        open operations     ║         ║
 ╚═■■■■■■■■║  shift+up/K    up ten                                                        ║═════════╝
 ╔═ PREVIEW║  shift+down/J  down ten                                                      ║═════════╗
 ║         ║  pgup          page up                                                       ║   close ║

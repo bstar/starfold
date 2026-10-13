@@ -128,13 +128,9 @@ impl<'a> Canvas<'a> {
             .font
             .saturating_sub(2)
             .max(1);
-        let text_width = (starkit::wrap::width_of(label) * font * 3 / 5).min(px.width);
-        let text_rect = R::new(
-            px.x + px.width.saturating_sub(text_width) / 2,
-            px.y,
-            text_width,
-            px.height,
-        );
+        // KIT shapes with the frontend's selected font and scale. A guessed
+        // glyph-width box clips labels even when the button has ample room.
+        let text_rect = R::new(px.x + 4, px.y, px.width.saturating_sub(8), px.height);
         rack::mono(
             &mut self.surface,
             text_rect,

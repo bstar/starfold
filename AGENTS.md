@@ -54,6 +54,28 @@ STAR/KIT's dock layout engine is not used here. `src/ui/layout.rs` lays out
 the browser, preview, and operations vertically; Commander divides the
 browser rectangle into two equal-width directory panes.
 
+## Framework alignment
+
+KIT is becoming a public framework, with AMP, FOLD, CORD and WIRE as reference
+consumers. The application and every preview helper inherit one versioned KIT
+pin from `[workspace.dependencies]`; the packaged AMP helper has a matching
+published source pin in the flake. Local builds use published locks by default.
+
+Preview divider capture lives in `LayoutState` for both cell and graphical
+input. Begin from the painted allocation, keep the origin across repaints and
+cancel on resize, navigation or presentation switch. Native button text gets
+its full interior rectangle; KIT owns shaping with the frontend's chosen font.
+Do not derive text clipping boxes from guessed glyph advances.
+
+On the Linux workstation, `~/.local/bin/star-kit-terminal` must execute this
+checkout's release binary, like `starfold` and `starfold-graphical`, rather than
+an older graphics worktree. Preserve its media environment when updating it.
+
+The next framework phase is shared responsive panes, visibility and interaction.
+Large terminal-font zoom still needs embedded AMP typography polish; private
+Kitty startup/preview captures do not establish all densities or physical macOS
+rendering/audio correctness.
+
 ## Commander and Places
 
 Stack 0 is Fold; stacks 1 and 2 are Commander's left and right panes, created
@@ -104,8 +126,8 @@ commit a `Cargo.lock` written while it was in place** — one agent did exactly
 this during this milestone, and the fix was reverting `Cargo.lock` back to
 the git-sourced entry and deleting the file. If `git status` ever shows
 `Cargo.lock` changed with no dependency version bump to explain it, check for
-this before anything else. Every public `starkit` item now has three
-consumers — check STAR/AMP and STAR/CORD before changing a signature.
+this before anything else. Every public `starkit` item now has four
+consumers — check STAR/AMP, STAR/CORD and STAR/WIRE before changing a signature.
 
 `Graphics::probe` has to run before `term::init`: it needs the terminal in its
 ordinary mode to ask the question, and `term::init` is what takes the

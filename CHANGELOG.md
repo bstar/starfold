@@ -17,6 +17,13 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Preview-height dragging works in both cell and graphical presentation, with
+  shared capture, minimum listing space and cancellation on resize. Wide native
+  decks honor manual shrinking instead of forcing the automatic preferred height.
+- Native rack buttons give the selected frontend font their full text area,
+  preventing short labels from being clipped inside otherwise roomy controls.
+- All preview helpers share the application's STAR/KIT v0.6.1 workspace pin.
+  Coordinated local builds use published pins and the active AMP source by default.
 - Pointer feedback, independent graphical window sessions, and PDF preview navigation.
 - Embedded player skin negotiation and playback availability with the matching STAR/AMP helper.
 

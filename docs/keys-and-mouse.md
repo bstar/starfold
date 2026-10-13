@@ -205,9 +205,16 @@ right-click does the same by default; `[ui] right_click = false` disables physic
 | stack    | right-click           | actions menu |
 | stack    | click a crumb         | jump there |
 | stack    | wheel                 | scroll three rows |
+| preview  | drag top border       | resize preview |
 | modules  | click a fold          | open it |
 | modules  | click a word          | what it says |
 | status   | click the bar         | open operations |
+
+Preview resizing works in cell and graphical presentation. The listing keeps
+its minimum height; moving outside the preview continues the captured drag.
+Release commits the height. Escape, a terminal resize or a presentation switch
+ends the gesture. In a wide graphical window, the Preview/Operations deck can
+also shrink below its automatic preferred height.
 
 ## Context menus
 

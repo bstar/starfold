@@ -637,6 +637,11 @@ pub const MOUSE: &[MouseHelp] = &[
         group: "stack",
     },
     MouseHelp {
+        gesture: "drag top border",
+        label: "resize preview",
+        group: "preview",
+    },
+    MouseHelp {
         gesture: "click a fold",
         label: "open it",
         group: "modules",
@@ -1006,7 +1011,13 @@ right-click does the same by default; `[ui] right_click = false` disables physic
         ));
     }
     out.push_str(
-        "\n## Context menus
+        "\nPreview resizing works in cell and graphical presentation. The listing keeps
+its minimum height; moving outside the preview continues the captured drag.
+Release commits the height. Escape, a terminal resize or a presentation switch
+ends the gesture. In a wide graphical window, the Preview/Operations deck can
+also shrink below its automatic preferred height.
+
+## Context menus
 
 File, directory, tab and drop menus use compact popups. Move the pointer to
 highlight an action; hover a submenu for 200 ms or click it to open it.

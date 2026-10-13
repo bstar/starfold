@@ -122,6 +122,20 @@ impl Regions {
     }
 }
 
+/// A divider gesture keeps its origin across repaints in either presentation.
+#[derive(Clone, Copy)]
+pub struct PreviewResize {
+    origin_y: i32,
+    rows: i32,
+    max_rows: i32,
+    row_pixels: i32,
+}
+impl PreviewResize {
+    pub fn rows_at(self, y: i32) -> u16 {
+        (self.rows + (self.origin_y - y) / self.row_pixels).clamp(2, self.max_rows.max(2)) as u16
+    }
+}
+
 /// Which module has the keyboard, whether PREVIEW is open, and what each
 /// module is configured to grow to.
 pub struct LayoutState {
@@ -147,8 +161,9 @@ pub struct LayoutState {
     /// `[ui] preview_rows`: how far PREVIEW grows when it is open but not
     /// focused.
     pub preview_rows: u16,
-    /// User-sized native preview; focus never changes this allocation.
+    /// User-sized preview in either presentation; focus never changes it.
     pub native_preview_rows: Option<u16>,
+    pub preview_resize: Option<PreviewResize>,
     /// `[ui] ops_rows`: how far OPERATIONS grows while focused, up to its own
     /// queue length.
     pub ops_rows: u16,
@@ -174,6 +189,7 @@ impl LayoutState {
             ops_active: false,
             preview_rows,
             native_preview_rows: None,
+            preview_resize: None,
             ops_rows,
             fold_rows,
             last: None,
@@ -190,6 +206,9 @@ impl LayoutState {
     /// queue count.
     pub fn regions(&mut self, full: Rect, pad: (u16, u16), queued: u16) -> Option<&Regions> {
         let area = inset(full, pad);
+        if self.last.as_ref().is_some_and(|last| last.area != area) {
+            self.preview_resize = None;
+        }
         let extra = starkit::chrome::frame::extra_rows();
         let gap = extra / 2;
         let gutters = gap * 2;
@@ -247,7 +266,7 @@ impl LayoutState {
             };
             let deck = collapsed_rows
                 .saturating_add(preview_rows)
-                .max(if self.preview_open {
+                .max(if self.preview_open && self.native_preview_rows.is_none() {
                     body.height * 2 / 5
                 } else {
                     0
@@ -355,6 +374,46 @@ impl LayoutState {
             tabs,
         });
         self.last.as_ref()
+    }
+
+    /// Begin from the painted allocation, never from a configured preference.
+    pub fn begin_preview_resize(&mut self, y: i32, row_pixels: i32) -> bool {
+        let Some(regions) = &self.last else {
+            return false;
+        };
+        let extra = starkit::chrome::frame::extra_rows();
+        let rows = regions
+            .rect_of(ModuleId::Preview)
+            .height
+            .saturating_sub(COLLAPSED_ROWS + extra);
+        let floor = if self.native_rack && rack_browser(regions) {
+            18
+        } else {
+            STACK_MIN_ROWS + extra
+        };
+        let max_rows = rows.saturating_add(
+            regions
+                .rect_of(ModuleId::Stack)
+                .height
+                .saturating_sub(floor),
+        );
+        self.preview_resize = Some(PreviewResize {
+            origin_y: y,
+            rows: i32::from(rows),
+            max_rows: i32::from(max_rows),
+            row_pixels: row_pixels.max(1),
+        });
+        true
+    }
+
+    pub fn resize_preview(&mut self, y: i32) -> bool {
+        let Some(capture) = self.preview_resize else {
+            return false;
+        };
+        let rows = capture.rows_at(y);
+        let changed = self.native_preview_rows != Some(rows);
+        self.native_preview_rows = Some(rows);
+        changed
     }
 
     pub fn focus(&self) -> ModuleId {
