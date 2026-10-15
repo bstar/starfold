@@ -47,7 +47,8 @@ what cargo's CLI fetch of STAR/KIT uses.
 The shared foundation — paths, logging, private file writes, themes,
 keymap/help, chrome, text entry, wrapping, terminal graphics — lives in
 `starkit`, the crate STAR/AMP and STAR/CORD use too. It is a git dependency
-pinned to a tag, and the flake takes it from the revision `Cargo.lock` names
+pinned to an immutable tag or candidate revision, and the flake takes it from
+the revision `Cargo.lock` names
 through `cargoLock.allowBuiltinFetchGit`.
 
 `src/ui/layout.rs` supplies application policy to KIT's `panes` engine.
@@ -524,3 +525,16 @@ staging, revalidates, exclusively publishes, then removes the old copy; cleanup
 failures remain visible in OPERATIONS. Same-device recovery uses atomic rename.
 The Linux restart test sets Trash environment variables only in subprocesses,
 using disposable private bins; normal tests must not empty the user's Trash.
+
+## KIT 0.9 candidate compatibility
+
+Development main pins an immutable KIT 0.9 candidate revision with a git-sourced
+lockfile, so ordinary builds need no sibling checkout. This is an unreleased
+testing candidate; use immutable version tags when making a framework release.
+Keep dependency updates in their own commit, with the manifest and lock together.
+
+`scripts/check-kit.sh` checks every target and feature against the sibling KIT
+checkout in a disposable tracked copy. `STAR_KIT_CHECKOUT` selects another
+candidate. No candidate path or path-patched lock is committed. Live canvases
+and embedded input are opt-in; ordinary application keys, media, SSH and
+presentation retain their current contracts.
