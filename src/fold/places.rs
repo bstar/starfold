@@ -116,6 +116,14 @@ struct Mount {
 }
 
 pub fn discover_locations() -> Result<Vec<Location>, String> {
+    let mut locations = discover_paths()?;
+    enrich_locations(&mut locations);
+    Ok(locations)
+}
+
+/// Mount-table names and paths only; never probe mounted filesystems or devices.
+/// Folder choosers need navigation targets even when a drive is unresponsive.
+pub fn discover_paths() -> Result<Vec<Location>, String> {
     #[cfg(target_os = "linux")]
     let mounts = {
         let text = std::fs::read("/proc/self/mountinfo")
@@ -129,9 +137,7 @@ pub fn discover_locations() -> Result<Vec<Location>, String> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let mounts: Vec<Mount> = Vec::new();
 
-    let mut locations = classify_mounts(mounts);
-    enrich_locations(&mut locations);
-    Ok(locations)
+    Ok(classify_mounts(mounts))
 }
 
 #[cfg(target_os = "linux")]

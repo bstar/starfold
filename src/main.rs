@@ -5,6 +5,7 @@ mod bundled_amp;
 mod bundled_preview;
 mod cli;
 mod config;
+mod directory_picker;
 mod fold;
 #[cfg(feature = "terminal-graphics")]
 mod graphical;
@@ -24,6 +25,9 @@ use clap::Parser as _;
 use paths::PATHS;
 
 fn main() -> Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--directory-list")) {
+        return directory_picker::run();
+    }
     if std::env::args_os().nth(1).as_deref()
         == Some(std::ffi::OsStr::new("--archive-extension-stdio"))
     {

@@ -215,3 +215,19 @@ F8 and Shift+F8 change themes. Alt+T and Alt+Shift+T remain aliases. Use
 PDF and video previews use bundled executable extensions. PDF pages are rendered
 with Hayro; independent providers can implement the same versioned protocol.
 See [Preview extensions](docs/preview-extensions.md) for configuration and controls.
+
+Experimental integrations can request a read-only directory listing with
+`starfold --directory-list PATH [--hidden]`. JSON version 1 returns the canonical
+`path`, optional `parent`, sorted `directories` with display `name` and exact
+UTF-8 `path`, and `truncated`. Files are excluded; directory symlinks remain
+navigable. The response is limited to 1,000 directory rows and 512 KiB of path
+data. This is the STAR/SCREEN TV folder chooser contract; no terminal is needed.
+
+Add `--places` to the directory listing request to include `places` rows
+(`name`, absolute `path`, `group`) and `places_errors`. This uses FOLD's saved
+bookmarks beside its configured config file and its existing mount discovery,
+plus Home and Root. Missing bookmark files are normal; malformed files are
+reported without writing them. Discovery occurs only when Places is requested.
+
+The chooser reads mount-table names and paths without querying drive capacity
+or device details, so listing Places does not probe unresponsive mounted drives.
