@@ -31,6 +31,10 @@ pub struct Ui {
     pub theme: String,
     /// `auto`, `kitty`, `blocks` or `off`.
     pub graphics: String,
+    /// The AMP Classic pane treatment, or colors from the selected theme.
+    pub graphical_palette: GraphicalPalette,
+    /// Graphical workspace switcher; narrow windows use numbered sessions.
+    pub workspace_navigation: WorkspaceNavigation,
     /// Local presentation preference, independent of a remote controller.
     pub presentation: PresentationMode,
     pub shortcuts: Shortcuts,
@@ -66,6 +70,8 @@ impl Default for Ui {
         Self {
             theme: "catppuccin-mocha".into(),
             graphics: "auto".into(),
+            graphical_palette: GraphicalPalette::Theme,
+            workspace_navigation: WorkspaceNavigation::default(),
             presentation: PresentationMode::Graphical,
             shortcuts: Shortcuts::default(),
             pane_corners: CornerStyle::default(),
@@ -83,6 +89,23 @@ impl Default for Ui {
             max_entries: 50_000,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GraphicalPalette {
+    Classic,
+    #[default]
+    Theme,
+}
+
+/// Mutually exclusive graphical workspace navigation treatments.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceNavigation {
+    #[default]
+    NumberedSessions,
+    Sidebar,
 }
 
 impl Ui {
@@ -422,6 +445,12 @@ const TEMPLATE: &str = r#"# STAR/FOLD configuration.
 theme = "catppuccin-mocha"
 # How pictures are drawn in the preview: auto, kitty, blocks, or off.
 graphics = "auto"
+# Shared AMP pane colors resolved from the selected theme, or "classic".
+graphical_palette = "theme"
+# Graphical workspace navigation: numbered_sessions or sidebar.
+# The Sidebar / Numbered sessions button switches live and saves this value.
+# Sidebar falls back to numbered sessions in narrow windows.
+workspace_navigation = "numbered_sessions"
 # Local display preference; F9 switches live and saves this choice.
 presentation = "graphical"
 # Graphical pane borders: rounded or square (rigid is also accepted).
@@ -501,6 +530,25 @@ command = ""
 mod tests {
     use super::*;
 
+    #[test]
+    fn workspace_navigation_is_optional_and_round_trips_both_styles() {
+        let old: Config = toml::from_str("[ui]").unwrap();
+        assert_eq!(
+            old.ui.workspace_navigation,
+            WorkspaceNavigation::NumberedSessions
+        );
+        for (name, style) in [
+            ("numbered_sessions", WorkspaceNavigation::NumberedSessions),
+            ("sidebar", WorkspaceNavigation::Sidebar),
+        ] {
+            let cfg: Config =
+                toml::from_str(&format!("[ui]\nworkspace_navigation = \"{name}\"")).unwrap();
+            assert_eq!(cfg.ui.workspace_navigation, style);
+            let restored: Config = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+            assert_eq!(restored, cfg);
+        }
+        assert!(toml::from_str::<Config>("[ui]\nworkspace_navigation = \"both\"").is_err());
+    }
     #[test]
     fn appearance_shortcuts_validate_and_old_configs_keep_defaults() {
         let old: Config = toml::from_str("[ui]\ntheme = \"catppuccin-mocha\"").unwrap();

@@ -22,8 +22,10 @@ bin="${CARGO_TARGET_DIR:-target}/aarch64-apple-darwin/release/starfold"
 # helpers so future updates/rollbacks cannot select stale adjacent providers.
 gzip -n -c "$(dirname "$bin")/starfold-preview-pdf" > "$work/pdf.gz"
 gzip -n -c "$(dirname "$bin")/starfold-preview-video" > "$work/video.gz"
+gzip -n -c "$(dirname "$bin")/starfold-preview-comic" > "$work/comic.gz"
 export STARFOLD_BUNDLE_PREVIEW_PDF="$work/pdf.gz"
 export STARFOLD_BUNDLE_PREVIEW_VIDEO="$work/video.gz"
+export STARFOLD_BUNDLE_PREVIEW_COMIC="$work/comic.gz"
 cargo build -p starfold --release --locked --target aarch64-apple-darwin "${build_args[@]}"
 
 "$bin" --version
@@ -31,7 +33,7 @@ cargo build -p starfold --release --locked --target aarch64-apple-darwin "${buil
 stage="$work/$prefix-$ver"
 mkdir -p "$stage"
 install -m755 "$bin" "$stage/starfold"
-for helper in starfold-preview-pdf starfold-preview-video starfold-preview-nvim starfold-archive; do
+for helper in starfold-preview-pdf starfold-preview-comic starfold-preview-video starfold-preview-nvim starfold-archive; do
   install -m755 "$(dirname "$bin")/$helper" "$stage/$helper"
 done
 cp README.md LICENSE "$stage/"

@@ -105,6 +105,10 @@ pub enum Word {
     Clear,
     Close,
     BrowseArchive,
+    ComicPrevious,
+    ComicNext,
+    ComicFitPage,
+    ComicFitWidth,
     PictureScale(crate::config::Scale),
     ZoomOut,
     ZoomReset(u16),
@@ -123,6 +127,9 @@ impl Word {
     /// `Back` stays an arrow: `h` remains the Stack navigation key.
     pub fn mnemonic(self) -> Option<(char, u16)> {
         match self {
+            Word::ComicPrevious => Some(('p', 0)),
+            Word::ComicNext => Some(('n', 0)),
+            Word::ComicFitPage | Word::ComicFitWidth => None,
             Word::BrowseArchive => None,
             Word::AudioOutput(_) | Word::VideoMute(_) => Some(('a', 0)),
             Word::VideoPlay(_) => Some(('P', 0)),
@@ -153,6 +160,10 @@ impl Word {
 impl header::Word for Word {
     fn word(self) -> Cow<'static, str> {
         match self {
+            Word::ComicPrevious => "prev".into(),
+            Word::ComicNext => "next".into(),
+            Word::ComicFitPage => "fit".into(),
+            Word::ComicFitWidth => "width".into(),
             Word::BrowseArchive => "Browse".into(),
             Word::AudioOutput(local) => if local { "audio: local" } else { "audio: host" }.into(),
             Word::VideoPlay(paused) => if paused { "Play" } else { "Pause" }.into(),
@@ -189,6 +200,19 @@ impl header::Word for Word {
             Word::ZoomIn => " + ".into(),
         }
     }
+}
+
+pub fn comic_words() -> Vec<Word> {
+    vec![
+        Word::BrowseArchive,
+        Word::ComicPrevious,
+        Word::ComicNext,
+        Word::ComicFitPage,
+        Word::ComicFitWidth,
+        Word::ZoomOut,
+        Word::ZoomIn,
+        Word::Close,
+    ]
 }
 
 /// Color the mnemonic cells in the shared header's own slots. This keeps the

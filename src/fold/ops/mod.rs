@@ -145,6 +145,8 @@ pub struct Plan {
 /// other thirteen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Outcome {
+    /// Successful top-level copy/move destinations, including conflict renames.
+    pub completed_targets: Vec<PathBuf>,
     pub reversible: Vec<super::recovery::Record>,
     pub done: usize,
     pub skipped: usize,

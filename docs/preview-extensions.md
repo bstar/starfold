@@ -1,6 +1,6 @@
 # Preview extensions
 
-PDF and video previews are bundled executable providers. PDF uses Hayro 0.8.0
+PDF, comic-book and video previews are bundled executable providers. PDF uses Hayro 0.8.0
 in `starfold-preview-pdf`; its rendering dependencies are not linked into the
 main executable. `starfold-preview-video` supplies posters and playback actions.
 STAR/KIT still owns media decoding, audio output and SSH transport; STAR/AMP
@@ -15,7 +15,7 @@ CARGO_NET_GIT_FETCH_WITH_CLI=true nix develop -c cargo test --workspace --featur
 ```
 
 The bundled helpers live beside the actual FOLD executable, including packaged
-installations. Keep the three executables together. Standalone macOS release
+installations. Keep FOLD and its matching helpers together. Standalone macOS release
 binaries additionally carry compressed matching helpers, materialized into a
 private versioned cache, because the existing self-updater replaces only FOLD.
 This preserves helper versions through updates and rollbacks. Nix/macOS builds
@@ -36,6 +36,28 @@ successful render is not a guarantee of full fidelity for every document.
 Video retains existing playback, subtitle, fullscreen and Original/Preview SSH
 controls. Extensions use FOLD's media services; movies are not encoded into the
 general extension message stream. URL/live-stream sources are outside v1.
+
+## CBZ and CBR comics
+
+Select a `.cbz` or `.cbr` to preview its first page; Enter focuses the reader.
+`starfold-preview-comic` uses the existing ZIP/UnRAR archive engines and decodes
+pages in memory without extracting files. Image names use natural numeric order
+(`page2` before `page10`), including nested folders. Hidden entries, macOS
+resource forks and non-image metadata are ignored. JPEG, PNG, WebP, GIF (first
+frame) and BMP pages are supported.
+
+In Preview, use `n`/`p`, left/right or Page Down/Page Up for pages, Home/End for
+first/last, `+`/`-` for zoom, `0` for fit-page, `w` for fit-width, `j`/`k` or
+up/down to scroll, and `h`/`l` to pan. The wheel scrolls a zoomed page.
+The header provides page, fit and zoom buttons; Browse opens the archive's
+member listing. Both cell and graphical presentations use the same reader.
+Image-free terminals retain the current page number and filename.
+
+The supervised helper retains one decoded page and bounds archive entries to
+10,000, encoded pages to 32 MiB, decoded sources to 128 MiB, and output rasters
+to eight million pixels. Password-protected and multipart RARs report an error.
+Disable the bundled reader with `disabled = ["comic"]` under
+`[preview.extensions]`, or override it with a configured provider.
 
 ## Explicit configuration
 

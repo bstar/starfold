@@ -3,23 +3,23 @@ source: src/ui/frames.rs
 assertion_line: 203
 expression: preview_focused
 ---
-╔═ S T A R / F O L D — LEFT ═════════ commander ═╗╔═ › RIGHT ══════════════════════════ commander ═╗
-║  sort  filter  Bookmark  places  view  actions ║║  sort  filter  Bookmark  places  view  actions ║
-║─ ~/pictures ───────────────────────────────────║║─ ~/empty ──────────────────────────────────────║
-║    ▧ harbour.png                          482 B║║                                                ║
-║                                                ║║                                                ║
-║                                                ║║                                                ║
-║                                                ║║                                                ║
-║                                                ║║                                                ║
-║                                                ║║                                                ║
-║                                                ║║                     empty                      ║
-║                                                ║║                                                ║
-║                                                ║║                                                ║
-║                                                ║║                                                ║
-║                                                ║║                                                ║
-║                                                ║║                                                ║
-║                                                ║║                                                ║
-╚═■■■■■■■■■■■■ 125.0 GB free / 500.0 GB total════╝╚═■■■■■■■■■■■■ 125.0 GB free / 500.0 GB total════╝
+╔═ S T A R / F O L D — LEFT ════════ commander ═╗ ╔═ › RIGHT ══════════════════════════ commander ═╗
+║ sort  filter  Bookmark  places  view  actions ║ ║  sort  filter  Bookmark  places  view  actions ║
+║─ ~/pictures ──────────────────────────────────║ ║─ ~/empty ──────────────────────────────────────║
+║    ▧ harbour.png                         482 B║ ║                                                ║
+║                                               ║ ║                                                ║
+║                                               ║ ║                                                ║
+║                                               ║ ║                                                ║
+║                                               ║ ║                                                ║
+║                                               ║ ║                                                ║
+║                                               ║ ║                     empty                      ║
+║                                               ║ ║                                                ║
+║                                               ║ ║                                                ║
+║                                               ║ ║                                                ║
+║                                               ║ ║                                                ║
+║                                               ║ ║                                                ║
+║                                               ║ ║                                                ║
+╚═■■■■■■■■■■■■ 125.0 GB free / 500.0 GB total═══╝ ╚═■■■■■■■■■■■■ 125.0 GB free / 500.0 GB total════╝
 ╔═ PREVIEW ════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            close ║
 ║                                                                                                  ║

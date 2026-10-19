@@ -298,8 +298,7 @@ impl App {
         let cell_mode = !self.graphical.as_ref().is_some_and(|g| !g.cell_mode);
         #[cfg(not(feature = "terminal-graphics"))]
         let cell_mode = true;
-        let pdf =
-            matches!(self.view.preview.as_deref(), Some(Preview::Document(d)) if d.kind == "PDF");
+        let pdf = matches!(self.view.preview.as_deref(), Some(Preview::Document(d)) if matches!(d.kind.as_str(), "PDF" | "Comic book"));
         let viewport = Viewport {
             corner_radius: if pdf {
                 self.cfg.preview.video_radius()

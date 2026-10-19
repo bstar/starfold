@@ -2,9 +2,9 @@
 use starkit::native_surface::{PixelRect as R, Primitive, Surface};
 use starkit::ratatui::layout::Rect;
 use starkit::terminal_graphics::protocol::Component;
-use starkit::theme::{color::Rgb, schema::Variant, Theme as Core};
+use starkit::theme::{color::Rgb, Theme as Core};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Colors {
     pub frame: Rgb,
     pub title: Rgb,
@@ -14,55 +14,117 @@ pub struct Colors {
     pub accent: Rgb,
     pub highlight: Rgb,
     pub shadow: Rgb,
-    pub button: Rgb,
+    shared: std::sync::Arc<starkit::native_surface::style::Style>,
+    native_skins: bool,
+}
+impl std::fmt::Debug for Colors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Colors")
+            .field("frame", &self.frame)
+            .field("inset", &self.inset)
+            .finish_non_exhaustive()
+    }
 }
 impl Colors {
-    pub fn new(theme: &Core) -> Self {
-        let rgb = |s| Rgb::parse_hex(s).expect("rack palette");
-        let values = match theme.id.as_str() {
-            "terminal" | "winamp-classic" => Some([
-                "#30333f", "#242732", "#0e1712", "#d8d8ce", "#9ba1af", "#a5d78d", "#656b7c",
-                "#151821", "#494f5f",
-            ]),
-            "catppuccin-mocha" => Some([
-                "#313244", "#1e1e2e", "#181d1b", "#cdd6f4", "#a6adc8", "#a6e3a1", "#626581",
-                "#11111b", "#45475a",
-            ]),
-            "catppuccin-latte" => Some([
-                "#ccd0da", "#bcc0cc", "#e6e9e0", "#343947", "#5c6371", "#386132", "#f3f4f7",
-                "#6c7281", "#e3e6ec",
-            ]),
-            _ => None,
-        };
-        if let Some(v) = values {
-            return Self {
-                frame: rgb(v[0]),
-                title: rgb(v[1]),
-                inset: rgb(v[2]),
-                foreground: rgb(v[3]),
-                muted: rgb(v[4]),
-                accent: rgb(v[5]),
-                highlight: rgb(v[6]),
-                shadow: rgb(v[7]),
-                button: rgb(v[8]),
-            };
+    pub fn palette(theme: &Core) -> starkit::native_surface::style::Palette {
+        use starkit::native_surface::style::{Palette, REFERENCE_PALETTE, SILVER_PALETTE};
+        match theme.id.as_str() {
+            "winamp-classic" => return REFERENCE_PALETTE,
+            "winamp-silver" => return SILVER_PALETTE,
+            _ => {}
         }
-        let light = theme.variant == Variant::Light;
+        let mut palette = Palette::from_theme(theme);
+        // Match AMP's graphical interpretation of Kanagawa: raised slate
+        // frames around darker wells, rather than terminal-base-colored frames.
+        if theme.name == "Kanagawa" {
+            palette.bg = [theme.header_bg.r, theme.header_bg.g, theme.header_bg.b];
+            let inset = theme.bg.mix(Rgb::new(0, 0, 0), 0.12);
+            palette.inset_bg = Some([inset.r, inset.g, inset.b]);
+        }
+        palette
+    }
+
+    pub fn from_palette(palette: starkit::native_surface::style::Palette) -> Self {
+        use starkit::native_surface::style::Style;
+        let mut style = Style::new(palette);
+        style.metrics.small_font = 12;
+        let rgb = |s: &str| Rgb::parse_hex(s).expect("KIT workspace color");
         Self {
-            frame: theme.panel_bg.mix(theme.fg, 0.12),
-            title: theme.panel_bg,
-            inset: theme.bg.mix(theme.accent, 0.035),
-            foreground: theme.fg,
-            muted: theme.dim,
-            accent: theme.accent,
-            highlight: theme
-                .panel_bg
-                .mix(starkit::theme::WHITE, if light { 0.8 } else { 0.3 }),
-            shadow: theme.panel_bg.mix(starkit::theme::BLACK, 0.4),
-            button: theme.panel_bg.mix(theme.fg, 0.2),
+            frame: rgb(&style.colors.panel),
+            title: rgb(&style.colors.title),
+            inset: rgb(&style.colors.inset),
+            foreground: rgb(&style.colors.ink),
+            muted: rgb(&style.colors.dim),
+            accent: rgb(&style.colors.accent),
+            highlight: rgb(&style.colors.highlight),
+            shadow: rgb(&style.colors.shadow),
+            shared: std::sync::Arc::new(style),
+            native_skins: true,
         }
     }
+
+    pub fn style(&self) -> &starkit::native_surface::style::Style {
+        &self.shared
+    }
+
+    /// AMP's original one-pixel corner mask and exact selection color. Keep
+    /// this in physical pixels so terminal zoom never thickens the outline.
+    pub fn focus(&self, surface: &mut Surface, rect: R) {
+        if rect.width < 24 || rect.height < 24 {
+            return;
+        }
+        let palette = self.shared.palette;
+        let color = starkit::native_surface::style::hex(
+            if palette == starkit::native_surface::style::SILVER_PALETTE {
+                palette.fg
+            } else {
+                palette.accent
+            },
+        );
+        if self.native_skins {
+            static MASK: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+            let (asset, png) = MASK.get_or_init(|| {
+                let image = starkit::image::load_from_memory(include_bytes!(
+                    "../../assets/chrome/amp-focus-rounded.png"
+                ))
+                .expect("original AMP focus mask")
+                .to_rgba8();
+                starkit::terminal_graphics::assets::encode_skin(&image)
+                    .expect("bounded AMP focus mask")
+            });
+            surface.assets.insert(asset.clone(), Some(png.clone()));
+            surface.nodes.push(Primitive::Sprite {
+                rect,
+                asset: asset.clone(),
+                source: R::new(0, 0, 24, 24),
+                insets: Some([6; 4]),
+                tint: Some(color),
+            });
+        } else {
+            for edge in [
+                R::new(rect.x + 3, rect.y, rect.width - 6, 1),
+                R::new(rect.x + 3, rect.y + rect.height - 1, rect.width - 6, 1),
+                R::new(rect.x, rect.y + 3, 1, rect.height - 6),
+                R::new(rect.x + rect.width - 1, rect.y + 3, 1, rect.height - 6),
+            ] {
+                surface.fill(edge, &color, 0);
+            }
+        }
+    }
+
+    pub fn set_native_skins(&mut self, supported: bool) {
+        if self.native_skins != supported {
+            self.shared =
+                std::sync::Arc::new(self.shared.as_ref().clone().with_native_skins(supported));
+            self.native_skins = supported;
+        }
+    }
+
     pub fn apply(&self, core: &mut Core) {
+        let palette = self.style().palette;
+        let rgb = |[r, g, b]: [u8; 3]| Rgb::new(r, g, b);
+        core.bg = rgb(palette.bg);
+        core.error = rgb(palette.error);
         core.panel_bg = self.inset;
         core.panel_fg = self.foreground.ensure_contrast(self.inset, 4.5);
         core.fg = core.panel_fg;
@@ -75,7 +137,7 @@ impl Colors {
         core.row_bg = self.inset;
         core.row_fg = core.fg;
         core.row_meta_fg = core.dim;
-        core.row_selected_bg = self.inset.mix(self.accent, 0.28);
+        core.row_selected_bg = rgb(palette.selected);
         core.row_cursor_bg = core.row_selected_bg;
         core.status_bg = self.inset;
         core.status_fg = core.dim;
@@ -91,20 +153,9 @@ pub fn hex(c: Rgb) -> String {
 
 /// Raised and recessed edges use the same bounded pixel rectangles as text.
 pub fn bevel(s: &mut Surface, r: R, p: &Colors, pressed: bool) {
-    if r.width < 2 || r.height < 2 {
-        return;
-    }
-    s.fill(r, &hex(if pressed { p.title } else { p.button }), 0);
-    let (hi, lo) = if pressed {
-        (p.shadow, p.highlight)
-    } else {
-        (p.highlight, p.shadow)
-    };
-    s.fill(R::new(r.x, r.y, r.width, 1), &hex(hi), 0);
-    s.fill(R::new(r.x, r.y, 1, r.height), &hex(hi), 0);
-    s.fill(R::new(r.x, r.y + r.height - 1, r.width, 1), &hex(lo), 0);
-    s.fill(R::new(r.x + r.width - 1, r.y, 1, r.height), &hex(lo), 0);
+    p.style().frame(s, r, pressed);
 }
+
 pub fn mono(s: &mut Surface, rect: R, text: impl Into<String>, color: Rgb, size: u16, bold: bool) {
     s.nodes.push(Primitive::Text {
         rect,
@@ -116,109 +167,46 @@ pub fn mono(s: &mut Surface, rect: R, text: impl Into<String>, color: Rgb, size:
     });
 }
 
-/// Paint only the border cells, preserving previews, metadata and queue text.
-/// Panels remain in the scene for scrolling identity and legacy consumers.
-pub fn frame(rect: Rect, cell: (u16, u16), p: &Colors) -> Vec<Component> {
-    let (cw, ch) = cell;
-    if rect.width < 3 || rect.height < 3 {
-        return vec![];
-    }
-    let mut parts = vec![];
-    for (r, horizontal, leading) in [
-        (Rect::new(rect.x, rect.y, rect.width, 1), true, true),
-        (
-            Rect::new(rect.x, rect.bottom() - 1, rect.width, 1),
-            true,
-            false,
-        ),
-        (
-            Rect::new(rect.x, rect.y + 1, 1, rect.height - 2),
-            false,
-            true,
-        ),
-        (
-            Rect::new(rect.right() - 1, rect.y + 1, 1, rect.height - 2),
-            false,
-            false,
-        ),
-    ] {
-        let mut s = Surface::new(r.width * cw, r.height * ch, hex(p.frame));
-        let color = hex(if leading { p.highlight } else { p.shadow });
-        if horizontal {
-            s.fill(
-                R::new(0, if leading { 0 } else { s.height - 1 }, s.width, 1),
-                &color,
-                0,
-            );
-            let y = if leading { s.height - 1 } else { 0 };
-            s.fill(
-                R::new(cw, y, s.width.saturating_sub(2 * cw), 1),
-                &hex(if leading { p.shadow } else { p.highlight }),
-                0,
-            );
-        } else {
-            s.fill(
-                R::new(if leading { 0 } else { s.width - 1 }, 0, 1, s.height),
-                &color,
-                0,
-            );
-            s.fill(
-                R::new(
-                    if leading { s.width - 1 } else { 0 },
-                    ch.min(s.height),
-                    1,
-                    s.height.saturating_sub(ch),
-                ),
-                &hex(if leading { p.shadow } else { p.highlight }),
-                0,
-            );
-        }
-        parts.push(Component::Surface {
-            rect: r.into(),
-            surface: s,
-        });
-    }
-    parts
-}
-
 pub fn tab(
     rect: Rect,
     label: &str,
-    number: Option<u32>,
+    _number: Option<u32>,
     active: bool,
     close: Option<Rect>,
     cell: (u16, u16),
     p: &Colors,
 ) -> Component {
     let (cw, ch) = cell;
-    let mut s = Surface::new(rect.width * cw, rect.height * ch, hex(p.frame));
+    let mut s = p.style().surface(rect.width * cw, rect.height * ch);
     let height = s.height;
-    let button = R::new(
-        2.min(s.width),
-        2.min(height),
-        s.width.saturating_sub(5),
-        height.saturating_sub(4),
-    );
-    bevel(&mut s, button, p, active);
-    let text = number.map_or_else(|| label.to_string(), |n| format!("{n:02} {label}"));
+    if close.is_none() {
+        let bounds = R::new(0, 0, s.width, height);
+        s.text_centered(bounds, label, &hex(p.muted), 11, false);
+        return Component::Surface {
+            rect: rect.into(),
+            surface: s,
+        };
+    }
+    let face = R::new(2, 2, s.width.saturating_sub(4), height.saturating_sub(4));
+    // KIT's compact tools give tabs a quiet face and an active underline.
+    // Legacy Tab markers are removed before painting this surface.
+    p.style().tool(&mut s, face, "", "tab", active);
     let end = close.map_or(s.width, |r| (r.x - rect.x) * cw);
-    let x = 8.min(s.width);
+    let x = 10.min(s.width);
     mono(
         &mut s,
-        R::new(x, 0, end.saturating_sub(x + 3), height),
-        text,
-        if active { p.accent } else { p.foreground }
-            .ensure_contrast(if active { p.title } else { p.button }, 4.5),
-        starkit::native_surface::Metrics::from_cell(cw, ch).font,
+        R::new(x, 0, end.saturating_sub(x + 4), height),
+        label,
+        if active { p.foreground } else { p.muted },
+        11,
         false,
     );
     if let Some(close) = close {
-        mono(
+        starkit::native_surface::style::close_button(
             &mut s,
             R::new((close.x - rect.x) * cw, 0, close.width * cw, height),
-            "×",
-            p.muted.ensure_contrast(p.button, 4.5),
-            starkit::native_surface::Metrics::from_cell(cw, ch).font,
+            &p.style().colors,
+            "close-tab",
             false,
         );
     }

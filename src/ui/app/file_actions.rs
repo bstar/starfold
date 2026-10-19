@@ -730,6 +730,97 @@ mod tests {
         );
     }
     #[test]
+    fn comic_reader_navigates_without_moving_browser_and_keeps_archive_browse() {
+        use std::io::Write;
+        let (mut app, fake) = app();
+        let path = fake.fixture.path("book.cbz");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let pixels = std::fs::read(fake.fixture.path("pictures/harbour.png")).unwrap();
+        for page in [10, 2, 1] {
+            zip.start_file(
+                format!("page{page}.png"),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(&pixels).unwrap();
+        }
+        zip.finish().unwrap();
+        app.core.send(Command::Reload);
+        fake.pump();
+        app.refresh();
+        cursor(&mut app, "book.cbz");
+        app.key(key(KeyCode::Enter));
+        fake.pump();
+        app.refresh();
+        assert_eq!(app.layout.focus(), ModuleId::Preview);
+        let cursor_before = app.view.cursor_path.clone();
+        for (input, page, file) in [
+            (KeyCode::Char('n'), 2, "page2.png"),
+            (KeyCode::PageDown, 3, "page10.png"),
+            (KeyCode::Home, 1, "page1.png"),
+        ] {
+            app.key(key(input));
+            fake.pump();
+            app.refresh();
+            let Some(Preview::Document(d)) = app.view.preview.as_deref() else {
+                panic!("missing comic preview")
+            };
+            assert_eq!(d.kind, "Comic book", "{:?}", d.notice);
+            assert_eq!(d.image_page, Some(page));
+            assert_eq!(d.total_pages, Some(3));
+            assert!(d.image.is_some());
+            assert!(d
+                .fields
+                .iter()
+                .any(|field| field.label == "View" && field.value.ends_with(file)));
+            assert_eq!(app.view.cursor_path, cursor_before);
+        }
+        app.word_click(panels::Word::ComicNext);
+        fake.pump();
+        app.refresh();
+        assert!(
+            matches!(app.view.preview.as_deref(), Some(Preview::Document(d)) if d.image_page == Some(2))
+        );
+        for (width, height) in [(60, 21), (100, 30)] {
+            let area = Rect::new(0, 0, width, height);
+            let mut buffer = Buffer::empty(area);
+            app.draw(area, &mut buffer);
+            let frame: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+            assert!(frame.contains("prev"));
+            assert!(frame.contains("next"));
+            assert!(frame.contains("Comic book") || frame.contains("Page 2 / 3"));
+        }
+        #[cfg(feature = "terminal-graphics")]
+        {
+            use starkit::terminal_graphics::{
+                protocol::{Component, Viewport},
+                session::Controller,
+            };
+            app.enable_graphical();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let scene = Controller::scene(&mut app, Viewport::default());
+                if scene
+                    .components
+                    .iter()
+                    .any(|component| matches!(component, Component::Image { png: Some(_), .. }))
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "native comic raster never became ready"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        app.word_click(panels::Word::BrowseArchive);
+        fake.pump();
+        app.refresh();
+        assert_ne!(app.view.active_dir, fake.home());
+    }
+
+    #[test]
     fn pdf_extension_renders_and_navigates_without_changing_browser_cursor() {
         let (mut app, fake) = app();
         let path = fake.fixture.path("book.pdf");

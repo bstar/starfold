@@ -94,6 +94,7 @@ impl Registry {
         let mime = detected_mime(path, head);
         let builtin = match kind {
             crate::fold::file_type::FileType::Pdf => Some("pdf"),
+            crate::fold::file_type::FileType::Comic => Some("comic"),
             #[cfg(feature = "media")]
             crate::fold::file_type::FileType::Video => Some("video"),
             _ => None,
@@ -105,7 +106,7 @@ impl Registry {
                 .find(|p| p.id == id)
                 .cloned()
                 .or_else(|| {
-                    ["pdf", "video"].contains(&id).then(|| Provider {
+                    ["pdf", "comic", "video"].contains(&id).then(|| Provider {
                         id: id.into(),
                         command: vec![helper_path(id).to_string_lossy().into_owned()],
                         extensions: vec![],
@@ -145,6 +146,7 @@ impl Registry {
 
         let id = match crate::fold::file_type::classify(path, head) {
             crate::fold::file_type::FileType::Pdf => "pdf",
+            crate::fold::file_type::FileType::Comic => "comic",
             crate::fold::file_type::FileType::Video => "video",
             _ => return false,
         };

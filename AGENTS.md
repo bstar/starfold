@@ -30,6 +30,14 @@ executable; a debug/test build does not update the user's command.
 Restart running STAR/FOLD instances when desktop testing requires the new
 binary, since existing processes keep the old executable loaded.
 
+Verify the AMP helper FOLD actually selects, not just `staramp` on PATH.
+An adjacent `target/release/starfold-staramp` takes priority over the launcher's
+private PATH. On this workstation it must link to
+`/home/bstar/projects/star/staramp-graphical/scripts/run-local.sh`, so AMP
+rebuilds cannot leave FOLD using a stale copied executable. Run the native
+playback probe against that adjacent helper. An already running embed child
+keeps its old executable until the player is closed and opened again.
+
 The archive extension uses native 7-Zip and XAD/unar tools for additional formats. `unrar_sys` compiles the bundled RARLAB C++ engine using the compiler in the flake; CI supplies the native C++ toolchain. Zstandard creation uses bundled `zstd-sys`; its compiler comes from the same build toolchain. The UnRAR notice is installed from `LICENSES/UnRAR.txt`. `libbz2-rs-sys` is pure Rust despite its name. That is worth stating for a program that
 deletes to the trash and draws pictures: trash is the freedesktop
 specification, in pure Rust, on Linux, and `NSFileManager` through the `objc2`
@@ -526,9 +534,18 @@ failures remain visible in OPERATIONS. Same-device recovery uses atomic rename.
 The Linux restart test sets Trash environment variables only in subprocesses,
 using disposable private bins; normal tests must not empty the user's Trash.
 
-## KIT 0.9 candidate compatibility
+## KIT 0.12 candidate compatibility
 
-Development main pins an immutable KIT 0.9 candidate revision with a git-sourced
+The bundled `starfold-preview-comic` reads CBZ/CBR through the versioned preview
+protocol, using the existing archive engines inside its supervised process.
+Keep it in workspace/default builds, AppImage staging and macOS helper bundles.
+Comic raster placement follows the PDF viewport path; header drawing and input
+share `panels::comic_words`. Enter focuses reading; Browse sends archive Enter
+directly so it cannot recurse into the reader. Never extract an entire comic
+or decode every page eagerly. `STARFOLD_COMIC_TEST_FILE` enables optional tests
+against a local comic without copying it into the repository.
+
+Development main pins an immutable KIT 0.12 candidate revision with a git-sourced
 lockfile, so ordinary builds need no sibling checkout. This is an unreleased
 testing candidate; use immutable version tags when making a framework release.
 Keep dependency updates in their own commit, with the manifest and lock together.

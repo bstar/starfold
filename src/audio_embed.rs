@@ -30,6 +30,8 @@ const MAX_RGBA_TOTAL: usize = 262_144;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Palette {
     pub bg: [u8; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inset_bg: Option<[u8; 3]>,
     pub fg: [u8; 3],
     pub muted: [u8; 3],
     pub accent: [u8; 3],
@@ -52,6 +54,7 @@ pub struct Presentation {
     pub focused: bool,
     pub theme: Palette,
     pub graphics: Option<GraphicsConfig>,
+    pub pixel_size: Option<[u16; 2]>,
     pub native_surface: bool,
     pub native_skins: bool,
     pub visible: bool,
@@ -149,6 +152,7 @@ struct Shared {
     player_styles: bool,
     native_surface: bool,
     native_skins: bool,
+    native_pixels: bool,
     audio_relay: bool,
     audio_local: bool,
     audio_blocks: Option<Receiver<(u64, Vec<i16>)>>,
@@ -264,6 +268,7 @@ enum Request {
         x: u16,
         y: u16,
         button: String,
+        pixel: Option<[u16; 2]>,
     },
     Quit,
 }
@@ -279,6 +284,8 @@ enum HostMessage<'a> {
         theme: &'a Palette,
         #[serde(skip_serializing_if = "Option::is_none")]
         graphics: Option<&'a GraphicsConfig>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pixel_size: Option<[u16; 2]>,
         #[serde(skip_serializing_if = "Option::is_none")]
         profile: Option<&'a str>,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -301,6 +308,8 @@ enum HostMessage<'a> {
         x: u16,
         y: u16,
         button: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pixel: Option<[u16; 2]>,
     },
     Shutdown,
 }
@@ -375,6 +384,7 @@ struct Running {
     player_styles: bool,
     native_surface: bool,
     native_skins: bool,
+    native_pixels: bool,
 }
 
 /// A nonblocking owner for one embedded player. `new` starts only a cheap
@@ -542,13 +552,28 @@ impl Client {
         })
     }
 
+    pub fn native_pixels_available(&self) -> bool {
+        lock(&self.shared).native_pixels
+    }
+
     pub fn pointer(&self, x: u16, y: u16, button: &str) -> Result<(), String> {
+        self.pointer_at(x, y, button, None)
+    }
+
+    pub fn pointer_at(
+        &self,
+        x: u16,
+        y: u16,
+        button: &str,
+        pixel: Option<[u16; 2]>,
+    ) -> Result<(), String> {
         let data = lock(&self.shared);
         self.send(Request::Pointer {
             serial: data.serial,
             x,
             y,
             button: button.into(),
+            pixel: data.native_pixels.then_some(pixel).flatten(),
         })
     }
 
@@ -737,6 +762,7 @@ fn supervise(
                 x,
                 y,
                 button,
+                pixel,
             }) => {
                 if serial != lock(&shared).serial {
                     continue;
@@ -749,6 +775,7 @@ fn supervise(
                                 x,
                                 y,
                                 button: &button,
+                                pixel,
                             },
                         ) {
                             push_event(
@@ -895,6 +922,7 @@ fn spawn_child(
         player_styles: false,
         native_surface: false,
         native_skins: false,
+        native_pixels: false,
     })
 }
 
@@ -1061,6 +1089,7 @@ fn send_configure(player: &mut Running) -> Result<u64, String> {
             } else {
                 None
             },
+            pixel_size: player.native_pixels.then_some(p.pixel_size).flatten(),
             profile: player.player_styles.then_some("starfold"),
             native_surface: player.native_surface && p.native_surface,
             native_skins: player.native_skins && p.native_skins && p.native_surface,
@@ -1181,6 +1210,8 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
                 .any(|value| value == "native_surface_v1");
             player.native_skins =
                 player.native_surface && capabilities.iter().any(|value| value == "native_skin_v1");
+            player.native_pixels = player.native_surface
+                && capabilities.iter().any(|value| value == "native_pixels_v1");
             player.player_styles = capabilities.iter().any(|value| value == "player_styles");
             {
                 let mut data = lock(shared);
@@ -1189,6 +1220,7 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
                 data.player_styles = player.player_styles;
                 data.native_surface = player.native_surface;
                 data.native_skins = player.native_skins;
+                data.native_pixels = player.native_pixels;
                 data.audio_relay = capabilities.iter().any(|value| value == "audio_relay_v1");
             }
             if let Err(message) = queue_play(player, shared) {
@@ -1240,7 +1272,15 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
                 {
                     Err("STAR/AMP sent an unnegotiated native surface".into())
                 } else {
-                    validate_frame(&frame, graphics)
+                    validate_frame_at_size(
+                        &frame,
+                        graphics,
+                        player
+                            .activation
+                            .presentation
+                            .pixel_size
+                            .filter(|_| player.native_pixels),
+                    )
                 };
                 let mut data = lock(shared);
                 if !current(&data) {
@@ -1383,13 +1423,24 @@ fn valid_graphics(config: &GraphicsConfig) -> bool {
     (1..=64).contains(&config.cell_width) && (1..=128).contains(&config.cell_height)
 }
 
+#[cfg(test)]
 fn validate_frame(frame: &Frame, graphics: Option<&GraphicsConfig>) -> Result<(), String> {
+    validate_frame_at_size(frame, graphics, None)
+}
+
+fn validate_frame_at_size(
+    frame: &Frame,
+    graphics: Option<&GraphicsConfig>,
+    pixel_size: Option<[u16; 2]>,
+) -> Result<(), String> {
     if let Some(surface) = &frame.surface {
         let g = graphics.ok_or("native surface requires pixel geometry")?;
         surface.validate().map_err(|e| e.to_string())?;
-        if surface.width != frame.width.saturating_mul(g.cell_width).min(8192)
-            || surface.height != frame.height.saturating_mul(g.cell_height).min(2048)
-        {
+        let expected = pixel_size.unwrap_or([
+            frame.width.saturating_mul(g.cell_width).min(8192),
+            frame.height.saturating_mul(g.cell_height).min(2048),
+        ]);
+        if [surface.width, surface.height] != expected {
             return Err("native surface geometry does not match presentation".into());
         }
     }
@@ -1518,6 +1569,7 @@ mod tests {
             focused: true,
             theme: Palette {
                 bg: [0, 0, 0],
+                inset_bg: None,
                 fg: [255, 255, 255],
                 muted: [128, 128, 128],
                 accent: [50, 100, 200],
@@ -1526,6 +1578,7 @@ mod tests {
                 error: [255, 0, 0],
             },
             graphics: None,
+            pixel_size: None,
             native_surface: false,
             native_skins: false,
             visible: true,
@@ -1653,6 +1706,7 @@ mod tests {
             focused: true,
             theme: &theme,
             graphics: None,
+            pixel_size: None,
             native_surface: false,
             native_skins: false,
             visible: None,
@@ -1673,6 +1727,7 @@ mod tests {
             focused: true,
             theme: &theme,
             graphics: Some(&config),
+            pixel_size: None,
             profile: Some("starfold"),
             native_surface: true,
             native_skins: true,
@@ -1682,6 +1737,58 @@ mod tests {
         assert_eq!(extended["graphics"]["cell_width"], 8);
         assert_eq!(extended["profile"], "starfold");
         assert_eq!(extended["native_skins"], true);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn native_frames_require_the_negotiated_physical_canvas(w in 1u16..1600, h in 1u16..800) {
+            let graphics = GraphicsConfig { cell_width: 8, cell_height: 16 };
+            let frame = Frame {
+                generation: 1, width: 58, height: 5, cells: vec![], images: vec![],
+                surface: Some(starkit::native_surface::Surface::new(w, h, "#101010".into())),
+            };
+            proptest::prop_assert!(validate_frame_at_size(&frame, Some(&graphics), Some([w, h])).is_ok());
+            proptest::prop_assert!(validate_frame_at_size(&frame, Some(&graphics), Some([w + 1, h])).is_err());
+            proptest::prop_assert!(validate_frame_at_size(&frame, None, Some([w, h])).is_err());
+        }
+    }
+
+    #[test]
+    fn exact_native_geometry_and_pointer_fields_are_optional_on_the_wire() {
+        let theme = presentation(1).theme;
+        let config = GraphicsConfig {
+            cell_width: 8,
+            cell_height: 16,
+        };
+        let configure = serde_json::to_value(HostMessage::Configure {
+            generation: 1,
+            width: 58,
+            height: 5,
+            focused: true,
+            theme: &theme,
+            graphics: Some(&config),
+            pixel_size: Some([937, 213]),
+            native_surface: true,
+            native_skins: true,
+            visible: Some(true),
+            profile: None,
+        })
+        .unwrap();
+        assert_eq!(configure["pixel_size"], serde_json::json!([937, 213]));
+        for pixel in [None, Some([127, 53])] {
+            let pointer = serde_json::to_value(HostMessage::Pointer {
+                x: 3,
+                y: 2,
+                button: "left",
+                pixel,
+            })
+            .unwrap();
+            if let Some(pixel) = pixel {
+                assert_eq!(pointer["pixel"], serde_json::json!(pixel));
+            } else {
+                assert!(pointer.get("pixel").is_none());
+            }
+        }
     }
 
     #[test]

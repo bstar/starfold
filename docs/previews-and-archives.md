@@ -23,6 +23,9 @@ checks signatures. A Nerd Font is not required.
   document. Focus Preview for page navigation, zoom, fit and pan controls;
   `t` switches to extracted text. Its raster cache respects the preview byte
   budget and retains at most 24 entries. See [extension controls and configuration](preview-extensions.md).
+- Comic books: CBZ/CBR pages in natural filename order, with page navigation,
+  zoom, fit and pan in Preview. Enter focuses the reader; Browse retains access
+  to archive members. See [comic controls](preview-extensions.md#cbz-and-cbr-comics).
 - Archives: bounded member lists with sizes; no extraction just to preview.
 - Other binaries: type, size, modification time and permissions instead of hex.
   Existing text, image, directory and symlink previews remain available.

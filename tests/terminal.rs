@@ -271,6 +271,7 @@ fn startup_redraw_and_resize_need_no_cursor_position_reply() {
     let (master, slave) = pty();
     let mut command = Command::new(env!("CARGO_BIN_EXE_starfold"));
     command
+        .arg("--cells")
         .arg(&files)
         .env("STARFOLD_DIR", &config)
         .env("STARFOLD_CONFIG_DIR", &config)
@@ -306,6 +307,55 @@ fn startup_redraw_and_resize_need_no_cursor_position_reply() {
         master: Some(master),
     };
     frame(&mut child);
+    // Regression: one-based mouse coordinates of zero used to underflow
+    // crossterm's unsigned conversion and panic, including in release builds.
+    // Exercise both axes, press/release, legacy encodings and cursor replies.
+    for report in [
+        &b"\x1b[<35;1;0M"[..],
+        b"\x1b[<35;0;1M",
+        b"\x1b[<0;0;0m",
+        b"\x1b[<0;0;1;m",
+        b"\x1b[67;1;0M",
+        b"\x1b[67;0;1;M",
+        b"\x1b[MC! ",
+        b"\x1b[MC !",
+        b"\x1b[MC!\x00",
+        b"\x1b[MC\x1f!",
+        b"\x1b[0;1R",
+        b"\x1b[1;0R",
+    ] {
+        child.master.as_mut().unwrap().write_all(report).unwrap();
+    }
+    // Vary foreign coordinate input over the entire wire ranges. Repainting
+    // after each batch proves input continues to work after rejected reports.
+    use proptest::{
+        prelude::*,
+        test_runner::{Config, TestRunner},
+    };
+    let mut runner = TestRunner::new(Config {
+        cases: 16,
+        source_file: Some(file!()),
+        ..Config::default()
+    });
+    let child_ref = std::cell::RefCell::new(&mut child);
+    runner
+        .run(
+            &(any::<u16>(), any::<u16>(), any::<u8>(), any::<u8>()),
+            |(x, y, a, b)| {
+                let mut child = child_ref.borrow_mut();
+                let reports = format!(
+                    "\x1b[<35;{x};0M\x1b[<35;0;{y}M\x1b[<35;{x};{y}M\x1b[67;{x};{y}M\x1b[{y};{x}R"
+                );
+                let master = child.master.as_mut().unwrap();
+                master.write_all(reports.as_bytes()).unwrap();
+                master.write_all(&[0x1b, b'[', b'M', b'C', a, b]).unwrap();
+                // Valid movement must still parse, and Ctrl+L must still repaint.
+                master.write_all(b"\x1b[<35;1;1M\x0c").unwrap();
+                frame(&mut child);
+                Ok(())
+            },
+        )
+        .unwrap();
     child.master.as_mut().unwrap().write_all(b"\x0c").unwrap();
     frame(&mut child);
     let size = libc::winsize {

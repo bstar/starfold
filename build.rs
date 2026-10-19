@@ -3,6 +3,7 @@ fn main() {
     let variables = [
         "STARFOLD_BUNDLE_PREVIEW_PDF",
         "STARFOLD_BUNDLE_PREVIEW_VIDEO",
+        "STARFOLD_BUNDLE_PREVIEW_COMIC",
     ];
     let mut bundled = 0;
     for variable in variables {
@@ -15,10 +16,10 @@ fn main() {
         }
     }
     assert!(
-        bundled == 0 || bundled == 2,
-        "Bundle both preview helpers together"
+        bundled == 0 || bundled == 3,
+        "Bundle all preview helpers together"
     );
-    if bundled == 2 {
+    if bundled == 3 {
         println!("cargo:rustc-cfg=bundled_previews");
     }
 

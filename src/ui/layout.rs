@@ -6,7 +6,7 @@
 //! `regions` solves once per frame; painting and hit testing read the same result.
 //!
 //! Cell presentation keeps its established 60x21 floor and vertical stack.
-//! Native presentation uses a lower Preview/Operations deck in roomy windows;
+//! Native presentation uses full-width Preview and conditional Operations rows;
 //! KIT pixel placements preserve its physical browser density. User preview
 //! height survives temporary window clamping and focus never reallocates panes.
 
@@ -18,7 +18,7 @@ use super::panels::{ModuleId, COLUMN};
 
 /// Shared geometry for drawing and hit-testing Commander's two file panes.
 pub fn pane_rect(area: Rect, pane: usize) -> Rect {
-    let gap = starkit::chrome::frame::extra_rows().min(area.width);
+    let gap = starkit::chrome::frame::extra_rows().max(1).min(area.width);
     let width = area.width.saturating_sub(gap);
     let left = width / 2;
     if pane == 0 {
@@ -37,7 +37,7 @@ pub fn pane_rect(area: Rect, pane: usize) -> Rect {
 
 pub fn rack_browser(regions: &Regions) -> bool {
     let stack = regions.rect_of(ModuleId::Stack);
-    stack.width >= 100 && stack.height >= 18
+    stack.width >= 100 && stack.height >= 10
 }
 
 /// Below this the layout is not drawn at all.
@@ -72,11 +72,14 @@ pub struct Regions {
     /// The whole of it, padding already taken off.
     pub area: Rect,
     /// One rect per module, indexed by [`ModuleId::index`], in [`COLUMN`]
-    /// order. Every one of them is the full width of the area.
+    /// order. Native rows occupy the browser width beside workspace navigation.
     modules: [Rect; 3],
     pub panes: panes::Layout<ModuleId>,
     pub status: Rect,
     pub tabs: Option<Rect>,
+    pub workspace_sidebar: bool,
+    /// A visible embedded player needs its own physical display height.
+    pub audio_active: bool,
 }
 
 impl Regions {
@@ -102,6 +105,7 @@ pub struct LayoutState {
     pub tabs_visible: bool,
     /// Pixel presentation reserves extra vertical padding for tabs.
     pub tab_rows: u16,
+    pub workspace_sidebar: bool,
     /// Native rack layout uses a shared lower deck on roomy viewports.
     pub native_rack: bool,
     /// An embedded player reserves ten body rows when possible, five at
@@ -137,6 +141,7 @@ impl LayoutState {
             preview_open: true,
             tabs_visible: false,
             tab_rows: 1,
+            workspace_sidebar: false,
             native_rack: false,
             audio_active: false,
             editor_active: false,
@@ -175,84 +180,106 @@ impl LayoutState {
 
         // The status line first, off the bottom, because it is never hidden,
         // never focused and never resized.
-        let status_rows = if self.native_rack && area.height >= 50 {
-            3
-        } else if extra > 0 {
-            2
-        } else {
-            1
-        };
+        let status_rows = if self.native_rack || extra > 0 { 2 } else { 1 };
         let status = Rect {
             y: area.y + area.height - status_rows,
             height: status_rows,
             ..area
         };
-        let tab_rows = if self.tabs_visible {
+        let sidebar = self.workspace_sidebar
+            && self.native_rack
+            && self.tabs_visible
+            && area.width >= 124
+            && area.height >= 40;
+        let tab_rows = if self.tabs_visible && !sidebar {
             self.tab_rows
                 .clamp(1, area.height.saturating_sub(min_rows).saturating_add(1))
         } else {
             0
         };
-        let tabs = self
-            .tabs_visible
-            .then(|| Rect::new(area.x, area.y, area.width, tab_rows));
+        let tabs = self.tabs_visible.then(|| {
+            if sidebar {
+                Rect::new(area.x, area.y, 22, area.height - status_rows)
+            } else {
+                Rect::new(area.x, area.y, area.width, tab_rows)
+            }
+        });
         let body = Rect {
+            x: area.x + if sidebar { 24 } else { 0 },
+            width: area.width.saturating_sub(if sidebar { 24 } else { 0 }),
             y: area.y + tab_rows,
             height: area.height - status_rows - tab_rows,
-            ..area
         };
 
-        if self.native_rack
-            && extra > 0
-            && body.width >= 100
-            && body.height >= 32
-            && !self.audio_active
-            && !self.editor_active
-            && self.native_preview_rows != Some(u16::MAX)
-        {
-            // The lower modules share a row and keep their real logical
-            // widths. Rendering and mouse projection use these same regions.
-            let deck_floor = collapsed_rows + 2;
-            let preview_rows = if self.preview_open {
-                self.native_preview_rows.unwrap_or(self.preview_rows)
+        if self.native_rack && extra > 0 {
+            // Native modules form full-width rows. An empty queue has neither
+            // allocation nor focus/hit geometry; transient worker activity
+            // also counts as work even though it is not a queued file op.
+            let has_work = queued > 0 || self.ops_active;
+            let stack_floor = STACK_MIN_ROWS + extra;
+            let ops = if has_work {
+                if body.height >= 42 {
+                    14
+                } else {
+                    6
+                }
             } else {
                 0
             };
-            let deck = collapsed_rows
-                .saturating_add(preview_rows)
-                .max(if self.preview_open && self.native_preview_rows.is_none() {
-                    body.height * 2 / 5
+            let gaps = gap * if has_work { 2 } else { 1 };
+            let ops = ops.min(
+                body.height
+                    .saturating_sub(stack_floor + collapsed_rows + gaps),
+            );
+            // Keep this bottom edge independent of Preview's requested height,
+            // so a divider drag exchanges rows with the browser without drift.
+            let logical_height = body
+                .height
+                .saturating_sub(body.height / 8)
+                .max(stack_floor + collapsed_rows + ops + gaps)
+                .min(body.height);
+            let available = logical_height.saturating_sub(stack_floor + ops + gaps);
+            let requested = if !self.preview_open {
+                collapsed_rows
+            } else if self.editor_active {
+                available
+            } else if self.audio_active {
+                collapsed_rows + 9
+            } else {
+                self.native_preview_rows
+                    .map(|r| r.saturating_add(collapsed_rows))
+                    .unwrap_or_else(|| (logical_height * 2 / 5).max(collapsed_rows))
+            };
+            let preview_rows = requested.min(available).max(collapsed_rows);
+            let stack_rows = logical_height.saturating_sub(preview_rows + ops + gaps);
+            let preview = Node::pane(ModuleId::Preview).height(Size::fixed(preview_rows));
+            let preview = if self.preview_open {
+                preview
+            } else {
+                preview
+                    .visibility(Visibility::Collapsed)
+                    .compact(Size::fill(1), Size::fixed(collapsed_rows))
+            };
+            let operations = Node::pane(ModuleId::Operations)
+                .height(Size::fixed(ops))
+                .focus(FocusPolicy::Direct)
+                .visibility(if has_work {
+                    Visibility::Expanded
                 } else {
-                    0
-                })
-                .max(deck_floor)
-                .min(body.height.saturating_sub(STACK_MIN_ROWS + extra + gap));
-            // Native placements give the browser the remaining physical
-            // height. Fewer logical rows keep a comfortable 28px file row
-            // instead of filling a large window with terminal density.
-            let stack_rows = body.height.saturating_sub(deck + gap);
-            let stack = Rect::new(
+                    Visibility::Hidden
+                });
+            let tree = Node::column(vec![
+                Node::pane(ModuleId::Stack).height(Size::fixed(stack_rows)),
+                preview,
+                operations,
+            ])
+            .gap(gap);
+            let logical_body = Rect::new(
                 body.x,
                 body.y,
                 body.width,
-                (stack_rows * 4 / 5).max(18).min(stack_rows),
+                stack_rows + preview_rows + ops + gaps,
             );
-            let deck_node = Node::row(vec![
-                Node::pane(ModuleId::Preview).height(Size::fixed(deck)),
-                Node::pane(ModuleId::Operations)
-                    .height(Size::fixed(deck))
-                    .focus(FocusPolicy::Direct),
-            ])
-            .gap(extra)
-            .height(Size::fixed(deck));
-            let tree = Node::column(vec![
-                Node::pane(ModuleId::Stack).height(Size::fixed(stack.height)),
-                deck_node,
-            ])
-            .gap(gap);
-            // Logical browser density is preserved; KIT's pixel placements use
-            // the remaining physical height without scaling terminal glyphs.
-            let logical_body = Rect::new(body.x, body.y, body.width, stack.height + gap + deck);
             self.finish(tree, logical_body, area, status, tabs);
             return self.last.as_ref();
         }
@@ -355,6 +382,9 @@ impl LayoutState {
             modules,
             panes,
             status,
+            audio_active: self.audio_active && self.preview_open,
+            workspace_sidebar: self.workspace_sidebar
+                && tabs.is_some_and(|r| r.width < area.width && r.height > self.tab_rows),
             tabs,
         });
     }
@@ -369,11 +399,7 @@ impl LayoutState {
             .rect_of(ModuleId::Preview)
             .height
             .saturating_sub(COLLAPSED_ROWS + extra);
-        let floor = if self.native_rack && rack_browser(regions) {
-            18
-        } else {
-            STACK_MIN_ROWS + extra
-        };
+        let floor = STACK_MIN_ROWS + extra;
         let max_rows = rows.saturating_add(
             regions
                 .rect_of(ModuleId::Stack)
@@ -487,7 +513,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_deck_collapses_and_expanded_content_keeps_full_width() {
+    fn native_rows_collapse_and_expanded_content_keeps_full_width() {
         let _padding = starkit::chrome::frame::padding_scope(true);
         let mut layout = LayoutState::new(10, 8, 3);
         layout.native_rack = true;
@@ -495,10 +521,9 @@ mod tests {
         layout.tab_rows = 5;
         let area = Rect::new(0, 0, 160, 60);
         let open = layout.regions(area, (0, 0), 3).unwrap().clone();
-        assert_eq!(
-            open.rect_of(ModuleId::Preview).y,
-            open.rect_of(ModuleId::Operations).y
-        );
+        assert!(open.rect_of(ModuleId::Operations).y >= open.rect_of(ModuleId::Preview).bottom());
+        assert_eq!(open.rect_of(ModuleId::Preview).width, area.width);
+        assert_eq!(open.rect_of(ModuleId::Operations).width, area.width);
         layout.preview_open = false;
         let closed = layout.regions(area, (0, 0), 3).unwrap().clone();
         assert!(closed.rect_of(ModuleId::Preview).height < open.rect_of(ModuleId::Preview).height);
@@ -532,6 +557,39 @@ mod tests {
 
     fn state() -> LayoutState {
         LayoutState::new(10, 6, 6)
+    }
+
+    #[test]
+    fn native_operations_row_appears_for_work_and_releases_its_geometry_when_cleared() {
+        let _padding = starkit::chrome::frame::padding_scope(true);
+        let mut layout = state();
+        layout.native_rack = true;
+        for width in [80, 160] {
+            let area = Rect::new(0, 0, width, 60);
+            let idle = layout.regions(area, (0, 0), 0).unwrap().clone();
+            assert!(idle.rect_of(ModuleId::Operations).is_empty());
+            for (queued, active) in [(1, false), (0, true), (12, true)] {
+                layout.ops_active = active;
+                let busy = layout.regions(area, (0, 0), queued).unwrap().clone();
+                let operations = busy.rect_of(ModuleId::Operations);
+                assert!(!operations.is_empty());
+                assert_eq!(operations.width, area.width);
+                assert!(operations.y >= busy.rect_of(ModuleId::Preview).bottom());
+                layout.focus_set(ModuleId::Operations);
+                layout.ops_active = false;
+                let cleared = layout.regions(area, (0, 0), 0).unwrap().clone();
+                assert!(cleared.rect_of(ModuleId::Operations).is_empty());
+                assert_ne!(layout.focus(), ModuleId::Operations);
+                assert_eq!(
+                    cleared.rect_of(ModuleId::Stack),
+                    idle.rect_of(ModuleId::Stack)
+                );
+                assert_eq!(
+                    cleared.rect_of(ModuleId::Preview),
+                    idle.rect_of(ModuleId::Preview)
+                );
+            }
+        }
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub enum FileType {
     Audio,
     Video,
     Pdf,
+    Comic,
     Archive,
     Image,
     Text,
@@ -20,7 +21,7 @@ impl FileType {
         match self {
             Self::Audio => "♪",
             Self::Video => "▶",
-            Self::Pdf => "▤",
+            Self::Pdf | Self::Comic => "▤",
             Self::Archive => "▣",
             Self::Image => "▧",
             Self::Text => "≡",
@@ -37,6 +38,12 @@ pub fn classify(path: &Path, head: &[u8]) -> FileType {
     }
     if head.starts_with(b"%PDF-") {
         return Pdf;
+    }
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("cbz") || ext.eq_ignore_ascii_case("cbr"))
+    {
+        return Comic;
     }
     if head.starts_with(b"PK\x03\x04")
         || head.starts_with(b"7z\xbc\xaf\x27\x1c")
@@ -102,5 +109,9 @@ mod tests {
     #[test]
     fn extensions_are_case_insensitive() {
         assert_eq!(classify(Path::new("X.FLAC"), &[]), FileType::Audio);
+        for name in ["book.cbz", "book.CBR"] {
+            assert_eq!(classify(Path::new(name), b"PK\x03\x04"), FileType::Comic);
+            assert_eq!(classify(Path::new(name), &[]), FileType::Comic);
+        }
     }
 }

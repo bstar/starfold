@@ -9,6 +9,7 @@ pub fn executable(id: &str) -> anyhow::Result<Option<PathBuf>> {
         let bytes: &[u8] = match id {
             "pdf" => include_bytes!(env!("STARFOLD_BUNDLE_PREVIEW_PDF")),
             "video" => include_bytes!(env!("STARFOLD_BUNDLE_PREVIEW_VIDEO")),
+            "comic" => include_bytes!(env!("STARFOLD_BUNDLE_PREVIEW_COMIC")),
             _ => return Ok(None),
         };
         let root = crate::PATHS.cache_dir()?.join("bundled-previews");

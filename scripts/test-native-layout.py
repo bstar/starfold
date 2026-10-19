@@ -8,6 +8,8 @@ This checks presentation/control; a silent WAV does not prove audible playback.
 import argparse
 import json
 import os
+import shutil
+import socket
 from pathlib import Path
 import subprocess
 import struct
@@ -21,7 +23,7 @@ def main():
     for name in ("binary", "staramp", "kitty", "kitten", "output"):
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--theme", default="catppuccin-mocha",
-                        choices=["catppuccin-mocha", "catppuccin-latte"])
+                        choices=["catppuccin-mocha", "catppuccin-latte", "kanagawa"])
     parser.add_argument("--x11", action="store_true")
     args = parser.parse_args()
     output = Path(args.output).resolve()
@@ -72,6 +74,10 @@ def main():
                 time.sleep(.4)
 
             def shot(name):
+                windows = json.loads(rc("ls"))[0]["tabs"][0]["windows"]
+                assert windows[0]["in_alternate_screen"], f"FOLD exited before {name}; inspect kitty.log"
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.connect(str(root / "app" / "graphical" / "layout.sock"))
                 rc("screenshot", "--match", "id:1", str(output / f"{name}.png"))
 
             try:
@@ -105,11 +111,24 @@ def main():
                 rc("set-font-size", "16")
                 time.sleep(1)
                 shot("zoomed")
+                rc("set-font-size", "12")
+                time.sleep(1)
+                shot("zoomed-small")
+                rc("set-font-size", "20")
+                time.sleep(1)
+                shot("zoomed-large")
+                key("f9")
+                shot("player-cells")
+                key("f9")
+                shot("player-restored")
                 key("x")
                 key("q")
                 rc("close-window", "--match", "id:1")
                 terminal.wait(timeout=10)
             finally:
+                diagnostics = root / "app" / "graphical" / "layout.log"
+                if diagnostics.exists():
+                    shutil.copy2(diagnostics, output / "controller.log")
                 if terminal.poll() is None:
                     try:
                         key("escape")

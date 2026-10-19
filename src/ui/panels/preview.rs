@@ -274,11 +274,14 @@ pub fn render(
     v: &mut View<'_>,
     bars: &mut Bars,
 ) -> Option<Placement> {
-    let word_list = if matches!(v.preview, Some(Preview::Document(document))
+    let word_list = if matches!(v.preview, Some(Preview::Document(d)) if d.kind == "Comic book") {
+        super::comic_words()
+    } else if matches!(v.preview, Some(Preview::Document(document))
         if matches!(document.content, crate::fold::preview::model::Content::Archive(_)))
         && v.name.is_some_and(|name| {
             crate::fold::archive::Format::from_path(std::path::Path::new(name)).is_some()
-        }) {
+        })
+    {
         vec![super::Word::BrowseArchive, super::Word::Close]
     } else {
         words(ModuleId::Preview)
@@ -420,7 +423,7 @@ pub fn render(
                     .map(|f| f.value.clone())
                     .unwrap_or_else(|| format!("{} · page {}", d.kind, d.image_page.unwrap_or(1)));
                 let original_scale = v.scale;
-                if d.kind == "PDF" {
+                if matches!(d.kind.as_str(), "PDF" | "Comic book") {
                     v.scale = Scale::Smooth;
                 }
                 let placement = render_image(
@@ -512,6 +515,11 @@ pub fn render(
             render_plain(body, buf, preview, style);
             None
         }
+        #[cfg(feature = "media")]
+        // The graphical frontend owns the complete movie body: poster/live
+        // image, details and transport. A cell caption underneath it could
+        // leak its trailing characters past the native controls.
+        Preview::Video { .. } if v.pixel_image => None,
         #[cfg(feature = "media")]
         Preview::Video { poster, .. } => render_image(
             frame::body(area, &word_list),

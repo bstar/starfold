@@ -39,7 +39,7 @@ scripts/dist/glibc-floor.sh "$bin"
 
 appdir=$work/AppDir
 install -Dm755 "$bin"                         "$appdir/usr/bin/starfold"
-for helper in starfold-preview-pdf starfold-preview-video starfold-preview-nvim starfold-archive; do
+for helper in starfold-preview-pdf starfold-preview-comic starfold-preview-video starfold-preview-nvim starfold-archive; do
   install -Dm755 "$(dirname "$bin")/$helper" "$appdir/usr/bin/$helper"
 done
 install -Dm755 /usr/lib/p7zip/7z "$appdir/usr/lib/p7zip/7z"
@@ -101,7 +101,7 @@ done
 # RUNPATH beats ld.so.cache, so a host library cannot shadow ours even when the
 # soname matches exactly. Harmless while usr/lib is empty, and correct the day
 # it is not.
-for executable in starfold starfold-preview-pdf starfold-preview-video starfold-preview-nvim starfold-archive unar lsar; do
+for executable in starfold starfold-preview-pdf starfold-preview-comic starfold-preview-video starfold-preview-nvim starfold-archive unar lsar; do
   patchelf --set-rpath '$ORIGIN/../lib' "$appdir/usr/bin/$executable"
 done
 patchelf --set-rpath '$ORIGIN/..' "$appdir/usr/lib/p7zip/7z"

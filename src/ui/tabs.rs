@@ -322,14 +322,111 @@ impl Picker {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum Hit {
     Tab(TabId),
     Close(TabId),
     New,
+    Manage,
+    NavigationMode,
     Previous,
     Next,
 }
+/// Geometry shared by native painting and pointer handling. Keep the active
+/// workspace reachable when a restored session contains more items than fit.
+pub fn numbered(
+    area: Rect,
+    items: &[Item],
+    active: TabId,
+    offset: &mut usize,
+    _buf: &mut Buffer,
+    _theme: &Theme,
+) -> Vec<(Rect, Hit)> {
+    let active_index = items.iter().position(|i| i.id == active).unwrap_or(0);
+    *offset = (*offset).min(active_index);
+    let available = area.width.saturating_sub(24);
+    let width = |item: &Item| {
+        (starkit::wrap::width_of(&item.label) + 14)
+            .clamp(20, 48)
+            .min(available)
+    };
+    while *offset < active_index
+        && items[*offset..=active_index]
+            .iter()
+            .map(|i| u32::from(width(i)))
+            .sum::<u32>()
+            > u32::from(available)
+    {
+        *offset += 1;
+    }
+    let mut hits = vec![];
+    let mut x = area.x;
+    for item in items.iter().skip(*offset) {
+        let w = width(item);
+        if w == 0 || x + w > area.x + available {
+            break;
+        }
+        hits.push((Rect::new(x, area.y, w, area.height), Hit::Tab(item.id)));
+        x += w;
+    }
+    if area.width >= 24 {
+        hits.push((
+            Rect::new(area.right() - 24, area.y, 12, area.height),
+            Hit::NavigationMode,
+        ));
+        hits.push((
+            Rect::new(area.right() - 12, area.y, 4, area.height),
+            Hit::New,
+        ));
+        hits.push((
+            Rect::new(area.right() - 8, area.y, 8, area.height),
+            Hit::Manage,
+        ));
+    }
+    hits
+}
+
+pub fn sidebar(
+    area: Rect,
+    items: &[Item],
+    active: TabId,
+    offset: &mut usize,
+    _buf: &mut Buffer,
+    _theme: &Theme,
+) -> Vec<(Rect, Hit)> {
+    let capacity = usize::from(area.height.saturating_sub(6) / 2).max(1);
+    let active_index = items.iter().position(|i| i.id == active).unwrap_or(0);
+    *offset = (*offset).min(active_index);
+    if active_index >= *offset + capacity {
+        *offset = active_index + 1 - capacity;
+    }
+    let mut hits = vec![];
+    for (row, item) in items.iter().skip(*offset).take(capacity).enumerate() {
+        hits.push((
+            Rect::new(area.x, area.y + 2 + row as u16 * 2, area.width, 2),
+            Hit::Tab(item.id),
+        ));
+    }
+    hits.push((
+        Rect::new(area.x, area.bottom() - 4, area.width, 2),
+        Hit::NavigationMode,
+    ));
+    hits.push((
+        Rect::new(area.x, area.bottom() - 2, area.width / 2, 2),
+        Hit::New,
+    ));
+    hits.push((
+        Rect::new(
+            area.x + area.width / 2,
+            area.bottom() - 2,
+            area.width - area.width / 2,
+            2,
+        ),
+        Hit::Manage,
+    ));
+    hits
+}
+
 pub fn rail(
     area: Rect,
     items: &[Item],
@@ -344,7 +441,7 @@ pub fn rail(
     let controls_width = if native { 3 } else { 7 };
     let tab_width = |item: &Item| {
         if native {
-            (starkit::wrap::width_of(&item.label) + 16).clamp(19, 42)
+            (starkit::wrap::width_of(&item.label) + 8).clamp(14, 36)
         } else {
             24
         }
@@ -459,6 +556,59 @@ mod tests {
     }
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+    #[test]
+    fn native_navigation_keeps_active_workspace_and_management_reachable() {
+        let (theme, _) = crate::ui::theme::registry().resolve_named("kanagawa");
+        for (area, render) in [
+            (
+                Rect::new(0, 0, 60, 2),
+                numbered
+                    as fn(
+                        Rect,
+                        &[Item],
+                        TabId,
+                        &mut usize,
+                        &mut Buffer,
+                        &Theme,
+                    ) -> Vec<(Rect, Hit)>,
+            ),
+            (
+                Rect::new(0, 0, 22, 40),
+                sidebar
+                    as fn(
+                        Rect,
+                        &[Item],
+                        TabId,
+                        &mut usize,
+                        &mut Buffer,
+                        &Theme,
+                    ) -> Vec<(Rect, Hit)>,
+            ),
+        ] {
+            let mut buf = Buffer::empty(area);
+            let mut offset = 0;
+            for active in [TabId(19), TabId(0), TabId(10)] {
+                let hits = render(area, &items(), active, &mut offset, &mut buf, &theme);
+                assert!(hits
+                    .iter()
+                    .any(|(_, h)| matches!(h, Hit::Tab(id) if *id == active)));
+                assert!(hits.iter().any(|(_, h)| matches!(h, Hit::New)));
+                assert!(hits.iter().any(|(_, h)| matches!(h, Hit::Manage)));
+                assert!(hits.iter().any(|(_, h)| matches!(h, Hit::NavigationMode)));
+                assert!(!hits.iter().any(|(_, h)| matches!(h, Hit::Close(_))));
+                for (i, (r, _)) in hits.iter().enumerate() {
+                    assert!(
+                        area.contains((r.x, r.y).into())
+                            && r.right() <= area.right()
+                            && r.bottom() <= area.bottom()
+                    );
+                    assert!(hits[i + 1..]
+                        .iter()
+                        .all(|(other, _)| r.intersection(*other).is_empty()));
+                }
+            }
+        }
     }
     #[test]
     fn native_tabs_keep_active_and_close_targets_visible_with_mixed_widths() {

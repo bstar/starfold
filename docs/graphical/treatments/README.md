@@ -1,5 +1,28 @@
 # STAR/FOLD Commander visual target
 
+The [2026-10-18 treatment comparison](comparison.html) contains ten complete
+Commander treatments, actual-size and A/B views, responsive canvas sizes, and a
+saved shortlist. It is a self-contained offline HTML file with bundled fonts,
+licenses, and the current screenshot audit. The earlier study below is retained.
+
+The [workspace-switching comparison](workspace-comparison.html) isolates ten
+alternatives to the tab strip, including sidebar, menu, header, and status-bar
+selectors. Its overview shows the controls at actual size while keeping the
+pane treatment fixed.
+
+The native application implements option 03 (numbered sessions) and option 04
+(workspace sidebar). Set `[ui] workspace_navigation` to `"numbered_sessions"`
+or `"sidebar"` in `config.toml`, or click **Sidebar** / **Numbered sessions**
+in the native switcher to change and save it immediately. Narrow windows temporarily use
+the numbered row. Recreate native normal/dense/fallback captures with:
+
+```sh
+STARFOLD_WORKSPACE_CAPTURES=/tmp/starfold-workspace-review \
+  CARGO_NET_GIT_FETCH_WITH_CLI=true nix develop -c cargo test --locked \
+  --bin starfold workspace_navigation_styles
+```
+
+
 A local, buildless design review for the native terminal graphics direction (`tiny-skia` / `cosmic-text`). HTML/CSS is used only for review. The native application carries the rack palette and layout: a large workspace display, shared Commander header, file column labels, pane toolbars, image inspection card and structured operation queue. The browser study remains the visual target; specialized document and media readers retain their existing content layouts.
 
 Open `index.html`, or check a free port and serve this directory:

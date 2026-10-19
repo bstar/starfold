@@ -1,0 +1,34 @@
+# STAR/FOLD Norton Commander palette. Shared STAR/KIT theme format.
+
+[meta]
+name = "Norton Commander"
+id = "norton-commander"
+variant = "dark"
+
+[base16]
+base00 = "#000080"
+base01 = "#0000aa"
+base02 = "#004080"
+base03 = "#006080"
+base04 = "#aaaaaa"
+base05 = "#ffff55"
+base06 = "#ffffff"
+base07 = "#ffff55"
+base08 = "#ff5555"
+base09 = "#ffaa55"
+base0A = "#ffff55"
+base0B = "#55ff55"
+base0C = "#55ffff"
+base0D = "#55ffff"
+base0E = "#ff55ff"
+base0F = "#ffaa55"
+
+[graphical]
+bg = "#000080"
+inset_bg = "#0000aa"
+fg = "#ffffaa"
+muted = "#c0c0c0"
+accent = "#55ffff"
+selected = "#004080"
+border = "#aaaaaa"
+error = "#ff9999"

@@ -887,3 +887,239 @@ fn decoder_error_after_handshake_stays_in_embedded_preview() {
     assert!(app.layout.audio_active);
     assert_eq!(app.audio_error.as_deref(), Some("decoder failed"));
 }
+
+#[cfg(all(unix, feature = "terminal-graphics"))]
+#[test]
+fn native_player_owns_one_unscaled_canvas_and_precise_pointer_after_zoom() {
+    use starkit::native_surface::{PixelRect as R, Primitive, Surface};
+    use starkit::terminal_graphics::{
+        protocol::{Component, Input, Viewport},
+        session::Controller,
+    };
+    for exact_pixels in [false, true] {
+        let (mut app, fake, _, _) = media_app();
+        app.enable_graphical();
+        app.graphical.as_mut().unwrap().pixel_layout = true;
+        let hello = if exact_pixels {
+            r#"{"type":"hello","protocol":1,"extensions":["mp3"],"capabilities":["transport_images","native_surface_v1","native_skin_v1","native_pixels_v1"]}"#
+        } else {
+            r#"{"type":"hello","protocol":1,"extensions":["mp3"],"capabilities":["transport_images","native_surface_v1","native_skin_v1"]}"#
+        };
+        let (program, log) = fake_player_with_hello(
+            &fake,
+            "native-pixel-amp",
+            false,
+            hello,
+            r#"{"type":"status","playing":true,"paused":false,"title":"track"}"#,
+        );
+        app.audio = player(program);
+        app.key(key(KeyCode::Enter));
+        wait_for(|| {
+            app.tick();
+            app.audio.transport_images_available()
+        });
+        let pixels = RgbaImage::from_pixel(8, 8, starkit::image::Rgba([255, 0, 169, 255]));
+        let (asset, payload) = starkit::terminal_graphics::assets::encode_skin(&pixels).unwrap();
+        for (columns, rows, width, height) in [
+            (160, 54, 1601, 1081),
+            (100, 40, 1207, 803),
+            (80, 36, 1281, 1153),
+            (120, 40, 2400, 1400),
+            (80, 36, 801, 451),
+        ] {
+            let viewport = Viewport {
+                columns,
+                rows,
+                width,
+                height,
+                generation: u64::from(columns),
+            };
+            Controller::scene(&mut app, viewport);
+            assert!(
+                app.native_audio_target(Rect::new(0, 0, 58, 5)).is_none(),
+                "provisional activation canvas must not be projected into the pane"
+            );
+            let presentation = app.audio_presentation.clone().unwrap();
+            assert_eq!(presentation.pixel_size.is_some(), exact_pixels);
+            let graphics = presentation.graphics.unwrap();
+            let [w, h] = presentation.pixel_size.unwrap_or([
+                presentation.width * graphics.cell_width,
+                presentation.height * graphics.cell_height,
+            ]);
+            if exact_pixels && height >= 600 {
+                assert!(w >= 720 && h >= 230, "full AMP artwork needs room: {w}x{h}");
+            } else if exact_pixels {
+                assert!(h < 230, "short windows keep the compact player");
+            }
+            let mut surface = Surface::new(w, h, "#101010".into()).with_physical_text();
+            surface.assets.insert(asset.clone(), Some(payload.clone()));
+            surface.nodes.push(Primitive::Sprite {
+                rect: R::new(8, 8, 8, 8),
+                asset: asset.clone(),
+                source: R::new(0, 0, 8, 8),
+                insets: None,
+                tint: None,
+            });
+            app.audio_frame = Some(audio_embed::Frame {
+                generation: presentation.generation,
+                width: presentation.width,
+                height: presentation.height,
+                cells: vec![],
+                images: vec![],
+                surface: Some(surface),
+            });
+            let scene = Controller::scene(&mut app, viewport);
+            let source = scene
+                .components
+                .iter()
+                .find_map(|c| match c {
+                    Component::Surface { rect, surface } if surface.assets.contains_key(&asset) => {
+                        Some(*rect)
+                    }
+                    _ => None,
+                })
+                .expect("AMP surface");
+            let placement = scene
+                .placements
+                .iter()
+                .find(|p| p.source == source)
+                .unwrap_or_else(|| panic!("dedicated player placement: exact={exact_pixels}, viewport={viewport:?}, frame={w}x{h}, target={:?}", app.native_audio_target(audio_body(app.layout.last.as_ref().unwrap().rect_of(ModuleId::Preview)))));
+            assert_eq!([placement.target.width, placement.target.height], [w, h]);
+            let copies = scene.placements.iter().flat_map(|p| p.project(&scene).components).filter(|c| matches!(c, Component::Surface { surface, .. } if surface.assets.contains_key(&asset))).count();
+            assert_eq!(
+                copies, 1,
+                "enclosing preview must not paint the player again"
+            );
+            let rendered = starkit::terminal_graphics::renderer::render_reference(&scene).unwrap();
+            assert_eq!(
+                rendered
+                    .pixels()
+                    .filter(|p| p.0 == [255, 0, 169, 255])
+                    .count(),
+                64,
+                "fixed artwork must remain pixel exact"
+            );
+            let target = placement.target;
+            Controller::input(
+                &mut app,
+                Input::Pointer {
+                    action: "down".into(),
+                    button: 0,
+                    x: 0,
+                    y: 0,
+                    pixel: Some([u32::from(target.x + 13), u32::from(target.y + 17)]),
+                    modifiers: 0,
+                },
+            );
+            wait_for(|| {
+                messages(&log).iter().any(|m| {
+                    m["type"] == "pointer"
+                        && if exact_pixels {
+                            m["pixel"] == serde_json::json!([13, 17])
+                        } else {
+                            m.get("pixel").is_none()
+                        }
+                })
+            });
+            Controller::input(&mut app, Input::CancelPointer);
+        }
+        Controller::presentation(&mut app, true);
+        Controller::scene(
+            &mut app,
+            Viewport {
+                columns: 100,
+                rows: 30,
+                width: 1000,
+                height: 600,
+                generation: 999,
+            },
+        );
+        assert!(app
+            .audio_presentation
+            .as_ref()
+            .unwrap()
+            .pixel_size
+            .is_none());
+        app.stop_audio();
+    }
+}
+
+#[cfg(all(unix, feature = "terminal-graphics"))]
+#[test]
+#[ignore = "requires STARFOLD_TEST_AMP pointing to a built AMP executable"]
+fn installed_amp_renders_full_artwork_in_native_preview() {
+    use starkit::terminal_graphics::{protocol::Viewport, session::Controller};
+    let executable = std::env::var_os("STARFOLD_TEST_AMP").expect("STARFOLD_TEST_AMP");
+    let (mut app, fake, selected, _) = media_app();
+    // A minute of silence, sniffed as WAV by the real decoder. Playback and all
+    // AMP configuration are isolated from the user's library and player.
+    let data_size = 8000u32 * 2 * 60;
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_size).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&8000u32.to_le_bytes());
+    wav.extend_from_slice(&16000u32.to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_size.to_le_bytes());
+    wav.resize(44 + data_size as usize, 0);
+    std::fs::write(selected, wav).unwrap();
+    let mut command = std::process::Command::new(executable);
+    command.args(["embed", "--stdio"]);
+    command.env("STARAMP_DIR", fake.fixture.path("amp-data"));
+    command.env("STARAMP_CONFIG_DIR", fake.fixture.path("amp-config"));
+    app.audio = AudioClient::with_test_command(command);
+    app.enable_graphical();
+    let graphical = app.graphical.as_mut().unwrap();
+    graphical.pixel_layout = true;
+    graphical.skin_mode = true;
+    app.key(key(KeyCode::Enter));
+    wait_for(|| {
+        app.tick();
+        app.audio.native_pixels_available()
+    });
+    for (name, columns, rows, width, height, density) in [
+        ("normal", 160, 50, 1600, 1000, 1),
+        ("zoomed", 120, 40, 2400, 1400, 2),
+    ] {
+        let viewport = Viewport {
+            columns,
+            rows,
+            width,
+            height,
+            generation: width.into(),
+        };
+        Controller::scene(&mut app, viewport);
+        let [w, h] = app.audio_presentation.as_ref().unwrap().pixel_size.unwrap();
+        assert!(w >= 720 * density && h >= 230 * density, "{name}: {w}x{h}");
+        let mut captured = None;
+        wait_for(|| {
+            app.tick();
+            let scene = Controller::scene(&mut app, viewport);
+            let mounted = scene.components.iter().any(|component| {
+                matches!(component, starkit::terminal_graphics::protocol::Component::Surface { surface, .. }
+                    if surface.width == w && surface.height == h && !surface.assets.is_empty()
+                        && surface.nodes.iter().any(|node| matches!(node,
+                            starkit::native_surface::Primitive::Text { text, .. } if text == "PLAY · STEREO")))
+            });
+            if mounted {
+                captured = Some(scene);
+            }
+            mounted
+        });
+        let scene = captured.unwrap();
+        let image = starkit::terminal_graphics::renderer::render_reference(&scene).unwrap();
+        if let Some(dir) = std::env::var_os("STARFOLD_AMP_CAPTURES") {
+            std::fs::create_dir_all(&dir).unwrap();
+            image
+                .save(PathBuf::from(dir).join(format!("embedded-amp-{name}.png")))
+                .unwrap();
+        }
+    }
+    app.stop_audio();
+}

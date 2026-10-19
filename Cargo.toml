@@ -16,8 +16,8 @@ media = ["starkit/media"]
 terminal-graphics = ["media", "starkit/terminal-graphics"]
 
 [workspace]
-members = ["extensions/protocol", "extensions/pdf", "extensions/video", "extensions/nvim", "extensions/archive", "extensions/archive-protocol"]
-default-members = [".", "extensions/pdf", "extensions/video", "extensions/nvim", "extensions/archive"]
+members = ["extensions/protocol", "extensions/pdf", "extensions/comic", "extensions/video", "extensions/nvim", "extensions/archive", "extensions/archive-protocol"]
+default-members = [".", "extensions/pdf", "extensions/comic", "extensions/video", "extensions/nvim", "extensions/archive"]
 resolver = "2"
 
 [workspace.dependencies]

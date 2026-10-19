@@ -23,9 +23,11 @@ pub(super) struct State {
     pub(super) base_scrollbars: Vec<Component>,
     placements: Vec<starkit::terminal_graphics::placement::Placement>,
     rack_hits: Vec<(Rect, RackHit)>,
+    preview_close: Option<starkit::native_surface::PixelRect>,
     viewport: Option<Viewport>,
     preserved_preview: Option<(u16, u16)>,
     pointer_capture: Option<starkit::terminal_graphics::placement::Placement>,
+    pub(super) audio_pointer_held: bool,
     video_capable: bool,
     video_player: bool,
     original_media: bool,
@@ -126,7 +128,7 @@ fn color(c: starkit::ratatui::style::Color, fallback: &str) -> String {
 /// renderer and pointer adapter share these placements, including modal layers.
 fn pixel_placements(
     regions: &Regions,
-    _commander: bool,
+    commander: bool,
     v: Viewport,
     modals: &[Rect],
     overlay: &[Span],
@@ -138,34 +140,54 @@ fn pixel_placements(
     let metrics = Metrics::from_cell(cw, ch);
     // Kitty owns the space outside the terminal grid. Use the full app
     // background, keeping padding inside panels rather than around the frame.
-    let area = R::new(0, 0, v.width as u16, v.height as u16);
+    let sidebar_width = if regions.workspace_sidebar { 164 } else { 0 };
+    let sidebar_gap = if regions.workspace_sidebar {
+        metrics.gap
+    } else {
+        0
+    };
+    let area = R::new(
+        sidebar_width + sidebar_gap,
+        0,
+        (v.width as u16).saturating_sub(sidebar_width + sidebar_gap),
+        v.height as u16,
+    );
     let mut sources = Vec::new();
-    if let Some(tabs) = regions.tabs {
+    if let Some(tabs) = regions.tabs.filter(|_| !regions.workspace_sidebar) {
         sources.push(tabs);
     }
     let flexible = sources.len();
     let preview = regions.rect_of(ModuleId::Preview);
     let operations = regions.rect_of(ModuleId::Operations);
-    let deck = preview.y == operations.y;
+    let deck = !preview.is_empty() && !operations.is_empty() && preview.y == operations.y;
     sources.push(regions.rect_of(ModuleId::Stack));
-    sources.push(if deck {
-        Rect::new(preview.x, preview.y, regions.area.width, preview.height)
-    } else {
-        preview
-    });
-    if !deck {
+    if !preview.is_empty() {
+        sources.push(if deck {
+            Rect::new(
+                preview.x,
+                preview.y,
+                regions.rect_of(ModuleId::Stack).width,
+                preview.height,
+            )
+        } else {
+            preview
+        });
+    }
+    if !deck && !operations.is_empty() {
         sources.push(operations);
     }
     sources.push(regions.status);
-    let heights: Vec<_> = sources
+    let mut heights: Vec<_> = sources
         .iter()
         .map(|r| {
-            if Some(*r) == regions.tabs {
+            if *r == regions.status {
+                28
+            } else if Some(*r) == regions.tabs {
                 // Comfortable label/control height without an extra outer top margin.
                 if r.height >= 5 {
                     r.height.saturating_mul(ch)
                 } else {
-                    ch.saturating_add(20).max(36)
+                    28
                 }
             } else if r.height == 2 {
                 metrics.control
@@ -174,21 +196,67 @@ fn pixel_placements(
             }
         })
         .collect();
-    let mut targets = placement::column(area, metrics.gap, &heights, flexible);
-    if regions.tabs.is_some() && targets.len() > flexible {
-        // Keep the mockup’s breathing room between the filled tabs and pane.
-        let previous_bottom = targets[flexible - 1].y + targets[flexible - 1].height;
-        let pane = &mut targets[flexible];
-        let gap = pane.y.saturating_sub(previous_bottom).saturating_sub(6);
-        pane.y -= gap;
-        pane.height = pane.height.saturating_add(gap);
+    if regions.audio_active {
+        if let Some(index) = sources.iter().position(|r| *r == preview) {
+            let body = audio_body(preview);
+            if preview.height >= 6 && body.height > 0 {
+                // AMP's full player is 230 logical pixels tall (460 at 2x).
+                // Logical terminal rows are not physical rack rows: reserving
+                // nine of them used to force AMP into its compact fallback.
+                // Include the host title/insets using the same row projection
+                // as Placement::row_edge, rather than stretching AMP's output.
+                let density = if ch >= 32 && area.width >= 1472 && area.height >= 600 {
+                    2
+                } else {
+                    1
+                };
+                let player_height = 230u32 * density;
+                let requested = (player_height * u32::from(preview.height - 3))
+                    .div_ceil(u32::from(body.height)) as u16
+                    + 2 * metrics.inset
+                    + metrics.gap;
+                let other_rows: u16 = heights
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != index && *i != flexible)
+                    .map(|(_, h)| *h)
+                    .sum();
+                // Small windows keep a usable browser and AMP's supported
+                // compact player; normal windows get the standalone artwork.
+                let available = area
+                    .height
+                    .saturating_sub(other_rows + metrics.gap * (sources.len() as u16 - 1) + 200);
+                heights[index] = requested.min(available.max(metrics.control));
+            }
+        }
     }
+    let mut targets = placement::column(area, metrics.gap, &heights, flexible);
     let mut result = Vec::new();
+    if let Some(sidebar) = regions.tabs.filter(|_| regions.workspace_sidebar) {
+        let bottom = targets
+            .last()
+            .map_or(area.height, |r| r.y.saturating_sub(metrics.gap));
+        result.push(Placement::new(
+            sidebar.into(),
+            R::new(0, 0, sidebar_width, bottom),
+        ));
+        if let Some(status) = targets.last_mut() {
+            status.x = 0;
+            status.width = v.width as u16;
+        }
+    }
     for (i, (source, target)) in sources.into_iter().zip(targets).enumerate() {
         if source.width == 0 || source.height == 0 || target.width == 0 || target.height == 0 {
             continue;
         }
-        if deck && i == flexible + 1 {
+        if commander && source == regions.rect_of(ModuleId::Stack) {
+            for (pane, target) in placement::split(target, metrics.gap)
+                .into_iter()
+                .enumerate()
+            {
+                result.push(Placement::new(pane_rect(source, pane).into(), target));
+            }
+        } else if deck && i == flexible + 1 {
             for (source, target) in [preview, operations]
                 .into_iter()
                 .zip(placement::split(target, metrics.gap))
@@ -294,6 +362,180 @@ fn key_code(code: &str) -> Option<KeyCode> {
     })
 }
 impl App {
+    fn native_preview_close_pointer(
+        &mut self,
+        action: &str,
+        button: u8,
+        x: u16,
+        y: u16,
+        pixel: Option<[u32; 2]>,
+        modifiers: u8,
+    ) -> bool {
+        if action != "down"
+            || button != 0
+            || modifiers != 0
+            || self.overlays.is_open()
+            || self.places.is_some()
+            || self.tab_picker.is_some()
+        {
+            return false;
+        }
+        let state = self.graphical.as_ref().unwrap();
+        let Some(close) = state.preview_close.filter(|_| state.uses_pixel_layout()) else {
+            return false;
+        };
+        let Some(viewport) = state.viewport else {
+            return false;
+        };
+        let [px, py] = pixel.unwrap_or([
+            ((u32::from(x) * 2 + 1) * viewport.width) / (2 * u32::from(viewport.columns).max(1)),
+            ((u32::from(y) * 2 + 1) * viewport.height) / (2 * u32::from(viewport.rows).max(1)),
+        ]);
+        if px >= u32::from(close.x)
+            && px < u32::from(close.x + close.width)
+            && py >= u32::from(close.y)
+            && py < u32::from(close.y + close.height)
+        {
+            self.word_click(panels::Word::Close);
+            self.repaint = true;
+            return true;
+        }
+        // The former cell-word slot is now empty header space. Do not leave
+        // an invisible second Close target after moving the physical button.
+        let regions = self.layout.last.as_ref().unwrap();
+        let preview = regions.rect_of(ModuleId::Preview);
+        let old_slot = state
+            .placements
+            .iter()
+            .find(|p| p.source == preview.into())
+            .and_then(|p| p.pointer_pixels(px, py, false))
+            .is_some_and(|(sx, sy)| {
+                starkit::chrome::header::hit(preview, &self.panel_words(ModuleId::Preview), sx, sy)
+                    == Some(panels::Word::Close)
+            });
+        if old_slot {
+            self.layout.focus_set(ModuleId::Preview);
+        }
+        old_slot
+    }
+
+    /// The player's physical canvas follows the painted pane, including its
+    /// insets. AMP receives this allocation and owns every pixel inside it.
+    pub(super) fn native_audio_target(
+        &self,
+        body: Rect,
+    ) -> Option<starkit::native_surface::PixelRect> {
+        use starkit::native_surface::PixelRect as R;
+        let state = self.graphical.as_ref()?;
+        if !state.uses_pixel_layout() || body.width == 0 || body.height == 0 {
+            return None;
+        }
+        let regions = self.layout.last.as_ref()?;
+        let viewport = state.viewport?;
+        let placements = pixel_placements(regions, self.commander, viewport, &[], &[]);
+        let p = placements
+            .iter()
+            .find(|p| p.source == regions.rect_of(ModuleId::Preview).into())?;
+        // Activation begins with a provisional origin-relative canvas. It is
+        // not the painted preview allocation yet and must not be projected.
+        if body.x < p.source.x
+            || body.y < p.source.y
+            || u32::from(body.right()) > u32::from(p.source.x) + u32::from(p.source.width)
+            || u32::from(body.bottom()) > u32::from(p.source.y) + u32::from(p.source.height)
+        {
+            return None;
+        }
+        let x = |column: u16| {
+            p.target.x
+                + (u32::from(column - p.source.x) * u32::from(p.target.width)
+                    / u32::from(p.source.width)) as u16
+        };
+        let y = |row: u16| p.target.y + p.row_edge(row - p.source.y).round() as u16;
+        let (left, top) = (x(body.x), y(body.y));
+        Some(R::new(
+            left,
+            top,
+            (x(body.right()) - left).min(8192),
+            (y(body.bottom()) - top).min(2048),
+        ))
+    }
+
+    fn native_audio_pointer(
+        &mut self,
+        action: &str,
+        button: u8,
+        x: u16,
+        y: u16,
+        pixel: Option<[u32; 2]>,
+    ) -> bool {
+        if !self.audio_here()
+            || !self.layout.preview_open
+            || self.overlays.is_open()
+            || self.places.is_some()
+            || self.tab_picker.is_some()
+        {
+            return false;
+        }
+        let Some(state) = self.graphical.as_ref() else {
+            return false;
+        };
+        let Some(viewport) = state.viewport else {
+            return false;
+        };
+        let Some(regions) = self.layout.last.as_ref() else {
+            return false;
+        };
+        let body = audio_body(regions.rect_of(ModuleId::Preview));
+        let Some(placement) = state.placements.iter().find(|p| p.source == body.into()) else {
+            return false;
+        };
+        let target = placement.target;
+        let [px, py] = pixel.unwrap_or([
+            (u32::from(x) * 2 + 1) * viewport.width / (u32::from(viewport.columns).max(1) * 2),
+            (u32::from(y) * 2 + 1) * viewport.height / (u32::from(viewport.rows).max(1) * 2),
+        ]);
+        let inside = px >= u32::from(target.x)
+            && py >= u32::from(target.y)
+            && px < u32::from(target.x) + u32::from(target.width)
+            && py < u32::from(target.y) + u32::from(target.height);
+        let held = state.audio_pointer_held;
+        if !inside && !(held && matches!(action, "drag" | "up")) {
+            return false;
+        }
+        let local = [
+            px.saturating_sub(u32::from(target.x))
+                .min(u32::from(target.width.saturating_sub(1))) as u16,
+            py.saturating_sub(u32::from(target.y))
+                .min(u32::from(target.height.saturating_sub(1))) as u16,
+        ];
+        let pointer = match (action, button) {
+            ("down", 0) => Some("left"),
+            ("down", 2) => Some("right"),
+            ("drag", 0) if held => Some("drag"),
+            ("scroll_up", _) => Some("scroll_up"),
+            ("scroll_down", _) => Some("scroll_down"),
+            _ => None,
+        };
+        if action == "down" && button == 0 {
+            self.graphical.as_mut().unwrap().audio_pointer_held = true;
+        }
+        if action == "up" {
+            self.graphical.as_mut().unwrap().audio_pointer_held = false;
+        }
+        if let Some(button) = pointer {
+            self.layout.focus_set(ModuleId::Preview);
+            let sx = (u32::from(local[0]) * u32::from(body.width) / u32::from(target.width.max(1)))
+                as u16;
+            let sy = (u32::from(local[1]) * u32::from(body.height)
+                / u32::from(target.height.max(1))) as u16;
+            if let Err(error) = self.audio.pointer_at(sx, sy, button, Some(local)) {
+                self.audio_error = Some(error);
+            }
+            self.repaint = true;
+        }
+        true
+    }
+
     fn native_header_hotkeys(&self, module: ModuleId) -> bool {
         self.filter.is_none()
             && self.places.is_none()
@@ -395,6 +637,17 @@ impl App {
                 .find(|(r, _)| r.contains((x, y).into()))
                 .map(|(_, hit)| *hit);
             if let Some(hit) = hit {
+                if self.commander && matches!(hit, RackHit::Word(_)) {
+                    if let Some(stack) = self
+                        .layout
+                        .last
+                        .as_ref()
+                        .map(|r| r.rect_of(ModuleId::Stack))
+                        .filter(|r| r.contains((x, y).into()))
+                    {
+                        self.focus_pane(usize::from(x >= stack.x + stack.width / 2));
+                    }
+                }
                 self.rack_click(hit);
                 self.repaint = true;
                 return;
@@ -635,12 +888,20 @@ impl App {
         if self.editor.is_some() || self.audio_here() || !self.layout.preview_open {
             return;
         }
+        if self
+            .graphical
+            .as_ref()
+            .is_some_and(|state| state.video_pending.is_some() || state.direct_play.is_some())
+        {
+            // Retire the previous movie/poster while the next file is opening,
+            // so its live image layer cannot obscure the storage indicator.
+            return;
+        }
         let details = self.movie_details_preview();
         let showing_details = details.is_some();
-        let pdf =
-            matches!(self.view.preview.as_deref(), Some(Preview::Document(d)) if d.kind == "PDF");
+        let pdf = matches!(self.view.preview.as_deref(), Some(Preview::Document(d)) if matches!(d.kind.as_str(), "PDF" | "Comic book"));
         let document = match self.view.preview.as_deref() {
-            Some(Preview::Document(d)) if d.kind == "PDF" => d
+            Some(Preview::Document(d)) if matches!(d.kind.as_str(), "PDF" | "Comic book") => d
                 .extension
                 .as_ref()
                 .map(|info| (info.provider.clone(), info.session)),
@@ -657,8 +918,7 @@ impl App {
             self.graphical.as_ref().unwrap().uses_pixel_layout(),
         );
         let rack_image = self.graphical.as_ref().unwrap().uses_pixel_layout()
-            && regions.rect_of(ModuleId::Stack).width >= 100
-            && regions.rect_of(ModuleId::Stack).height >= 18
+            && layout::rack_browser(regions)
             && regions.rect_of(ModuleId::Preview).height >= 14
             && matches!(self.view.preview.as_deref(), Some(Preview::Image { .. }));
         let state = self.graphical.as_mut().unwrap();
@@ -959,6 +1219,45 @@ fn video_body(area: Rect, pixel_layout: bool) -> Rect {
     }
 }
 
+fn native_mnemonic(
+    surface: &mut starkit::native_surface::Surface,
+    rect: starkit::native_surface::PixelRect,
+    label: &str,
+    mnemonic: Option<(char, u16)>,
+    enabled: bool,
+    color: &str,
+) {
+    let Some((key, offset)) = mnemonic.filter(|_| enabled) else {
+        return;
+    };
+    if !label
+        .chars()
+        .nth(usize::from(offset))
+        .is_some_and(|ch| ch.eq_ignore_ascii_case(&key))
+    {
+        return;
+    }
+    // Shape the highlight in the same full rectangle and monospace font as
+    // its label. Spaces preserve advances; no terminal-cell or guessed glyph
+    // widths are used to position the mnemonic.
+    let mask: String = label
+        .chars()
+        .enumerate()
+        .map(|(i, ch)| if i == usize::from(offset) { ch } else { ' ' })
+        .collect();
+    starkit::native_surface::classic::label(surface, rect, mask, color, 10, true);
+}
+
+/// Same 30x24 target and ten-pixel right inset as AMP's rack headers.
+fn native_close_rect(width: u16, height: u16) -> starkit::native_surface::PixelRect {
+    starkit::native_surface::PixelRect::new(
+        width.saturating_sub(40),
+        7.min(height),
+        30.min(width),
+        24.min(height.saturating_sub(7)),
+    )
+}
+
 fn native_header(
     rect: Rect,
     title: &str,
@@ -970,7 +1269,7 @@ fn native_header(
 ) -> Component {
     let (cw, ch) = cell;
     use starkit::chrome::header::{self, Word as _};
-    use starkit::native_surface::{Metrics, PixelRect as R, Surface};
+    use starkit::native_surface::{PixelRect as R, Surface};
     let area = Rect::new(
         rect.x + 1,
         rect.y + 1,
@@ -982,7 +1281,8 @@ fn native_header(
         area.height.max(1) * ch,
         hex(theme.header_bg),
     );
-    let font = Metrics::from_cell(cw, ch).font;
+    let font = 12;
+    surface = surface.with_physical_text();
     let slots = header::slots(rect, words);
     let end = slots.iter().map(|(_, r)| r.x).min().unwrap_or(area.right());
     let inset = 12u16
@@ -997,65 +1297,52 @@ fn native_header(
         .nodes
         .push(starkit::native_surface::Primitive::Text {
             rect: R::new(inset, 0, title_width, ch),
-            text: starkit::text::truncate(title, usize::from(title_width / cw.max(1))),
+            text: title.to_string(),
             color: hex(theme.header_fg),
             size: font,
             bold: true,
             mono: true,
         });
-    let title_hit_width = (starkit::wrap::width_of(title) * cw).min(title_width);
+    let title_hit_width = title_width;
     if title_hit_width > 0 {
         surface.hits.push(starkit::native_surface::HitRegion {
             rect: R::new(inset, 0, title_hit_width, ch),
             action: "focus".into(),
         });
     }
-    let shortcut = theme
-        .rack
-        .button
-        .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]);
     for (word, slot) in slots {
-        super::super::rack::bevel(
-            &mut surface,
-            R::new(
-                (slot.x - area.x) * cw,
-                1,
-                slot.width * cw,
-                ch.saturating_sub(2),
-            ),
-            &theme.rack,
-            false,
-        );
-        surface.hits.push(starkit::native_surface::HitRegion {
-            rect: R::new((slot.x - area.x) * cw, 0, slot.width * cw, ch),
-            action: "header".into(),
-        });
-        // Use the same character advances as header hit testing. This keeps
-        // inter-item spacing equal and mnemonic positions exact at every scale.
-        for (offset, character) in word
-            .word()
-            .chars()
-            .take(usize::from(slot.width))
-            .enumerate()
-        {
-            let highlighted = hotkeys && word.mnemonic() == Some((character, offset as u16));
-            surface
-                .nodes
-                .push(starkit::native_surface::Primitive::Text {
-                    rect: R::new((slot.x - area.x + offset as u16) * cw, 0, cw, ch),
-                    text: character.to_string(),
-                    color: hex(if highlighted {
-                        shortcut
-                    } else {
-                        theme
-                            .rack
-                            .foreground
-                            .ensure_contrast(theme.rack.button, 4.5)
-                    }),
-                    size: font,
-                    bold: highlighted,
-                    mono: true,
-                });
+        let target = R::new((slot.x - area.x) * cw, 0, slot.width * cw, ch);
+        if word == panels::Word::Close {
+            starkit::native_surface::style::close_button(
+                &mut surface,
+                target,
+                &theme.rack.style().colors,
+                "header",
+                false,
+            );
+        } else {
+            starkit::native_surface::classic::label(
+                &mut surface,
+                target,
+                word.word(),
+                &hex(theme.rack.muted),
+                10,
+                false,
+            );
+            native_mnemonic(
+                &mut surface,
+                target,
+                &word.word(),
+                word.mnemonic(),
+                hotkeys,
+                &hex(theme
+                    .header_bg
+                    .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK])),
+            );
+            surface.hits.push(starkit::native_surface::HitRegion {
+                rect: target,
+                action: "header".into(),
+            });
         }
     }
     Component::Surface {
@@ -1080,6 +1367,7 @@ impl Controller for App {
         state.placements.clear();
         state.rack_hits.clear();
         state.pointer_capture = None;
+        state.audio_pointer_held = false;
         state.base_buffer = None;
         state.base_scrollbars.clear();
         state.resize_handle = None;
@@ -1281,6 +1569,7 @@ impl Controller for App {
         }
     }
     fn scene(&mut self, viewport: Viewport) -> Scene {
+        self.graphical.as_mut().unwrap().preview_close = None;
         if self
             .graphical
             .as_ref()
@@ -1301,7 +1590,10 @@ impl Controller for App {
                     .saturating_add(self.cfg.ui.padding_y.max(1).saturating_mul(2));
         // Native rows have independent cursor/mark indicators, so their fill
         // can stay subtle while labels retain readable text contrast.
+        self.theme
+            .set_graphical_palette(self.cfg.ui.graphical_palette);
         self.theme.set_graphical(!state.cell_mode);
+        self.theme.rack.set_native_skins(state.skin_mode);
         let _chrome = starkit::chrome::frame::padding_scope(state.padded_chrome);
         if let Some((height, rows)) = state.preserved_preview.take() {
             self.layout.native_preview_rows = Some(
@@ -1335,7 +1627,14 @@ impl Controller for App {
         let Some(regions) = self.layout.last.clone() else {
             return scene;
         };
+        if pixels {
+            scene.background = hex(starkit::theme::Resolve::core(&self.theme).bg);
+            scene.placements = pixel_placements(&regions, self.commander, viewport, &[], &[]);
+        }
         let _rack = panels::stack::rack_scope(pixels && layout::rack_browser(&regions));
+        // The preview may have changed the list capacity during this draw.
+        // Clamp against that allocation before building native rows and hits.
+        self.clamp_scrolls();
         use std::hash::{Hash, Hasher};
         let mut targets = std::collections::hash_map::DefaultHasher::new();
         self.view.active_dir.hash(&mut targets);
@@ -1368,6 +1667,9 @@ impl Controller for App {
                     continue;
                 }
                 let rect = regions.rect_of(module);
+                if rect.is_empty() {
+                    continue;
+                }
                 if module == ModuleId::Operations && rect.height == 2 {
                     use starkit::native_surface::{Metrics, PixelRect as R, Surface};
                     let mut surface =
@@ -1457,15 +1759,17 @@ impl Controller for App {
                     } else {
                         self.panel_words(module)
                     };
-                    scene.components.push(native_header(
-                        rect,
-                        &title,
-                        &words,
-                        &self.theme,
-                        (cw, ch),
-                        self.native_header_hotkeys(module),
-                        0,
-                    ));
+                    if !pixels {
+                        scene.components.push(native_header(
+                            rect,
+                            &title,
+                            &words,
+                            &self.theme,
+                            (cw, ch),
+                            self.native_header_hotkeys(module),
+                            0,
+                        ));
+                    }
                 }
             }
             scene.components.push(Component::Surface {
@@ -1480,6 +1784,9 @@ impl Controller for App {
         }
         if !native || !self.graphical.as_ref().unwrap().padded_chrome {
             for module in [ModuleId::Preview, ModuleId::Operations] {
+                if regions.rect_of(module).is_empty() {
+                    continue;
+                }
                 scene.components.push(Component::Panel {
                     rect: regions.rect_of(module).into(),
                     active: self.layout.focus() == module,
@@ -1526,15 +1833,17 @@ impl Controller for App {
                     } else {
                         brand
                     };
-                    scene.components.push(native_header(
-                        rect,
-                        &title,
-                        &self.panel_words(ModuleId::Stack),
-                        &self.theme,
-                        (cw, ch),
-                        self.native_header_hotkeys(ModuleId::Stack),
-                        0,
-                    ));
+                    if !pixels {
+                        scene.components.push(native_header(
+                            rect,
+                            &title,
+                            &self.panel_words(ModuleId::Stack),
+                            &self.theme,
+                            (cw, ch),
+                            self.native_header_hotkeys(ModuleId::Stack),
+                            0,
+                        ));
+                    }
                     if self.graphical.as_ref().unwrap().uses_pixel_layout() {
                         use starkit::native_surface::{Metrics, PixelRect as R, Surface};
                         let rule =
@@ -1552,44 +1861,26 @@ impl Controller for App {
                         let slots = breadcrumb_slots(area, path, &self.view.home);
                         let mut surface =
                             Surface::new(rule.width * cw, ch, hex(self.theme.panel_bg));
+                        let crumb_font = Metrics::from_cell(cw, ch).font.min(11);
                         for (index, (r, label, target)) in slots.iter().enumerate() {
-                            let mut glyphs: Vec<(String, u16)> = Vec::new();
-                            for c in label.chars() {
-                                let text = c.to_string();
-                                let width = starkit::wrap::width_of(&text);
-                                if width == 0 {
-                                    if let Some((text, _)) = glyphs.last_mut() {
-                                        text.push(c);
-                                    }
+                            starkit::native_surface::classic::label(
+                                &mut surface,
+                                R::new((r.x - rule.x) * cw, 0, r.width * cw, ch),
+                                label,
+                                &hex(if target == path {
+                                    self.theme.fg
                                 } else {
-                                    glyphs.push((text, width));
-                                }
-                            }
-                            let mut offset = 0;
-                            for (text, width) in glyphs {
-                                surface
-                                    .nodes
-                                    .push(starkit::native_surface::Primitive::Text {
-                                        rect: R::new(
-                                            (r.x - rule.x + offset) * cw,
-                                            0,
-                                            width * cw,
-                                            ch,
-                                        ),
-                                        text,
-                                        color: hex(self.theme.fold.crumb_active_fg),
-                                        size: Metrics::from_cell(cw, ch).font,
-                                        bold: target == path,
-                                        mono: true,
-                                    });
-                                offset += width;
-                            }
-                            if index + 1 < slots.len() {
-                                surface.text(
+                                    self.theme.dim
+                                }),
+                                crumb_font,
+                                false,
+                            );
+                            if index + 1 < slots.len() && label != "/" {
+                                surface.text_centered(
                                     R::new((r.right() - rule.x) * cw, 0, 3 * cw, ch),
-                                    if label == "/" { " " } else { " / " },
+                                    "/",
                                     &hex(self.theme.dim),
-                                    Metrics::from_cell(cw, ch).font,
+                                    crumb_font,
                                     false,
                                 );
                             }
@@ -1601,7 +1892,7 @@ impl Controller for App {
                                 R::new((rule.width - detail_width) * cw, 0, detail_width * cw, ch),
                                 detail,
                                 &hex(self.theme.dim),
-                                Metrics::from_cell(cw, ch).font,
+                                crumb_font,
                                 false,
                             );
                         }
@@ -1707,6 +1998,8 @@ impl Controller for App {
                     super::super::tabs::Hit::Previous => Some("‹"),
                     super::super::tabs::Hit::Next => Some("›"),
                     super::super::tabs::Hit::New => Some("+"),
+                    super::super::tabs::Hit::Manage => Some("Manage"),
+                    super::super::tabs::Hit::NavigationMode => Some("Layout"),
                     _ => None,
                 };
                 if let Some(label) = control {
@@ -1743,7 +2036,10 @@ impl Controller for App {
             // Keep the Panel/Tab markers for stable interaction identities;
             // the native chrome paints over their legacy outlines and tabs.
             let components = std::mem::take(&mut scene.components);
-            if let Some(tabs) = regions.tabs.filter(|r| r.height >= 5) {
+            if let Some(tabs) = regions
+                .tabs
+                .filter(|r| !regions.workspace_sidebar && r.height >= 5)
+            {
                 let view = if self.commander {
                     self.pane_view(self.active_pane)
                 } else {
@@ -1776,10 +2072,50 @@ impl Controller for App {
                 match &component {
                     Component::Panel { rect, .. } => {
                         let rect = Rect::new(rect.x, rect.y, rect.width, rect.height);
+                        let module = if rect == regions.rect_of(ModuleId::Preview) {
+                            ModuleId::Preview
+                        } else if rect == regions.rect_of(ModuleId::Operations) {
+                            ModuleId::Operations
+                        } else {
+                            ModuleId::Stack
+                        };
+                        let title = match module {
+                            ModuleId::Preview if self.audio_here() => "STAR/AMP".to_string(),
+                            ModuleId::Preview => format!(
+                                "PREVIEW · {}",
+                                self.view.preview_name.as_deref().unwrap_or("")
+                            ),
+                            ModuleId::Operations => "OPERATIONS".into(),
+                            _ if self.commander => {
+                                if rect.x == regions.rect_of(ModuleId::Stack).x {
+                                    "FILES · LEFT"
+                                } else {
+                                    "FILES · RIGHT"
+                                }
+                                .into()
+                            }
+                            _ => "FILES".into(),
+                        };
+                        if rect.is_empty() {
+                            continue;
+                        }
+                        let words = if module == ModuleId::Operations {
+                            let view = self.operations_view();
+                            panels::operations::header_words(view.paused, view.active, view.focused)
+                        } else {
+                            self.panel_words(module)
+                        };
+                        let painted = rack_scene::pane(
+                            &scene,
+                            rect,
+                            &title,
+                            &words,
+                            &self.theme.rack,
+                            (cw, ch),
+                            self.native_header_hotkeys(module),
+                        );
                         scene.components.push(component);
-                        scene
-                            .components
-                            .extend(rack::frame(rect, (cw, ch), &self.theme.rack));
+                        scene.components.push(painted);
                     }
                     Component::Tab {
                         rect,
@@ -1788,6 +2124,10 @@ impl Controller for App {
                         active,
                         close,
                     } => {
+                        if self.layout.native_rack {
+                            scene.components.push(component);
+                            continue;
+                        }
                         let convert = |r: starkit::terminal_graphics::Rect| {
                             Rect::new(r.x, r.y, r.width, r.height)
                         };
@@ -1810,6 +2150,44 @@ impl Controller for App {
         self.graphical_tree(&mut scene, &regions, viewport, modal);
         if pixels {
             self.rack_scene(&mut scene, &regions, (cw, ch));
+            if self.layout.native_rack {
+                self.footer_scene(&mut scene, &regions, (cw, ch));
+                self.workspace_scene(&mut scene, &regions, (cw, ch));
+            }
+            // Panel markers supply controller identity, not a second frame.
+            // Paint focus last, over the pane's content, using KIT chrome.
+            // Otherwise the old thick outline leaks through rounded corners.
+            if !modal {
+                let focused: Vec<_> = scene
+                    .components
+                    .iter()
+                    .filter_map(|c| match c {
+                        Component::Panel { rect, active: true } => Some(*rect),
+                        _ => None,
+                    })
+                    .collect();
+                for rect in focused {
+                    let target = rack_scene::pixel_bounds(
+                        Rect::new(rect.x, rect.y, rect.width, rect.height),
+                        (cw, ch),
+                        &scene.placements,
+                    );
+                    let mut surface = starkit::native_surface::Surface::new(
+                        target.width,
+                        target.height,
+                        "transparent".into(),
+                    )
+                    .with_physical_text();
+                    self.theme.rack.focus(
+                        &mut surface,
+                        starkit::native_surface::PixelRect::new(0, 0, target.width, target.height),
+                    );
+                    scene.components.push(Component::Surface { rect, surface });
+                }
+            }
+        }
+        if pixels {
+            self.rack_drop_target(&mut scene, &regions, (cw, ch));
         }
         self.video_picker_scene(&mut scene);
         // Draw pixel scrollbars from the exact geometry used for pointer grabs.
@@ -2035,7 +2413,11 @@ impl Controller for App {
                 );
                 clickable.extend(self.tab_hits.iter().map(|(rect, _)| *rect));
                 let status = self.status_view(Instant::now());
-                for x in regions.status.x..regions.status.right() {
+                for x in regions.status.x..if self.layout.native_rack {
+                    regions.status.x
+                } else {
+                    regions.status.right()
+                } {
                     if super::super::status::native_hit(
                         regions.status,
                         &status,
@@ -2114,6 +2496,29 @@ impl Controller for App {
             scene.pointer_regions = clickable.into_iter().map(Into::into).collect();
         }
         self.video_scene(&mut scene, &regions);
+        self.movie_loading_scene(&mut scene, &regions);
+        let audio_placement = self.audio_frame.as_ref().and_then(|frame| {
+            let surface = frame.surface.as_ref()?;
+            let body = audio_body(regions.rect_of(ModuleId::Preview));
+            let mut target = self.native_audio_target(body)?;
+            if !self.audio_here()
+                || !self.layout.preview_open
+                || surface.width > target.width
+                || surface.height > target.height
+            {
+                return None;
+            }
+            // Legacy helpers return whole-cell canvases. Centre those without
+            // resampling any of their bitmap artwork or physical type.
+            target.x += (target.width - surface.width) / 2;
+            target.y += (target.height - surface.height) / 2;
+            target.width = surface.width;
+            target.height = surface.height;
+            Some(starkit::terminal_graphics::placement::Placement::new(
+                body.into(),
+                target,
+            ))
+        });
         let state = self.graphical.as_mut().unwrap();
         state.placements.clear();
         state.resize_handle = None;
@@ -2131,6 +2536,14 @@ impl Controller for App {
                 &modal_rects,
                 &overlay_spans,
             );
+            if let Some(placement) = audio_placement {
+                let index = scene
+                    .placements
+                    .iter()
+                    .position(|p| p.overlay.is_some())
+                    .unwrap_or(scene.placements.len());
+                scene.placements.insert(index, placement);
+            }
             for p in &scene.placements {
                 (
                     p.source.x,
@@ -2226,6 +2639,28 @@ impl Controller for App {
                     .hash(&mut scroll_targets);
             }
             scene.scroll_interaction = Some(scroll_targets.finish());
+        }
+        if pixels && state.authorization.is_none() {
+            scene
+                .components
+                .retain(|c| !matches!(c, Component::Panel { .. } | Component::Tab { .. }));
+            let preview = regions.rect_of(ModuleId::Preview);
+            state.preview_close = scene.components.iter().find_map(|component| {
+                let Component::Surface { rect, surface } = component else {
+                    return None;
+                };
+                if *rect != preview.into() {
+                    return None;
+                }
+                let hit = surface.hits.iter().find(|h| h.action == "close")?;
+                let target = rack_scene::pixel_bounds(preview, (cw, ch), &scene.placements);
+                Some(starkit::native_surface::PixelRect::new(
+                    target.x + hit.rect.x,
+                    target.y + hit.rect.y,
+                    hit.rect.width,
+                    hit.rect.height,
+                ))
+            });
         }
         scene
     }
@@ -2350,6 +2785,7 @@ impl Controller for App {
                 // Navigation or opening a modal ends the captured file gesture.
                 if self.graphical.as_ref().unwrap().drag.is_some()
                     || self.layout.preview_resize.is_some()
+                    || self.graphical.as_ref().unwrap().audio_pointer_held
                 {
                     Controller::input(self, Input::CancelPointer);
                     if code == "escape" {
@@ -2383,6 +2819,12 @@ impl Controller for App {
                     tracing::debug!(%action, button, x, y, ?pixel, "Graphical modal pointer received");
                 }
                 if self.graphical_preview_resize(&action, button, pixel, x, y) {
+                    return;
+                }
+                if self.native_preview_close_pointer(&action, button, x, y, pixel, modifiers) {
+                    return;
+                }
+                if self.native_audio_pointer(&action, button, x, y, pixel) {
                     return;
                 }
                 if self.graphical.as_ref().unwrap().drag.is_some()
@@ -2493,6 +2935,7 @@ impl Controller for App {
                 self.cancel_video_scrub();
                 self.layout.preview_resize = None;
                 self.graphical.as_mut().unwrap().pointer_capture = None;
+                self.graphical.as_mut().unwrap().audio_pointer_held = false;
                 if self
                     .graphical
                     .as_ref()
@@ -2703,9 +3146,6 @@ impl App {
         }
     }
     fn pending_movie_error(&self, pending: &Path) -> Option<String> {
-        if let Some(Preview::Error(error)) = self.view.preview.as_deref() {
-            return Some(error.clone());
-        }
         let state = self.core.state();
         let (path, preview) = state.preview.as_ref()?;
         if path != pending {
@@ -2726,6 +3166,12 @@ impl App {
             return None;
         }
         let state = self.graphical.as_ref()?;
+        if let Some(path) = state.video_pending.as_ref().or(state.direct_play.as_ref()) {
+            return self
+                .pending_movie_error(path)
+                .is_none()
+                .then_some("Loading movie…");
+        }
         if let Some(video) = &state.video {
             return (video.buffering && !video.finished).then_some(if video.position > 0. {
                 "Buffering movie…"
@@ -2733,31 +3179,85 @@ impl App {
                 "Starting playback…"
             });
         }
-        if matches!(self.view.preview.as_deref(), Some(Preview::Error(_)))
-            || state
-                .video_pending
-                .as_ref()
-                .is_some_and(|path| self.pending_movie_error(path).is_some())
-        {
+        if matches!(self.view.preview.as_deref(), Some(Preview::Error(_))) {
             return None;
         }
-        if state.video_pending.is_some()
-            || state.direct_play.is_some()
-            || (self.view.preview.is_none()
-                && self.last_preview_for.as_ref().is_some_and(|path| {
-                    crate::fold::file_type::classify(path, &[])
-                        == crate::fold::file_type::FileType::Video
-                }))
+        if (self.view.preview.is_none()
+            || matches!(self.view.preview.as_deref(), Some(Preview::Document(document))
+                    if document.kind == "Loading preview…"))
+            && self.last_preview_for.as_ref().is_some_and(|path| {
+                crate::fold::file_type::classify(path, &[])
+                    == crate::fold::file_type::FileType::Video
+            })
         {
             return Some("Loading movie…");
         }
-        if state.image.is_none()
-            && state.video_pending.is_some()
-            && matches!(self.view.preview.as_deref(), Some(Preview::Video { .. }))
-        {
-            return Some("Preparing preview…");
-        }
         None
+    }
+    fn movie_loading_scene(&self, scene: &mut Scene, regions: &Regions) {
+        let Some(stage) = self.movie_loading_stage() else {
+            return;
+        };
+        let state = self.graphical.as_ref().unwrap();
+        if state.cell_mode {
+            return;
+        }
+        let area = regions.rect_of(ModuleId::Preview);
+        let rect = if state.video.is_none() {
+            panels::preview::content_rect(area)
+        } else {
+            video_image_body(area, state.uses_pixel_layout())
+        };
+        if rect.is_empty() {
+            return;
+        }
+        let cw = (scene.viewport.width / u32::from(scene.viewport.columns)).max(1) as u16;
+        let ch = (scene.viewport.height / u32::from(scene.viewport.rows)).max(1) as u16;
+        let target = rack_scene::pixel_bounds(rect, (cw, ch), &scene.placements);
+        let mut surface = starkit::native_surface::Surface::new(
+            target.width.max(1),
+            target.height.max(1),
+            hex(self.theme.panel_bg),
+        )
+        .with_physical_text();
+        let mid = surface.height / 2;
+        let pad = 8.min(surface.width / 4);
+        surface.text_centered(
+            starkit::native_surface::PixelRect::new(
+                pad,
+                mid.saturating_sub(24),
+                surface.width.saturating_sub(pad * 2),
+                28.min(surface.height),
+            ),
+            format!("{} {stage}", self.reading_spinner()),
+            &hex(self.theme.accent),
+            starkit::native_surface::Metrics::from_cell(cw, ch)
+                .font
+                .clamp(12, 18),
+            true,
+        );
+        if surface.height >= 70 {
+            surface.text_centered(
+                starkit::native_surface::PixelRect::new(
+                    pad,
+                    mid + 12,
+                    surface.width.saturating_sub(pad * 2),
+                    20,
+                ),
+                if state.video.is_some() {
+                    "Preparing video frames…"
+                } else {
+                    "Reading video from storage…"
+                },
+                &hex(self.theme.dim),
+                12,
+                false,
+            );
+        }
+        scene.components.push(Component::Surface {
+            rect: rect.into(),
+            surface,
+        });
     }
     pub(super) fn draw_movie_loading(&self, area: Rect, buf: &mut Buffer) {
         let Some(stage) = self.movie_loading_stage() else {
@@ -2776,7 +3276,7 @@ impl App {
             buf.set_string(body.x, y, " ".repeat(usize::from(body.width)), style);
         }
         let text = starkit::text::truncate(
-            &format!("{} {stage}", self.unmount_spinner()),
+            &format!("{} {stage}", self.reading_spinner()),
             usize::from(body.width),
         );
         let x = body.x + body.width.saturating_sub(starkit::wrap::width_of(&text)) / 2;
@@ -3823,6 +4323,7 @@ impl App {
             width: width.saturating_mul(cw),
             height: height.saturating_mul(ch),
             theme: crate::audio_embed::Palette {
+                inset_bg: None,
                 bg: [
                     self.theme.panel_bg.r,
                     self.theme.panel_bg.g,
@@ -3922,7 +4423,7 @@ impl App {
             .then(|| Rect::new(rect.x, rect.bottom() - 2, rect.width.min(256), 2));
         rect.y += rect.height - if controls_rect.is_some() { 3 } else { 1 };
         rect.height = 1;
-        let spinner = self.unmount_spinner();
+        let spinner = self.reading_spinner();
         let state = self.graphical.as_mut().unwrap();
         state.video_timeline = Some(rect);
         let position = state.video_scrub.as_ref().map_or_else(
@@ -4034,6 +4535,7 @@ impl App {
                 width: controls_rect.width.saturating_mul(cw).clamp(1, 8192),
                 height: controls_rect.height.saturating_mul(ch).clamp(1, 128),
                 theme: crate::audio_embed::Palette {
+                    inset_bg: None,
                     bg: rgb(self.theme.panel_bg),
                     fg: rgb(self.theme.panel_fg),
                     muted: rgb(self.theme.dim),
@@ -4928,6 +5430,16 @@ mod tests {
                 .unwrap()
                 .paused
         );
+        app.graphical.as_mut().unwrap().video_player = true;
+        assert!(app.video_key("char:a", 0));
+        assert_eq!(app.graphical.as_ref().unwrap().video_picker, Some(true));
+        assert!(app.video_picker_key("escape", 0));
+        assert!(app.video_key("char:s", 0));
+        assert_eq!(app.graphical.as_ref().unwrap().video_picker, Some(false));
+        assert!(app.video_picker_key("escape", 0));
+        assert!(app.video_key("char:f", 0));
+        assert_eq!(app.graphical.as_ref().unwrap().video_fullscreen, Some(true));
+        assert!(app.video_key("escape", 0));
         app.layout.preview_open = false;
         app.tick_video();
         assert!(app.graphical.as_ref().unwrap().video.is_none());
@@ -5512,10 +6024,304 @@ mod tests {
     }
 
     #[test]
+    fn workspace_navigation_styles_resize_and_switch_through_projected_targets() {
+        fn target_cell(app: &App, rect: Rect) -> (u16, u16) {
+            let state = app.graphical.as_ref().unwrap();
+            let v = state.viewport.unwrap();
+            (0..v.rows)
+                .flat_map(|y| (0..v.columns).map(move |x| (x, y)))
+                .find(|(x, y)| {
+                    state
+                        .placements
+                        .iter()
+                        .rev()
+                        .find_map(|p| p.pointer(v, *x, *y, false))
+                        .is_some_and(|(sx, sy)| rect.contains((sx, sy).into()))
+                })
+                .expect("workspace control reachable through cell-centre input")
+        }
+        use crate::config::WorkspaceNavigation;
+        use crate::ui::tabs::{Action as TabAction, Hit};
+        use starkit::terminal_graphics::renderer::{RenderMessage, Renderer};
+        let mut renderer = Renderer::spawn().unwrap();
+        for style in [
+            WorkspaceNavigation::NumberedSessions,
+            WorkspaceNavigation::Sidebar,
+        ] {
+            let mut cfg = Config::default();
+            cfg.ui.theme = "kanagawa".into();
+            cfg.ui.workspace_navigation = style;
+            let (core, fake) = crate::ui::fake::handle(cfg.core());
+            let mut app = App::new(
+                core,
+                cfg,
+                fake.home().join("config.toml"),
+                None,
+                Graphics::disabled(),
+            );
+            std::fs::write(
+                &app.cfg_path,
+                "# Keep this comment\n[ui]\ntheme = \"kanagawa\"\n",
+            )
+            .unwrap();
+            app.enable_graphical();
+            app.graphical.as_mut().unwrap().pixel_layout = true;
+            app.graphical.as_mut().unwrap().skin_mode = true;
+            let first = app.core.state().tabs.active().id;
+            for name in ["Pictures", "Archive work"] {
+                app.tab_action(TabAction::New);
+                let id = app.core.state().tabs.active().id;
+                app.core.send(Command::RenameTab(id, name.into()));
+            }
+            fake.pump();
+            app.tick();
+            for (columns, rows, width, height) in [
+                (160, 60, 1600, 1200),
+                (160, 60, 960, 900),
+                (100, 40, 1000, 800),
+                (160, 60, 1600, 1200),
+            ] {
+                let v = Viewport {
+                    columns,
+                    rows,
+                    width,
+                    height,
+                    generation: 1,
+                };
+                let scene = Controller::scene(&mut app, v);
+                let regions = app.layout.last.clone().unwrap();
+                assert_eq!(
+                    regions.workspace_sidebar,
+                    style == WorkspaceNavigation::Sidebar && columns >= 126
+                );
+                for p in &scene.placements {
+                    p.validate(v).unwrap();
+                }
+                for component in &scene.components {
+                    if let Component::Surface { surface, .. } = component {
+                        surface.validate().unwrap();
+                    }
+                }
+                let nav = regions.tabs.unwrap();
+                let target = scene
+                    .placements
+                    .iter()
+                    .find(|p| p.source == nav.into())
+                    .unwrap();
+                if regions.workspace_sidebar {
+                    assert!(scene.components.iter().any(|c| matches!(c,
+                        Component::Surface { rect,surface } if *rect == nav.into() && surface.background == scene.background)));
+                    assert_eq!(target.target.width, 164);
+                    let stack = regions.rect_of(ModuleId::Stack);
+                    assert!(stack.x >= nav.right());
+                    assert!(stack.width >= 100);
+                } else {
+                    assert_eq!(target.target.height, 28);
+                }
+                let footer = regions.status;
+                let footer_surface = scene
+                    .components
+                    .iter()
+                    .find_map(|c| match c {
+                        Component::Surface { rect, surface } if *rect == footer.into() => {
+                            Some(surface)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(footer_surface.height, 28);
+                assert_eq!(footer_surface.background, hex(app.theme.rack.title));
+                assert!(footer_surface.nodes.iter().all(|node| match node {
+                    starkit::native_surface::Primitive::Text { size, mono, .. } =>
+                        *size == 11 && *mono,
+                    _ => true,
+                }));
+                let footer_hits: Vec<_> = app
+                    .graphical
+                    .as_ref()
+                    .unwrap()
+                    .rack_hits
+                    .iter()
+                    .filter(|(r, _)| r.y == footer.y)
+                    .collect();
+                assert_eq!(footer_hits.len(), 3);
+                let help = footer_hits
+                    .iter()
+                    .find(|(_, hit)| matches!(hit, rack_scene::RackHit::Action(Action::Help)))
+                    .unwrap()
+                    .0;
+                let (x, y) = target_cell(&app, help);
+                Controller::input(
+                    &mut app,
+                    Input::Pointer {
+                        pixel: None,
+                        action: "down".into(),
+                        button: 0,
+                        x,
+                        y,
+                        modifiers: 0,
+                    },
+                );
+                assert!(app.overlays.is_open());
+                Controller::input(
+                    &mut app,
+                    Input::Key {
+                        code: "escape".into(),
+                        modifiers: 0,
+                    },
+                );
+                assert!(!app.overlays.is_open());
+                Controller::scene(&mut app, v);
+                // Exercise terminal cell-centre projection, the least precise input path.
+                let (hit, _) = app
+                    .tab_hits
+                    .iter()
+                    .find(|(_, h)| matches!(h,Hit::Tab(id) if *id==first))
+                    .unwrap();
+                let (x, y) = physical_cell(&app, hit.x + 2, hit.y);
+                Controller::input(
+                    &mut app,
+                    Input::Pointer {
+                        pixel: None,
+                        action: "down".into(),
+                        button: 0,
+                        x,
+                        y,
+                        modifiers: 0,
+                    },
+                );
+                assert_eq!(app.core.state().tabs.active().id, first);
+                fake.pump();
+                app.tick();
+                let scene = Controller::scene(&mut app, v);
+                renderer.scene(&scene).unwrap();
+                loop {
+                    match renderer
+                        .output
+                        .recv_timeout(Duration::from_secs(20))
+                        .unwrap()
+                    {
+                        RenderMessage::Frame {
+                            pixels: Some(image),
+                            ..
+                        } => {
+                            if let Some(dir) = std::env::var_os("STARFOLD_WORKSPACE_CAPTURES") {
+                                std::fs::create_dir_all(&dir).unwrap();
+                                image
+                                    .save(
+                                        PathBuf::from(dir)
+                                            .join(format!("{style:?}-{width}x{height}.png")),
+                                    )
+                                    .unwrap();
+                            }
+                            break;
+                        }
+                        RenderMessage::Error { message } => panic!("{message}"),
+                        _ => {}
+                    }
+                }
+                let (rect, _) = app
+                    .tab_hits
+                    .iter()
+                    .find(|(_, h)| matches!(h, Hit::Manage))
+                    .unwrap();
+                let (x, y) = physical_cell(&app, rect.x + rect.width / 2, rect.y);
+                Controller::input(
+                    &mut app,
+                    Input::Pointer {
+                        pixel: None,
+                        action: "down".into(),
+                        button: 0,
+                        x,
+                        y,
+                        modifiers: 0,
+                    },
+                );
+                assert!(app.tab_picker.is_some(), "style={style:?} viewport={v:?} physical={x},{y} nav={nav:?} hits={:?} projected={:?} overlays={} places={} resize={} drag={}", app.tab_hits, app.graphical.as_ref().unwrap().placements.iter().rev().find_map(|p|p.pointer(v,x,y,false)),app.overlays.is_open(),app.places.is_some(),app.layout.preview_resize.is_some(),app.graphical.as_ref().unwrap().drag.is_some());
+                app.tab_picker = None;
+                // Each click changes layout on the next frame and saves the
+                // preference without changing the selected workspace or order.
+                for expected in [
+                    if style == WorkspaceNavigation::Sidebar {
+                        WorkspaceNavigation::NumberedSessions
+                    } else {
+                        WorkspaceNavigation::Sidebar
+                    },
+                    style,
+                ] {
+                    let (rect, _) = app
+                        .tab_hits
+                        .iter()
+                        .find(|(_, h)| matches!(h, Hit::NavigationMode))
+                        .unwrap();
+                    let (x, y) = target_cell(&app, *rect);
+                    Controller::input(
+                        &mut app,
+                        Input::Pointer {
+                            pixel: None,
+                            action: "down".into(),
+                            button: 0,
+                            x,
+                            y,
+                            modifiers: 0,
+                        },
+                    );
+                    assert_eq!(app.cfg.ui.workspace_navigation, expected);
+                    assert_eq!(
+                        Config::load(&app.cfg_path).unwrap().ui.workspace_navigation,
+                        expected
+                    );
+                    assert!(std::fs::read_to_string(&app.cfg_path)
+                        .unwrap()
+                        .contains("# Keep this comment"));
+                    assert_eq!(app.core.state().tabs.active().id, first);
+                    assert_eq!(app.core.state().tabs.tabs.len(), 3);
+                    let updated = Controller::scene(&mut app, v);
+                    assert_eq!(
+                        app.layout.last.as_ref().unwrap().workspace_sidebar,
+                        expected == WorkspaceNavigation::Sidebar && columns >= 126
+                    );
+                    for p in &updated.placements {
+                        p.validate(v).unwrap();
+                    }
+                    for component in &updated.components {
+                        if let Component::Surface { surface, .. } = component {
+                            surface.validate().unwrap();
+                        }
+                    }
+                }
+            }
+            app.graphical.as_mut().unwrap().cell_mode = true;
+            Controller::scene(
+                &mut app,
+                Viewport {
+                    columns: 60,
+                    rows: 21,
+                    width: 600,
+                    height: 420,
+                    generation: 2,
+                },
+            );
+            assert!(!app.layout.last.as_ref().unwrap().workspace_sidebar);
+            assert!(app.tab_hits.iter().any(|(_, h)| matches!(h, Hit::Close(_))));
+        }
+    }
+
+    #[test]
     fn rack_native_frames_preserve_pointer_projection_and_cell_fallback() {
         use starkit::terminal_graphics::renderer::{RenderMessage, Renderer};
         let mut renderer = Renderer::spawn().unwrap();
-        for theme in ["terminal", "catppuccin-mocha", "catppuccin-latte"] {
+        for theme in [
+            "terminal",
+            "catppuccin-mocha",
+            "catppuccin-latte",
+            "kanagawa",
+            "gruvbox-light",
+            "gruvbox-light-soft",
+            "dos-shell",
+            "norton-commander",
+            "windows-311",
+        ] {
             let mut cfg = Config::default();
             cfg.ui.theme = theme.into();
             cfg.preview.image_scale = crate::config::Scale::Smooth;
@@ -5529,7 +6335,16 @@ mod tests {
             );
             app.enable_graphical();
             app.graphical.as_mut().unwrap().pixel_layout = true;
-            let pictures = fake.fixture.path("pictures");
+            app.graphical.as_mut().unwrap().skin_mode = true;
+            let pictures = fake
+                .fixture
+                .path("Downloads/lemmings-playdate-game.zip/Lemmings.pdx");
+            std::fs::create_dir_all(&pictures).unwrap();
+            std::fs::copy(
+                fake.fixture.path("pictures/harbour.png"),
+                pictures.join("harbour.png"),
+            )
+            .unwrap();
             for name in ["Exports", "RAW"] {
                 std::fs::create_dir(pictures.join(name)).unwrap();
             }
@@ -5564,16 +6379,26 @@ mod tests {
             fake.pump();
             app.tick();
             let readme = pictures.join("harbour.png");
+            // Copy completion reveals the destination. Restore source focus
+            // before marking its file and let the fake worker load its preview.
+            app.focus_pane(0);
+            fake.pump();
+            app.tick();
+            app.core.send(Command::Preview(readme.clone()));
+            fake.pump();
+            app.tick();
             if !app.core.state().selection.is_marked(&readme) {
                 app.core.send(Command::ToggleMarkPath(readme));
                 fake.pump();
                 app.tick();
             }
-            for (columns, rows, width, height) in [
-                (140, 57, 1400, 1147),
-                (160, 60, 1600, 1200),
-                (80, 36, 800, 720),
-                (60, 21, 600, 420),
+            for (columns, rows, width, height, preview_rows) in [
+                (140, 57, 1400, 1147, None),
+                (160, 60, 1600, 1200, None),
+                (160, 60, 960, 900, None),
+                (80, 36, 800, 720, None),
+                (60, 21, 600, 420, None),
+                (160, 60, 1600, 1200, Some(44)),
             ] {
                 let viewport = Viewport {
                     columns,
@@ -5582,19 +6407,143 @@ mod tests {
                     height,
                     generation: 1,
                 };
+                app.layout.native_preview_rows = preview_rows;
+                app.focus_pane(0);
                 let mut scene = Controller::scene(&mut app, viewport);
                 if app.layout.preview_open {
                     let deadline = Instant::now() + Duration::from_secs(5);
                     while app.graphical.as_ref().unwrap().image.is_none() {
-                        assert!(Instant::now() < deadline);
+                        assert!(Instant::now() < deadline,
+                            "image preview unavailable: theme={theme}, viewport={columns}x{rows}, kind={:?}, cursor={:?}",
+                            app.view.preview.as_deref().map(std::mem::discriminant), app.view.cursor_path);
                         std::thread::sleep(Duration::from_millis(10));
+                        fake.pump();
+                        app.tick();
                         scene = Controller::scene(&mut app, viewport);
                     }
                 }
                 let regions = app.layout.last.clone().unwrap();
+                if app.graphical.as_ref().unwrap().uses_pixel_layout() {
+                    assert!(
+                        scene
+                            .components
+                            .iter()
+                            .all(|c| !matches!(c, Component::Panel { .. } | Component::Tab { .. })),
+                        "native chrome must not paint legacy pane or tab outlines"
+                    );
+                    let focused = {
+                        let _chrome = starkit::chrome::frame::padding_scope(
+                            app.graphical.as_ref().unwrap().padded_chrome,
+                        );
+                        let _rack = panels::stack::rack_scope(
+                            app.graphical.as_ref().unwrap().uses_pixel_layout()
+                                && layout::rack_browser(&regions),
+                        );
+                        if app.commander {
+                            pane_rect(regions.rect_of(ModuleId::Stack), app.active_pane)
+                        } else {
+                            regions.rect_of(ModuleId::Stack)
+                        }
+                    };
+                    let target = rack_scene::pixel_bounds(
+                        focused,
+                        (
+                            (width / u32::from(columns)) as u16,
+                            (height / u32::from(rows)) as u16,
+                        ),
+                        &scene.placements,
+                    );
+                    let mut expected = starkit::native_surface::Surface::new(
+                        target.width,
+                        target.height,
+                        "transparent".into(),
+                    )
+                    .with_physical_text();
+                    app.theme.rack.focus(
+                        &mut expected,
+                        starkit::native_surface::PixelRect::new(0, 0, target.width, target.height),
+                    );
+                    if theme == "kanagawa" {
+                        assert!(
+                            expected.nodes.iter().any(|node| matches!(node,
+                                starkit::native_surface::Primitive::Sprite { tint: Some(color), .. }
+                                if color == "#7e9cd8"
+                            )),
+                            "Kanagawa focus must match AMP's exact accent, without dimming"
+                        );
+                    }
+                    assert!(
+                        scene.components.iter().any(|c| matches!(c,
+                            Component::Surface { rect, surface }
+                            if *rect == focused.into() && surface.nodes == expected.nodes
+                        )),
+                        "focus must use AMP's thin outline at the pane's physical size"
+                    );
+                }
+                if preview_rows.is_some() {
+                    assert!(regions.rect_of(ModuleId::Stack).height < 18);
+                    assert!(scene.components.iter().any(|component| matches!(component,
+                        Component::Surface { surface, .. }
+                        if surface.nodes.iter().any(|node| matches!(node,
+                            starkit::native_surface::Primitive::Text { text, .. } if text == "FILES · LEFT"
+                        ))
+                    )), "short Commander panes must retain the native KIT header");
+                    assert!(
+                        scene.components.iter().any(|component| matches!(component,
+                            Component::Surface { surface, .. }
+                            if surface.nodes.iter().any(|node| matches!(node,
+                                starkit::native_surface::Primitive::Text { text, .. }
+                                if text.contains("harbour.png") && text.contains('■')
+                            ))
+                        )),
+                        "shrinking the file pane must keep its marked cursor visible"
+                    );
+                }
                 let preview = regions.rect_of(ModuleId::Preview);
                 let operations = regions.rect_of(ModuleId::Operations);
-                assert_eq!(preview.y == operations.y, columns >= 100);
+                assert!(operations.is_empty() || operations.y >= preview.bottom());
+                if app.graphical.as_ref().unwrap().uses_pixel_layout() {
+                    let stack = regions.rect_of(ModuleId::Stack);
+                    let mut files: Vec<_> = scene
+                        .placements
+                        .iter()
+                        .filter(|p| {
+                            p.source.y == stack.y
+                                && p.source.height == stack.height
+                                && p.source.x >= stack.x
+                                && p.source.x + p.source.width <= stack.right()
+                        })
+                        .map(|p| p.target)
+                        .collect();
+                    files.sort_by_key(|r| r.x);
+                    assert_eq!(files.len(), 2);
+                    let gap = starkit::native_surface::Metrics::from_cell(
+                        (width / u32::from(columns)) as u16,
+                        (height / u32::from(rows)) as u16,
+                    )
+                    .gap;
+                    assert_eq!(files[1].x - (files[0].x + files[0].width), gap);
+                    let preview_target = scene
+                        .placements
+                        .iter()
+                        .find(|p| p.source == preview.into())
+                        .unwrap()
+                        .target;
+                    assert_eq!(preview_target.y - (files[0].y + files[0].height), gap);
+                    if !operations.is_empty() {
+                        let ops = scene
+                            .placements
+                            .iter()
+                            .find(|p| p.source == operations.into())
+                            .unwrap()
+                            .target;
+                        assert_eq!(ops.y - (preview_target.y + preview_target.height), gap);
+                    }
+                    assert_eq!(
+                        scene.background,
+                        hex(starkit::theme::Resolve::core(&app.theme).bg)
+                    );
+                }
                 for placement in &scene.placements {
                     placement.validate(viewport).unwrap();
                 }
@@ -5631,10 +6580,16 @@ mod tests {
                             if let Some(dir) = std::env::var_os("STARFOLD_RACK_CAPTURES") {
                                 std::fs::create_dir_all(&dir).unwrap();
                                 image
-                                    .save(
-                                        PathBuf::from(dir)
-                                            .join(format!("native-{theme}-{columns}x{rows}.png")),
-                                    )
+                                    .save(PathBuf::from(dir).join(format!(
+                                        "native-{theme}-{columns}x{rows}{}.png",
+                                        if preview_rows.is_some() {
+                                            "-short"
+                                        } else if width / u32::from(columns) < 8 {
+                                            "-dense"
+                                        } else {
+                                            ""
+                                        }
+                                    )))
                                     .unwrap();
                             }
                             break;
@@ -5663,7 +6618,7 @@ mod tests {
     }
 
     #[test]
-    fn native_chrome_surfaces_fit_and_deck_allocation_stays_stable() {
+    fn native_chrome_surfaces_fit_and_operations_only_allocate_when_needed() {
         let cfg = Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
         let mut app = App::new(
@@ -5707,11 +6662,7 @@ mod tests {
                 .unwrap()
                 .rect_of(ModuleId::Operations)
                 .height;
-            if columns < 100 {
-                assert_eq!(ops_height, 2);
-            } else {
-                assert!(ops_height >= 6);
-            }
+            assert_eq!(ops_height, 0);
             app.layout.focus_set(ModuleId::Operations);
             let scene = Controller::scene(&mut app, viewport);
             assert_eq!(
@@ -5738,15 +6689,11 @@ mod tests {
             }];
             for _ in 0..2 {
                 let failed = Controller::scene(&mut app, viewport);
-                assert_eq!(
-                    app.layout
-                        .last
-                        .as_ref()
-                        .unwrap()
-                        .rect_of(ModuleId::Operations)
-                        .height,
-                    ops_height
-                );
+                let regions = app.layout.last.as_ref().unwrap();
+                let operations = regions.rect_of(ModuleId::Operations);
+                assert!(operations.height >= 6);
+                assert_eq!(operations.width, regions.rect_of(ModuleId::Preview).width);
+                assert!(operations.y >= regions.rect_of(ModuleId::Preview).bottom());
                 for placement in &failed.placements {
                     placement.validate(viewport).unwrap();
                 }
@@ -5898,7 +6845,7 @@ mod tests {
     }
 
     #[test]
-    fn wide_native_deck_can_be_dragged_smaller_and_larger() {
+    fn wide_native_preview_row_can_be_dragged_smaller_and_larger() {
         let cfg = Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
         let mut app = App::new(
@@ -5920,7 +6867,7 @@ mod tests {
         let initial = Controller::scene(&mut app, viewport);
         let before = app.layout.last.clone().unwrap();
         let preview = before.rect_of(ModuleId::Preview);
-        assert_eq!(preview.y, before.rect_of(ModuleId::Operations).y);
+        assert!(before.rect_of(ModuleId::Operations).is_empty());
         let handle = initial.resize_handles[0];
         let origin = u32::from(handle.y) + 8;
         for (action, y) in [("down", origin), ("drag", origin + 64), ("up", origin + 64)] {
@@ -6147,6 +7094,7 @@ mod tests {
         assert_eq!(app.movie_loading_stage(), Some("Loading movie…"));
         let area = Rect::new(0, 0, 80, 16);
         let mut buffer = Buffer::empty(area);
+        app.animation_started = Instant::now();
         app.draw_movie_loading(area, &mut buffer);
         assert!(buffer
             .content
@@ -6154,6 +7102,54 @@ mod tests {
             .map(|c| c.symbol())
             .collect::<String>()
             .contains("Loading movie…"));
+        app.animation_started = Instant::now() - Duration::from_millis(240);
+        let mut animated = Buffer::empty(area);
+        app.draw_movie_loading(area, &mut animated);
+        assert_ne!(
+            buffer, animated,
+            "The loader must animate while storage has not replied"
+        );
+        // A sleeping drive leaves the worker's loading document in place.
+        // Paint and animate before that worker has returned any file data.
+        app.view.preview = Some(Arc::new(Preview::Document(
+            crate::fold::preview::model::Document::new("Loading preview…"),
+        )));
+        assert_eq!(app.movie_loading_stage(), Some("Loading movie…"));
+        for cells in [false, true] {
+            app.graphical.as_mut().unwrap().cell_mode = cells;
+            app.graphical.as_mut().unwrap().pixel_layout = !cells;
+            let scene = Controller::scene(&mut app, Viewport::default());
+            if cells {
+                assert!(scene
+                    .spans
+                    .iter()
+                    .any(|span| span.text.contains("Loading movie…")));
+            } else {
+                assert!(scene.components.iter().any(|component| matches!(component,
+                    Component::Surface { surface, .. } if surface.nodes.iter().any(|node| matches!(node,
+                        starkit::native_surface::Primitive::Text { text, .. }
+                        if text.contains("Loading movie…")
+                    ))
+                )));
+                for component in &scene.components {
+                    if let Component::Surface { surface, .. } = component {
+                        surface.validate().unwrap();
+                    }
+                }
+            }
+            assert!(!scene
+                .components
+                .iter()
+                .any(|component| matches!(component, Component::Image { .. })));
+        }
+        app.graphical.as_mut().unwrap().video_pending = Some(path.clone());
+        app.view.preview = Some(Arc::new(Preview::Error("Old file's error".into())));
+        assert_eq!(
+            app.movie_loading_stage(),
+            Some("Loading movie…"),
+            "A stale error must not hide a new open"
+        );
+        app.graphical.as_mut().unwrap().video_pending = None;
         app.view.preview = Some(Arc::new(Preview::Video {
             metadata: std::sync::Arc::new(crate::fold::preview::model::Document::new(
                 "Movie details",
@@ -6177,7 +7173,23 @@ mod tests {
         ));
         assert_eq!(app.movie_loading_stage(), Some("Starting playback…"));
         {
+            let state = app.graphical.as_mut().unwrap();
+            state.video.as_mut().unwrap().buffering = false;
+            state.video_pending = Some(fake.home().join("next-movie.mkv"));
+        }
+        assert_eq!(app.movie_loading_stage(), Some("Loading movie…"));
+        let opening_next = Controller::scene(&mut app, Viewport::default());
+        assert!(
+            !opening_next
+                .components
+                .iter()
+                .any(|component| matches!(component, Component::Image { .. })),
+            "An old live movie must not cover the new file's loading indicator"
+        );
+        app.graphical.as_mut().unwrap().video_pending = None;
+        {
             let video = app.graphical.as_mut().unwrap().video.as_mut().unwrap();
+            video.buffering = true;
             video.position = 12.;
         }
         assert_eq!(app.movie_loading_stage(), Some("Buffering movie…"));
@@ -6249,6 +7261,9 @@ mod tests {
                     && span.text.chars().any(|c| matches!(c, '▀' | '▄'))),
             "Cell preview painted a half-block poster behind the frontend image"
         );
+        assert!(!scene.spans.iter().any(|span| rect.contains((span.x, span.y).into())
+            && span.text.contains("video ·")),
+            "The legacy movie caption must not leak past the graphical transport");
     }
 
     #[test]
@@ -6293,7 +7308,83 @@ mod tests {
     }
 
     #[test]
-    fn native_header_truncates_long_titles_before_the_controls() {
+    fn preview_close_uses_amp_header_inset_and_only_the_painted_target_closes() {
+        for (columns, rows, width, height) in [
+            (160, 50, 1600, 1000),
+            (120, 40, 2400, 1400),
+            (80, 36, 801, 451),
+        ] {
+            let cfg = Config::default();
+            let (core, fake) = crate::ui::fake::handle(cfg.core());
+            let mut app = App::new(
+                core,
+                cfg,
+                fake.home().join("config.toml"),
+                None,
+                Graphics::disabled(),
+            );
+            app.enable_graphical();
+            app.graphical.as_mut().unwrap().pixel_layout = true;
+            app.graphical.as_mut().unwrap().skin_mode = true;
+            app.layout.preview_open = true;
+            let v = Viewport {
+                columns,
+                rows,
+                width,
+                height,
+                generation: 1,
+            };
+            let scene = Controller::scene(&mut app, v);
+            let preview = app.layout.last.as_ref().unwrap().rect_of(ModuleId::Preview);
+            let placement = scene
+                .placements
+                .iter()
+                .find(|p| p.source == preview.into())
+                .unwrap();
+            let close = app
+                .graphical
+                .as_ref()
+                .unwrap()
+                .preview_close
+                .expect("painted close target");
+            assert_eq!(
+                close.x + close.width,
+                placement.target.x + placement.target.width - 10
+            );
+            assert_eq!(close.y, placement.target.y + 7);
+            assert_eq!((close.width, close.height), (30, 24));
+            let old = starkit::chrome::header::slots(preview, &app.panel_words(ModuleId::Preview))
+                .into_iter()
+                .find(|(w, _)| *w == panels::Word::Close)
+                .unwrap()
+                .1;
+            let old_x = placement.target.x
+                + ((u32::from(old.x + old.width / 2 - preview.x)
+                    * u32::from(placement.target.width))
+                    / u32::from(preview.width)) as u16;
+            let old_y = placement.target.y + placement.row_edge(old.y - preview.y).round() as u16;
+            for (px, py, open) in [
+                (old_x, old_y + 2, true),
+                (close.x + close.width / 2, close.y + close.height / 2, false),
+            ] {
+                Controller::input(
+                    &mut app,
+                    Input::Pointer {
+                        action: "down".into(),
+                        button: 0,
+                        x: 0,
+                        y: 0,
+                        pixel: Some([px.into(), py.into()]),
+                        modifiers: 0,
+                    },
+                );
+                assert_eq!(app.layout.preview_open, open);
+            }
+        }
+    }
+
+    #[test]
+    fn native_header_clips_shaped_long_titles_before_the_controls() {
         use starkit::native_surface::Primitive;
         let _padding = starkit::chrome::frame::padding_scope(true);
         let theme = crate::ui::theme::tests_support::theme("terminal");
@@ -6319,11 +7410,8 @@ mod tests {
                 unreachable!()
             };
             assert!(*mono);
-            assert!(text.ends_with('…'));
-            assert!(
-                starkit::ratatui::text::Line::raw(text.as_str()).width()
-                    <= usize::from(rect.width / 8)
-            );
+            assert_eq!(text, &title);
+            assert!(rect.width > 0);
             assert!(surface
                 .nodes
                 .iter()
@@ -6333,7 +7421,7 @@ mod tests {
     }
 
     #[test]
-    fn graphical_menu_spacing_and_shortcuts_share_mouse_slots_in_both_themes() {
+    fn graphical_headers_shape_amp_labels_inside_their_full_hit_targets() {
         use starkit::chrome::header::{self, Word as _};
         use starkit::native_surface::Primitive;
         let _padding = starkit::chrome::frame::padding_scope(true);
@@ -6344,66 +7432,59 @@ mod tests {
             .collect();
         for name in ["terminal", "catppuccin-latte"] {
             let theme = crate::ui::theme::tests_support::theme(name);
-            let shortcut = hex(theme
-                .rack
-                .button
-                .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]));
-            for enabled in [false, true] {
-                let Component::Surface { surface, .. } =
-                    native_header(rect, "Files", &words, &theme, (8, 18), enabled, 0)
+            let Component::Surface { surface, .. } =
+                native_header(rect, "Files", &words, &theme, (8, 18), true, 0)
+            else {
+                unreachable!()
+            };
+            surface.validate().unwrap();
+            for (word, slot) in header::slots(rect, &words) {
+                let label = surface
+                    .nodes
+                    .iter()
+                    .find(
+                        |node| matches!(node, Primitive::Text { text, .. } if text.as_str() == word.word().as_ref()),
+                    )
+                    .expect("full header label");
+                let Primitive::Text {
+                    rect: label,
+                    size,
+                    mono,
+                    ..
+                } = label
                 else {
                     unreachable!()
                 };
-                surface.validate().unwrap();
-                for (word, slot) in header::slots(rect, &words) {
-                    assert_ne!(word, panels::Word::Back);
-                    for (offset, c) in word.word().chars().enumerate() {
-                        let expected_x = (slot.x - 1 + offset as u16) * 8;
-                        let node = surface
-                            .nodes
-                            .iter()
-                            .skip(1)
-                            .find(|node| matches!(node, Primitive::Text { rect, .. } if rect.x == expected_x))
-                            .unwrap();
-                        let Primitive::Text {
-                            rect,
-                            text,
-                            color,
-                            bold,
-                            mono,
-                            ..
-                        } = node
-                        else {
-                            unreachable!()
-                        };
-                        assert_eq!(rect.width, 8);
-                        assert_eq!(*text, c.to_string());
-                        assert!(*mono);
-                        let highlighted = enabled && word.mnemonic() == Some((c, offset as u16));
-                        assert_eq!(*bold, highlighted);
-                        assert_eq!(
-                            *color,
-                            if highlighted {
-                                shortcut.clone()
-                            } else {
-                                hex(theme
-                                    .rack
-                                    .foreground
-                                    .ensure_contrast(theme.rack.button, 4.5))
-                            }
-                        );
-                        assert_eq!(
-                            header::hit(
-                                Rect::new(0, 0, 100, 20),
-                                &words,
-                                slot.x + offset as u16,
-                                slot.y
-                            ),
-                            Some(word)
-                        );
-                    }
+                assert_eq!((label.x, label.width), ((slot.x - 1) * 8, slot.width * 8));
+                assert_eq!(*size, 10);
+                assert!(*mono);
+                if let Some((key, offset)) = word.mnemonic() {
+                    let highlight = surface.nodes.iter().find(|node| matches!(node,
+                        Primitive::Text { text, bold: true, size: 10, .. }
+                        if text.trim() == key.to_string()
+                            && text.chars().position(|c| c == key) == Some(usize::from(offset))
+                    )).expect("native header mnemonic highlight");
+                    assert_eq!(highlight.rect(), *label);
+                }
+                for x in slot.x..slot.right() {
+                    assert_eq!(header::hit(rect, &words, x, slot.y), Some(word));
                 }
             }
+            let Component::Surface {
+                surface: inactive, ..
+            } = native_header(rect, "Files", &words, &theme, (8, 18), false, 0)
+            else {
+                unreachable!()
+            };
+            assert_eq!(inactive.hits, surface.hits);
+            assert!(!inactive.nodes.iter().any(|node| matches!(
+                node,
+                Primitive::Text {
+                    bold: true,
+                    size: 10,
+                    ..
+                }
+            )));
         }
     }
 
@@ -6587,6 +7668,23 @@ mod tests {
                 .any(|component| matches!(component, Component::Image { .. })),
             "a different document must never retain the old page"
         );
+
+        // A metadata-only preview must remove the raster as well as its
+        // pending identity, so an older worker reply cannot restore it.
+        app.graphical.as_mut().unwrap().image = Some(("old-page".into(), "payload".into()));
+        app.view.preview = Some(Arc::new(Preview::Document(
+            crate::fold::preview::model::Document::new("File metadata"),
+        )));
+        scene.components.clear();
+        app.graphical_image(&mut scene, &regions);
+        assert!(!scene
+            .components
+            .iter()
+            .any(|component| matches!(component, Component::Image { .. })));
+        let state = app.graphical.as_ref().unwrap();
+        assert!(state.image.is_none());
+        assert!(state.image_source.is_none());
+        assert!(state.image_id.is_none());
     }
 
     #[test]
@@ -6663,8 +7761,10 @@ mod tests {
         fake.pump();
         app.tick();
         let viewport = Viewport {
-            columns: 100,
-            rows: 40,
+            columns: if pixel_layout && desktop { 160 } else { 100 },
+            rows: if pixel_layout && desktop { 60 } else { 40 },
+            width: if pixel_layout && desktop { 1600 } else { 1200 },
+            height: if pixel_layout && desktop { 1200 } else { 800 },
             ..Viewport::default()
         };
         let scene = Controller::scene(&mut app, viewport);
@@ -6768,6 +7868,53 @@ mod tests {
             target_track.bottom() - 1,
         );
         assert_eq!(app.dnd.offer.as_ref().unwrap().sources.len(), 2);
+        let (hint_row, hint) = {
+            let _chrome = starkit::chrome::frame::padding_scope(
+                app.graphical.as_ref().unwrap().padded_chrome,
+            );
+            app.drop_target_row(app.layout.last.as_ref().unwrap())
+                .unwrap()
+        };
+        assert!(hint.contains("2 items") && hint.contains("destination/"));
+        let hover_scene = Controller::scene(&mut app, viewport);
+        if pixel_layout {
+            assert!(hover_scene.components.iter().any(|component| matches!(component,
+                Component::Surface { rect, surface } if *rect == hint_row.into()
+                    && surface.nodes.iter().any(|node| matches!(node,
+                        starkit::native_surface::Primitive::Text { text, .. } if text == &hint
+                    ))
+            )), "native destination must show the same pending-file row as cells");
+            let image =
+                starkit::terminal_graphics::renderer::render_reference(&hover_scene).unwrap();
+            let target = rack_scene::pixel_bounds(
+                hint_row,
+                (
+                    (viewport.width / u32::from(viewport.columns)) as u16,
+                    (viewport.height / u32::from(viewport.rows)) as u16,
+                ),
+                &hover_scene.placements,
+            );
+            let bg = app.theme.row_cursor_bg;
+            assert_eq!(
+                image
+                    .get_pixel(
+                        u32::from(target.x + 1),
+                        u32::from(target.y + target.height / 2)
+                    )
+                    .0,
+                [bg.r, bg.g, bg.b, 255],
+                "native listing must not paint over the destination row"
+            );
+            if let Some(dir) = std::env::var_os("STARFOLD_DND_CAPTURES") {
+                std::fs::create_dir_all(&dir).unwrap();
+                image
+                    .save(
+                        PathBuf::from(dir)
+                            .join(format!("native-drop-fast-{fast}-desktop-{desktop}.png")),
+                    )
+                    .unwrap();
+            }
+        }
         let source_cursor = app.view.cursor_path.clone();
         app.dnd_autoscroll();
         assert_eq!(
@@ -6802,6 +7949,13 @@ mod tests {
             app.dnd.hover.is_none(),
             "copying into the source directory must be rejected"
         );
+        if pixel_layout {
+            let rejected = Controller::scene(&mut app, viewport);
+            assert!(!rejected.components.iter().any(|component| matches!(component,
+                Component::Surface { surface, .. } if surface.nodes.iter().any(|node|
+                    matches!(node, starkit::native_surface::Primitive::Text { text, .. } if text == &hint))
+            )), "leaving a valid target must remove its pending-file row");
+        }
         pointer(&mut app, "up", row.x + 4, row.y);
         fake.pump();
         app.tick();
@@ -6934,6 +8088,28 @@ mod tests {
             );
         }
         assert!(!destination.join("source-02").exists());
+        assert_eq!(
+            app.active_pane, 1,
+            "completed copy must focus the receiving pane"
+        );
+        assert_eq!(app.view.cursor_path, Some(destination.join("source-00")));
+        assert_eq!(app.layout.focus(), ModuleId::Stack);
+        Controller::scene(&mut app, viewport);
+        let pane = app.pane_view(1);
+        let _chrome =
+            starkit::chrome::frame::padding_scope(app.graphical.as_ref().unwrap().padded_chrome);
+        let capacity = panels::stack::visible_rows(
+            pane_rect(
+                app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack),
+                1,
+            ),
+            0,
+            0,
+        );
+        assert!(
+            pane.cursor >= pane.scroll && pane.cursor < pane.scroll + capacity,
+            "completed copy must scroll into view"
+        );
         assert!(!app.dnd.drag_active);
         assert!(app.graphical.as_ref().unwrap().drag.is_none());
     }

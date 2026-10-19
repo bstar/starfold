@@ -117,6 +117,9 @@ rest of it.
 
 ## Terminal compatibility
 
+For measured results with screenshots and theme comparisons, use the
+[reproducible Nix terminal lab](docs/terminal-lab.md).
+
 **For the complete terminal feature set, use Kitty 0.47 or newer, directly
 or over SSH without a terminal multiplexer.** Its [OSC 72 drag-and-drop
 protocol](https://sw.kovidgoyal.net/kitty/dnd-protocol/) enables file gestures

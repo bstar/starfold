@@ -1,6 +1,6 @@
 //! STAR/FOLD's theme: the shared one, plus the roles a file manager needs.
 //!
-//! The sixteen built-in theme files are STAR/KIT's and are shared with
+//! The shared built-in theme files are STAR/KIT's and are shared with
 //! STAR/AMP and STAR/CORD. None of them says anything about a directory
 //! listing, and they should not have to: a theme is eight colours and a
 //! base16 scheme, and everything else is derived from those. So `[fold]` is
@@ -17,6 +17,48 @@ use std::ops::Deref;
 use serde::{Deserialize, Serialize};
 use starkit::theme::color::Rgb;
 use starkit::theme::{pick, Registry, Resolve, Theme as Core, ThemeFile};
+
+/// Optional native palette roles, expressed as the same hex colors as the
+/// rest of a theme. This keeps light wells independent of raised frame faces.
+#[cfg(feature = "terminal-graphics")]
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct GraphicalColors {
+    bg: Option<Rgb>,
+    inset_bg: Option<Rgb>,
+    fg: Option<Rgb>,
+    muted: Option<Rgb>,
+    accent: Option<Rgb>,
+    selected: Option<Rgb>,
+    border: Option<Rgb>,
+    error: Option<Rgb>,
+}
+#[cfg(feature = "terminal-graphics")]
+impl GraphicalColors {
+    fn apply(
+        self,
+        mut palette: starkit::native_surface::style::Palette,
+    ) -> starkit::native_surface::style::Palette {
+        let rgb = |c: Rgb| [c.r, c.g, c.b];
+        for (target, value) in [
+            (&mut palette.bg, self.bg),
+            (&mut palette.fg, self.fg),
+            (&mut palette.muted, self.muted),
+            (&mut palette.accent, self.accent),
+            (&mut palette.selected, self.selected),
+            (&mut palette.border, self.border),
+            (&mut palette.error, self.error),
+        ] {
+            if let Some(value) = value {
+                *target = rgb(value);
+            }
+        }
+        if let Some(value) = self.inset_bg {
+            palette.inset_bg = Some(rgb(value));
+        }
+        palette
+    }
+}
 
 /// The `[fold]` table, as a theme file may state it.
 ///
@@ -201,6 +243,8 @@ pub struct Theme {
     #[cfg(feature = "terminal-graphics")]
     graphical_core: Core,
     #[cfg(feature = "terminal-graphics")]
+    graphical_palette: starkit::native_surface::style::Palette,
+    #[cfg(feature = "terminal-graphics")]
     graphical_fold: Fold,
     #[cfg(feature = "terminal-graphics")]
     cell_fold: Fold,
@@ -209,6 +253,24 @@ pub struct Theme {
 }
 
 impl Theme {
+    #[cfg(feature = "terminal-graphics")]
+    pub fn set_graphical_palette(&mut self, palette: crate::config::GraphicalPalette) {
+        use starkit::native_surface::style::REFERENCE_PALETTE;
+        let palette = match palette {
+            crate::config::GraphicalPalette::Classic => REFERENCE_PALETTE,
+            crate::config::GraphicalPalette::Theme => self.graphical_palette,
+        };
+        if self.rack.style().palette != palette {
+            self.rack = super::rack::Colors::from_palette(palette);
+            self.graphical_core = self.core.clone();
+            self.rack.apply(&mut self.graphical_core);
+            self.graphical_fold = Fold::derive(&self.graphical_core, &FoldColors::default(), None);
+            if self.graphical_rows {
+                self.fold = self.graphical_fold.clone();
+            }
+        }
+    }
+
     #[cfg(feature = "terminal-graphics")]
     pub fn set_graphical(&mut self, graphical: bool) {
         if self.graphical_rows != graphical {
@@ -260,7 +322,15 @@ impl Resolve for Theme {
         });
         let fold = Fold::derive(&core, &stated, file.base16.as_ref());
         #[cfg(feature = "terminal-graphics")]
-        let rack = super::rack::Colors::new(&core);
+        let graphical_palette = file
+            .table::<GraphicalColors>("graphical")
+            .unwrap_or_else(|error| {
+                tracing::warn!("{}: the [graphical] table was ignored: {error}", core.id);
+                GraphicalColors::default()
+            })
+            .apply(super::rack::Colors::palette(&core));
+        #[cfg(feature = "terminal-graphics")]
+        let rack = super::rack::Colors::from_palette(graphical_palette);
         #[cfg(feature = "terminal-graphics")]
         let mut graphical_core = core.clone();
         #[cfg(feature = "terminal-graphics")]
@@ -278,6 +348,8 @@ impl Resolve for Theme {
         Self {
             #[cfg(feature = "terminal-graphics")]
             cell_fold: fold.clone(),
+            #[cfg(feature = "terminal-graphics")]
+            graphical_palette,
             #[cfg(feature = "terminal-graphics")]
             graphical_core,
             #[cfg(feature = "terminal-graphics")]
@@ -300,8 +372,40 @@ impl Resolve for Theme {
 /// takes.
 pub const THEME_PATHS: starkit::paths::Paths = crate::paths::PATHS;
 
+pub const EXTRA_THEMES: &[starkit::theme::Builtin] = &[
+    starkit::theme::Builtin {
+        id: "gruvbox-light",
+        toml: include_str!("../../themes/gruvbox-light.toml"),
+    },
+    starkit::theme::Builtin {
+        id: "gruvbox-light-soft",
+        toml: include_str!("../../themes/gruvbox-light-soft.toml"),
+    },
+    starkit::theme::Builtin {
+        id: "dos-shell",
+        toml: include_str!("../../themes/dos-shell.toml"),
+    },
+    starkit::theme::Builtin {
+        id: "norton-commander",
+        toml: include_str!("../../themes/norton-commander.toml"),
+    },
+    starkit::theme::Builtin {
+        id: "windows-311",
+        toml: include_str!("../../themes/windows-311.toml"),
+    },
+];
+static THEMES: std::sync::LazyLock<Vec<starkit::theme::Builtin>> = std::sync::LazyLock::new(|| {
+    starkit::theme::BUILTINS
+        .iter()
+        .chain(EXTRA_THEMES)
+        .map(|b| starkit::theme::Builtin {
+            id: b.id,
+            toml: b.toml,
+        })
+        .collect()
+});
 pub fn registry() -> Registry<Theme> {
-    Registry::new(THEME_PATHS)
+    Registry::new(THEME_PATHS).with_builtins(&THEMES)
 }
 
 /// A resolved built-in, for the tests in every other module that need
@@ -313,6 +417,7 @@ pub mod tests_support {
     pub fn theme(id: &str) -> Theme {
         let builtin = starkit::theme::builtin::BUILTINS
             .iter()
+            .chain(super::EXTRA_THEMES)
             .find(|b| b.id == id)
             .unwrap_or_else(|| panic!("no built-in theme {id}"));
         Theme::resolve(&ThemeFile::parse(builtin.toml).expect("a built-in parses"))
@@ -328,7 +433,7 @@ mod tests {
     #[cfg(feature = "terminal-graphics")]
     #[test]
     fn rack_themes_keep_text_legible_and_restore_cell_colors() {
-        for builtin in BUILTINS {
+        for builtin in BUILTINS.iter().chain(EXTRA_THEMES) {
             let mut theme = theme(builtin.id);
             let before = (theme.panel_bg, theme.accent, theme.fold.dir_fg);
             theme.set_graphical(true);
@@ -351,8 +456,34 @@ mod tests {
     }
 
     #[test]
+    fn fold_themes_are_selectable_and_match_their_ids() {
+        let registry = registry();
+        for b in EXTRA_THEMES {
+            let theme = registry.load(b.id).unwrap();
+            assert_eq!(theme.core().id, b.id);
+            assert!(registry.selectable().iter().any(|id| id == b.id));
+        }
+    }
+
+    #[cfg(feature = "terminal-graphics")]
+    #[test]
+    fn native_palette_overrides_survive_switching_classic_on_and_off() {
+        for b in EXTRA_THEMES {
+            let mut theme = theme(b.id);
+            let wanted = theme.rack.style().palette;
+            theme.set_graphical_palette(crate::config::GraphicalPalette::Classic);
+            theme.set_graphical_palette(crate::config::GraphicalPalette::Theme);
+            assert_eq!(theme.rack.style().palette, wanted);
+        }
+        let mut windows = theme("windows-311");
+        windows.set_graphical(true);
+        assert_eq!(windows.panel_bg, Rgb::new(255, 255, 255));
+        assert_eq!(windows.rack.frame, Rgb::new(192, 192, 192));
+    }
+
+    #[test]
     fn every_builtin_resolves_with_a_fold_table() {
-        for b in BUILTINS {
+        for b in BUILTINS.iter().chain(EXTRA_THEMES) {
             let t = Theme::resolve(&ThemeFile::parse(b.toml).unwrap());
             assert_ne!(t.fold.dir_fg, t.panel_bg, "{}: directories vanish", b.id);
         }
@@ -367,7 +498,7 @@ mod tests {
     /// special-casing the theme that tripped it.
     #[test]
     fn every_builtin_fold_role_is_legible() {
-        for b in BUILTINS {
+        for b in BUILTINS.iter().chain(EXTRA_THEMES) {
             assert_legible(b.id, &theme(b.id));
         }
 

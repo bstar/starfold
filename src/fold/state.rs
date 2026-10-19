@@ -3069,6 +3069,7 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
     let mut events = vec![Event::Queue(op_id)];
     let mut touch_dirs: BTreeSet<PathBuf> = BTreeSet::new();
     let mut moved_or_deleted: Vec<PathBuf> = Vec::new();
+    let mut reveal = None;
 
     if let Some(op) = state.queue.get_mut(op_id) {
         op.skipped += outcome.skipped;
@@ -3079,6 +3080,12 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
         } else {
             OpStatus::Done
         };
+        if !outcome.cancelled
+            && matches!(op.kind, OpKind::Copy | OpKind::Move)
+            && op.origin_tab == Some(state.tabs.active().id)
+        {
+            reveal = outcome.completed_targets.first().cloned();
+        }
 
         if op.status == OpStatus::Failed {
             let total = outcome.done + outcome.skipped + outcome.failed.len();
@@ -3170,6 +3177,14 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
         events.push(Event::Selection);
     }
 
+    let mut reveal_jobs = Vec::new();
+    if let Some(path) = reveal {
+        if let Some(effects) = reveal_completed_transfer(state, &path) {
+            events.extend(effects.events);
+            reveal_jobs = effects.jobs;
+        }
+    }
+
     let mut frame_dirs = all_frame_dirs(state);
     frame_dirs.extend(
         state
@@ -3192,10 +3207,55 @@ fn done_finished(state: &mut State, op_id: OpId, outcome: super::ops::Outcome) -
 
     let mut next = run_next(state);
     let mut jobs = jobs;
+    jobs.extend(reveal_jobs);
     jobs.append(&mut next.jobs);
     events.append(&mut next.events);
 
     Effects { jobs, events }
+}
+
+fn reveal_completed_transfer(state: &mut State, path: &Path) -> Option<Effects> {
+    let dir = path.parent()?;
+    if state.search.is_some()
+        || state
+            .preview
+            .as_ref()
+            .and_then(|(_, p)| p.extension())
+            .is_some_and(|info| info.interactive && info.modified)
+    {
+        return None;
+    }
+    let tab = state.tabs.active();
+    let indices: Vec<_> = if state.commander { vec![1, 2] } else { vec![0] };
+    let index = indices
+        .iter()
+        .copied()
+        .find(|&i| tab.stacks.get(i).is_some_and(|s| s.active().dir == dir))
+        .or_else(|| {
+            indices.iter().copied().find(|&i| {
+                tab.stacks
+                    .get(i)
+                    .is_some_and(|s| dir.parent() == Some(s.active().dir.as_path()))
+            })
+        })?;
+    if state.tabs.active().stacks[index].active().dir != dir {
+        state.tabs.active_mut().stacks[index].push(dir.to_path_buf());
+    }
+    if state.commander {
+        state.commander_pane = index - 1;
+    }
+    let mut effects = switch_stack(state, index, false);
+    if path
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+    {
+        state.show_hidden = true;
+    }
+    let frame = state.active_frame_mut();
+    frame.filter.clear();
+    frame.cursor_name = path.file_name().map(|name| name.to_os_string());
+    effects.events.push(Event::TransferRevealed);
+    Some(effects)
 }
 
 fn done_changed(state: &mut State, dirs: Vec<PathBuf>) -> Effects {
@@ -4291,6 +4351,7 @@ mod tests {
         );
 
         let outcome = super::super::ops::Outcome {
+            completed_targets: vec![],
             reversible: Vec::new(),
             done: 1,
             skipped: 0,

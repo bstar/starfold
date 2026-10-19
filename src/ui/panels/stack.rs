@@ -67,6 +67,18 @@ pub struct Row {
     pub time: String,
 }
 
+impl Row {
+    /// The same inexpensive glyph classification in cell and native listings.
+    pub fn icon(&self) -> &'static str {
+        match self.kind {
+            Kind::Dir => "▸",
+            Kind::Symlink { .. } => "↗",
+            Kind::Exec => "◆",
+            _ => crate::fold::file_type::classify(std::path::Path::new(&self.name), &[]).icon(),
+        }
+    }
+}
+
 /// One folded parent level: `▸ ~`, `▸ projects/`.
 #[derive(Debug, Clone)]
 pub struct Crumb {
@@ -148,12 +160,19 @@ pub fn split(body: Rect, depth: usize, fold_rows: u16) -> Split {
     };
     // Graphical column labels and the summary/toolbar share the geometry
     // used by scrolling, pointer selection and file dragging.
-    let rack = RACK_COLUMNS.get() && body.height >= 12;
+    let rack = RACK_COLUMNS.get() && body.height >= 6;
+    // Pixel panes already supply their bottom inset. Use the padded body's
+    // spare bottom row for the path footer instead of leaving both clearances.
+    let reserved_rows = if rack {
+        4 - u16::from(frame::extra_rows() > 0)
+    } else {
+        0
+    };
     let list = Rect {
         y: rule.y + rule.height + u16::from(rack),
         height: body
             .height
-            .saturating_sub(crumbs.height + rule.height + if rack { 4 } else { 0 }),
+            .saturating_sub(crumbs.height + rule.height + reserved_rows),
         ..body
     };
     Split {
@@ -369,6 +388,17 @@ fn render_rule(area: Rect, buf: &mut Buffer, t: &Theme, v: &View<'_>, commander:
     };
     let line = rule_line(area.width, &rule, v.truncated, v.filter);
     buf.set_string(area.x, area.y, line, style);
+    let border = rgb(if v.focused {
+        t.border_focused
+    } else {
+        t.border
+    });
+    for x in area.x..area.right() {
+        let cell = &mut buf[(x, area.y)];
+        if cell.symbol() == "─" {
+            cell.set_fg(border);
+        }
+    }
 }
 
 /// `─ name ── stats ───...─── /filter`: a leading rule, the caller's own
@@ -615,20 +645,7 @@ fn render_row(
     buf.set_string(
         x,
         y,
-        fit(
-            &format!(
-                "{} {}",
-                match row.kind {
-                    Kind::Dir => "▸",
-                    Kind::Symlink { .. } => "↗",
-                    Kind::Exec => "◆",
-                    _ => crate::fold::file_type::classify(std::path::Path::new(&row.name), &[])
-                        .icon(),
-                },
-                row.name
-            ),
-            cols.name_w,
-        ),
+        fit(&format!("{} {}", row.icon(), row.name), cols.name_w),
         style_for(kind_fg(t, row.kind)),
     );
     x += cols.name_w;

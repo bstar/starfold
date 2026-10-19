@@ -41,19 +41,26 @@ Override it with `STAR_GRAPHICS_FONT="JetBrainsMono Nerd Font"`; optionally use
 `STAR_GRAPHICS_FONT_SIZE=16` for a pixel size override. If the terminal font
 cannot be found, an installed monospace font or bundled Liberation Mono is used.
 Swash rasterization can differ slightly from Kitty’s antialiasing and hinting.
-The graphical presentation follows the [Classic Commander rack study](graphical/treatments/README.md),
-with beveled slate chrome, recessed lists and themed readouts. Roomy windows show
-marked totals, active location, cached volume capacity and workspace tabs above
-the file browser, with Preview and Operations beside each other below. Narrow or
-short windows stack those modules; embedded audio, the editor and expanded movies
-retain a full-width Preview. The cell presentation keeps its established layout
-and palette. [Native Classic capture](graphical/treatments/native-classic.png),
+The graphical presentation uses STAR/KIT's shared AMP pane frames, title strips
+and buttons, with independent file panes and a compact tab rail. Embedded
+STAR/AMP keeps its own player artwork and controls. Its native canvas is placed
+at its original physical size rather than stretched through the preview pane;
+helpers advertising `native_pixels_v1` receive the exact allocation and precise
+surface-local pointer coordinates. Older helpers retain whole-cell sizing.
+
+Roomy windows place Preview and Operations beside each other below the browser.
+Narrow or short windows stack them; embedded audio, the editor and expanded
+movies retain a full-width Preview. Commander has independent pane headers,
+labeled file columns and pane-specific actions. Image inspection places the
+preview beside cached metadata. Operations keeps transfer estimates and its
+ordinary queue. Cell presentation retains its established layout and palette.
+
+The [earlier rack study](graphical/treatments/README.md) and its
+[Classic](graphical/treatments/native-classic.png),
 [Mocha](graphical/treatments/native-mocha.png) and
-[Latte](graphical/treatments/native-latte.png) show actual Rust-rendered fixture scenes.
-Commander uses a shared header, labeled file columns and pane-specific action
-buttons. Image inspection places the preview beside cached file metadata;
-Operations has transfer/ETA readouts, two-line queue entries and segmented progress.
-Pane actions, queue scrolling and pointer selection use the same controller geometry.
+[Latte](graphical/treatments/native-latte.png) captures document the previous
+presentation. Native painting and pointer input now use KIT's same placement
+edges, including panel padding and resized rows.
 
 Reconnect after changing the terminal font family. Installed fonts supply Unicode
 fallback.
@@ -233,6 +240,14 @@ mouse release cannot queue a second operation. Both terminal and fallback drags
 open the existing Copy/Move chooser. Source scrolling is held, destination edge
 and wheel scrolling remain available, and self-drops are rejected. Unchanged
 hover acceptance is not echoed repeatedly through the graphical relay.
+Valid targets show the same highlighted pending-file row as cell mode, naming
+the incoming file or marked-set count, operation and destination. Native lists
+paint this hint above their rows; leaving a valid target or cancelling the drag
+removes it. Desktop offers without filenames show “incoming files”.
+After a successful file transfer, the receiving pane focuses the first copied
+file and scrolls it into view. Conflict-renamed copies select their actual new
+name; skipped or failed items do not become completion selections. Dropping
+into a visible subfolder opens that folder to reveal the result.
 
 Raster previews are decoded once, resized once per geometry and reused during
 ordinary repaints. The duplicate half-block preview is omitted in pixel mode.
@@ -327,14 +342,35 @@ The source of the shared renderer is in STAR/KIT's `src/terminal_graphics/native
 
 The graphical presentation uses KIT native surfaces for compact pane toolbars,
 continuous storage meters, and the padded status bar. Tabs keep their close
-buttons and grow with the label within a bounded width. Operations collapses to
+buttons and grow with the label within a bounded width. Their 28px strip uses
+an active underline. File names use 11px text; breadcrumb text is capped at
+11px using KIT's cell metrics, with explicit path separators. Operations collapses to
 an idle/history strip and expands for active work, failures, or explicit focus.
 These surfaces are negotiated using the `native_surfaces` frontend capability.
 The additive `pixel_layout` capability supplies shared KIT pixel gaps and panel
 insets, independent of terminal cell proportions. Rendering and mouse projection
-use the same placements, including modal layers and captured scrollbars. Fonts
-retain terminal-derived sizes; text bitmaps are not resized. Older clients keep
+use the same placements, including modal layers and captured scrollbars. Pane
+headings use AMP's fixed 12px typography; text bitmaps are not resized. Older clients keep
 their original cell geometry.
+
+Preview's native Close button uses AMP's 30×24px header target with a 10px
+right inset. Its pointer target follows the painted pixel bounds through
+resizing and zoom; the former cell-word position is ordinary header space.
+
+Native pane frames use KIT's `Style::frame`/`Style::panel`; focus uses AMP's
+original one-pixel corner mask with AMP's exact theme accent (foreground for
+Silver) at the same physical
+bounds. Its stroke stays one physical pixel at enlarged terminal sizes. Legacy `Panel` markers contribute
+to scroll identity but are removed before pixel painting, so a second outline
+cannot leak through the frame's rounded corners.
+The same KIT panel constructor also wraps previews and short file panes whose
+contents still come from the cell controller. They do not fall back to a
+separate border-only treatment when the preview grows.
+
+The graphical view resolves the selected theme using AMP's pane palette roles,
+including Kanagawa's raised slate frames and darker content wells. Set
+`ui.graphical_palette = "classic"` for AMP's original Classic colors; `"theme"`
+(the default) follows the selected theme. Cell presentation keeps its theme.
 
 STAR/AMP's native player lives in STAR/AMP (`src/embed/native.rs`). The optional
 `native_surface_v1` embed extension returns KIT primitives and owns transport,
@@ -343,8 +379,25 @@ forwards input through the existing supervised child protocol. Older helpers
 continue to provide cells. Local animation is capped at 30 FPS and SSH at 15 FPS;
 hidden native players stop publishing frames while audio continues.
 
+Native Preview reserves the full AMP player's 230px display at normal density
+(460px at 2x), including space for FOLD's header and insets. This uses physical
+pixel geometry rather than a fixed number of terminal rows. AMP supplies the
+same artwork as its standalone player; FOLD does not stretch it. Short windows
+retain a usable file browser and AMP's compact compatibility presentation.
+The real-helper regression can also save compositor captures:
+
+```sh
+STARFOLD_TEST_AMP=/absolute/path/to/staramp \
+STARFOLD_AMP_CAPTURES=/tmp/fold-amp-captures \
+nix develop -c cargo test --locked --bin starfold \
+  installed_amp_renders_full_artwork_in_native_preview -- --ignored
+```
+
 The graphical Nix package includes a matching helper. For a manual build, put the
 matching STAR/AMP experimental build on the graphical launcher's private PATH.
+An adjacent `starfold-staramp` beside the FOLD executable takes priority over
+PATH; keep it linked to the matching AMP launch script rather than a copied
+binary. Test this selected helper directly when validating embedded controls.
 This does not require replacing the normal `staramp` command. On Linux, a raw
 Nix-built helper also needs its dynamic ALSA plugins. In the STAR/AMP checkout,
 build `nix build .#alsa-plugins --out-link target/alsa-plugins`, then point the
@@ -366,15 +419,42 @@ Linux Xvfb. The script captures Fold, Commander/tabs, a popup, the embedded
 player, pause and enlarged text. Its silent WAV checks presentation, not audible
 playback. It does not modify the user's application configuration or files.
 
-Graphical tabs use numbered sessions: a small one-based position, a soft filled
-active rectangle, bold active name and muted inactive names. Numbers follow the
-current session order, not the visible scroll offset. Close buttons and rail
-controls retain separate click targets; tabs have no bottom underline.
+Graphical workspace navigation supports two mutually exclusive treatments:
+
+```toml
+[ui]
+workspace_navigation = "numbered_sessions" # default; or "sidebar"
+```
+
+Click **Sidebar** in the numbered row, or **Numbered sessions** at the bottom
+of the sidebar, to switch immediately and save the preference. Editing the
+configuration directly takes effect on the next launch. Numbered sessions show an active
+number tile beside the workspace name. The sidebar shows names and locations
+in a left column, with a filled active row. It falls back to numbered sessions
+below 124 logical columns or 40 rows, preserving space for the browser.
+Both treatments keep the active workspace visible as the list grows and provide
+New and Manage controls. Manage and right-click open the existing workspace
+picker for switching, renaming, reordering, duplicating and closing sessions.
+Keyboard shortcuts and ordinary cell-mode tabs keep their existing behavior.
+
+The native footer is a single 28-pixel title-colored strip. It shows the active
+pane, marks and transient status on the left, with clickable Places, Filter and
+Help labels on the right. Its text uses the shared 11-pixel UI mono font; errors
+and warnings retain their theme colors.
+
+
+The workspace sidebar and pane gaps share the theme’s base background, with a
+subtle selected row and text actions. Horizontal and vertical pane gaps use
+the same KIT metric, including the Commander split. Native Preview spans the browser width. Operations appears
+on its own full-width row below Preview only while the queue contains operations
+or transient worker activity is in progress; clearing the queue releases that
+space. Completed and failed operations remain visible until removed.
+
 
 
 ## Native video Preview
 
-Preview shows an animated loading indicator while opening a movie and starting playback. Buffering is shown beside the timeline until playback resumes. These states appear in both graphical and cell modes; cell-mode letterboxing matches the surrounding preview pane.
+Preview shows an animated loading indicator while opening a movie and starting playback. The graphical picture area displays “Reading video from storage…” while the preview worker is waiting for file data, including drive spin-up; it does not query or claim the drive's power state. The indicator remains visible over the loading document and retires the previous movie image while another file opens. Buffering is shown beside the timeline until playback resumes. These states appear in both graphical and cell modes; cell-mode letterboxing matches the surrounding preview pane.
 
 Select a video to see movie details. IMDb title lookup uses an embedded ID or an exact title and release year from the filename, displaying the poster, title, year, cast and IMDb link. Ambiguous remakes retain local metadata. Results and posters are cached for offline use; unavailable lookup leaves playback working. Set `STARFOLD_MOVIE_LOOKUP=off` to use only local tags. Ratings and synopsis appear when embedded in the file. Press **Enter** on
 the file or click **Play** in the Preview header to start playback. Audio starts at 80%. Header controls
@@ -446,7 +526,13 @@ disables hardware decoding for diagnosis. Logs report the initialized decoder.
 
 Frames pass to Kitty as raw RGBA, separate from application chrome. Local Kitty
 uses temporary-file transfer, avoiding PNG compression and base64 frame expansion.
-Kitty performs display scaling. Hardware decode still downloads frames for CPU
+Movie margins use the preview's themed background. The graphical transport owns
+the movie body without a legacy cell caption underneath it. Audio, Subtitles and
+Full screen highlight their A/S/F shortcuts, which act when Preview has focus.
+The frontend fits frames to the actual physical movie placement before HDR color
+conversion and subtitle composition. Enlarging the player restores detail up to
+the source dimensions without reopening playback. Kitty handles the final fit.
+Hardware decode still downloads frames for CPU
 color conversion and subtitle composition; this is not an all-GPU pipeline.
 
 Embedded audio tracks, text/ASS subtitles, PGS/DVD bitmaps and matching SRT/ASS/VTT
@@ -456,6 +542,10 @@ channel count when supported by the output device, and reports necessary convers
 It does not promise encoded HDMI bitstream passthrough. HDR is tone-mapped to SDR;
 Kitty's RGBA presentation is not HDR output. The SSH path burns the chosen subtitles
 and sends the selected audio through its existing adaptive H.264/AAC proxy.
+Playback, proxies and posters share a Mobius tone curve that preserves in-range
+shadows and midtones while rolling off highlights. It replaces the darker Hable
+curve; black remains black. Several seeks queued before transmission open only
+the final requested decoder generation.
 
 Desktop fullscreen uses a fixed local Kitty kitten and restores the prior window
 state and tab layout. During playback it hides Kitty's tab bar, removes window
@@ -478,3 +568,13 @@ VAAPI: two actual 3840×2160 movies sustained approximately 24 fps. Generated 4K
 A 3840×1600 HDR movie also kept pace at approximately 24 fps with tone mapping.
 These measurements exclude Kitty upload/display and do not guarantee smooth 4K60.
 Run KIT's `movie-bench` example with `--features media` to measure another machine.
+
+On 2026-10-18, the local 3840×2076, 23.976 fps PQ/BT.2020 Predator source
+delivered 81 frames in a six-second original-size decoder/conversion baseline.
+With processing fitted to 1280×692, three four-second seek/playback checks at
+600, 900 and 1800 seconds followed the source cadence after startup, with zero
+reported dropped frames or audio underruns. First-frame seek latency was
+0.7–1.6 seconds. These checks include muted device playback, but exclude Kitty
+upload, visible frame pacing and listening. KIT's ignored
+`real_file_preview_seek_diagnostic` test accepts `STAR_VIDEO_TEST_FILE`, optional
+`STAR_VIDEO_TEST_AUDIO=1`, and `STAR_VIDEO_TEST_NATIVE=1` for original-size comparison.

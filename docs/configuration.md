@@ -92,14 +92,18 @@ variables are parsed, and the file path is passed as one separate argument.
 scheme the rest of the desktop is set to, it matches it, and falls back to
 COSMIC's own settings when there is no Stylix file to read.
 
-Sixteen themes ship built in, and `alt+t` and `alt+shift+t` cycle them live:
+The shared themes ship built in; `F8` / `Shift+F8` and `alt+t` /
+`alt+shift+t` cycle them live:
 
 `winamp-classic` · `cosmic` · `catppuccin-mocha` · `catppuccin-latte` ·
 `gruvbox-dark` · `nord` · `tokyo-night` · `dracula` · `rose-pine` ·
 `everforest` · `solarized-dark` · `one-dark` · `kanagawa` · `ayu-dark` ·
 `matte-black` · `terminal`
 
-They are the same sixteen files STAR/AMP and STAR/CORD use, because all three
+FOLD adds `gruvbox-light`, `gruvbox-light-soft`, `dos-shell`,
+`norton-commander` and `windows-311`; see [Themes](themes.md).
+
+The shared files are the same ones STAR/AMP and STAR/CORD use, because all three
 programs take their theme engine from
 [STAR/KIT](https://github.com/bstar/starkit). A theme set in one looks like
 the theme set in another.

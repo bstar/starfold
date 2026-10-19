@@ -1,0 +1,34 @@
+# STAR/FOLD Windows 3.11 palette. Shared STAR/KIT theme format.
+
+[meta]
+name = "Windows 3.11"
+id = "windows-311"
+variant = "light"
+
+[base16]
+base00 = "#c0c0c0"
+base01 = "#d4d0c8"
+base02 = "#a0a0a0"
+base03 = "#808080"
+base04 = "#505050"
+base05 = "#000000"
+base06 = "#000080"
+base07 = "#ffffff"
+base08 = "#aa0000"
+base09 = "#995000"
+base0A = "#806000"
+base0B = "#006000"
+base0C = "#006060"
+base0D = "#000080"
+base0E = "#800080"
+base0F = "#995000"
+
+[graphical]
+bg = "#c0c0c0"
+inset_bg = "#ffffff"
+fg = "#101010"
+muted = "#505050"
+accent = "#000080"
+selected = "#c6d6ee"
+border = "#808080"
+error = "#aa0000"

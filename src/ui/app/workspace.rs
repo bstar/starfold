@@ -310,10 +310,53 @@ impl App {
             tabs::Hit::Tab(id) if menu => self.open_tab_picker(Some(id)),
             tabs::Hit::Tab(id) => self.tab_action(TabAction::Switch(id)),
             tabs::Hit::New => self.tab_action(TabAction::New),
+            tabs::Hit::Manage => self.open_tab_picker(None),
+            tabs::Hit::NavigationMode => self.toggle_workspace_navigation(),
             tabs::Hit::Previous => self.cycle_tab(-1),
             tabs::Hit::Next => self.cycle_tab(1),
         }
     }
+    fn toggle_workspace_navigation(&mut self) {
+        use crate::config::WorkspaceNavigation;
+        let (next, name) = match self.cfg.ui.workspace_navigation {
+            WorkspaceNavigation::NumberedSessions => (WorkspaceNavigation::Sidebar, "sidebar"),
+            WorkspaceNavigation::Sidebar => {
+                (WorkspaceNavigation::NumberedSessions, "numbered_sessions")
+            }
+        };
+        #[cfg(feature = "terminal-graphics")]
+        if self.graphical.is_some() {
+            starkit::terminal_graphics::session::Controller::input(
+                self,
+                starkit::terminal_graphics::protocol::Input::CancelPointer,
+            );
+        }
+        self.cfg.ui.workspace_navigation = next;
+        self.tab_strip_offset = 0;
+        self.tab_hits.clear();
+        let message = if next == WorkspaceNavigation::Sidebar {
+            "Workspace sidebar selected; narrow windows keep numbered sessions"
+        } else {
+            "Numbered sessions selected"
+        };
+        self.note = Some(
+            match starkit::config::edit::set(
+                &self.cfg_path,
+                "ui",
+                "workspace_navigation",
+                &starkit::config::edit::Value::Str(name.into()),
+            ) {
+                Ok(()) => (message.into(), NoteLevel::Info, Instant::now()),
+                Err(error) => (
+                    format!("Workspace layout changed, but could not save it: {error}"),
+                    NoteLevel::Error,
+                    Instant::now(),
+                ),
+            },
+        );
+        self.repaint = true;
+    }
+
     pub(super) fn cycle_tab(&mut self, delta: i32) {
         let id = {
             let state = self.core.state();

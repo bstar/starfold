@@ -103,6 +103,7 @@
         # One version, read rather than repeated. scripts/check-version.sh
         # asserts the copies that cannot be derived (Cargo.lock).
         cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+        terminalLab = import ./nix/terminal-lab.nix { inherit pkgs; source = ./.; };
         alsaPluginDir = if pkgs.stdenv.hostPlatform.isLinux then pkgs.runCommand "star-media-alsa-plugins" {} ''
           mkdir -p $out
           ln -s ${pkgs.pipewire}/lib/alsa-lib/*.so $out/
@@ -218,6 +219,13 @@
         };
 
         formatter = pkgs.nixpkgs-fmt;
+
+        # These displays/emulators are Linux-only; preserve Darwin evaluation.
+        packages.${if pkgs.stdenv.hostPlatform.isLinux then "terminal-lab" else null} = terminalLab.package;
+        packages.${if pkgs.stdenv.hostPlatform.isLinux then "terminal-lab-manifest" else null} = terminalLab.manifest;
+        devShells.${if pkgs.stdenv.hostPlatform.isLinux then "terminal-lab" else null} = terminalLab.shell;
+        apps.${if pkgs.stdenv.hostPlatform.isLinux then "terminal-lab" else null} = flake-utils.lib.mkApp { drv = terminalLab.package; };
+        checks.${if pkgs.stdenv.hostPlatform.isLinux then "terminal-lab" else null} = terminalLab.check;
 
         apps.default = flake-utils.lib.mkApp {
             drv = self.packages.${system}.default;

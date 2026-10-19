@@ -2,18 +2,18 @@
 source: src/ui/frames.rs
 expression: floor
 ---
-╔═ S T A R / F O L D › LEFT ═╗╔═ RIGHT ════════ commander ═╗
-║      places  view  actions ║║      places  view  actions ║
-║─ ~/pictures ───────────────║║─ ~ ────────────────────────║
-║›   ▧ harbour.png           ║║    ▸ empty/                ║
-║                            ║║    ▸ pictures/             ║
-║                            ║║    ▸ projects/             ║
-║                            ║║    ◇ blob.bin              ║
-║                            ║║    ↗ dangling              ║
-║                            ║║    ↗ notes.txt             ║
-║                            ║║                            ║
-║                            ║║                            ║
-╚═■■■ 125.0GB free / 500.0GB═╝╚═■■■ 125.0GB free / 500.0GB═╝
+╔═ S T A R / F O L D › LEFT ╗ ╔═ RIGHT ════════ commander ═╗
+║     places  view  actions ║ ║      places  view  actions ║
+║─ ~/pictures ──────────────║ ║─ ~ ────────────────────────║
+║›   ▧ harbour.png          ║ ║    ▸ empty/                ║
+║                           ║ ║    ▸ pictures/             ║
+║                           ║ ║    ▸ projects/             ║
+║                           ║ ║    ◇ blob.bin              ║
+║                           ║ ║    ↗ dangling              ║
+║                           ║ ║    ↗ notes.txt             ║
+║                           ║ ║                            ║
+║                           ║ ║                            ║
+╚═■■■■■■■■■ 125.0GB/500.0GB═╝ ╚═■■■ 125.0GB free / 500.0GB═╝
 ╔═ PREVIEW — ▧ harbour.png ════════════════════════════════╗
 ║                                                    close ║
 ║                                       png · 64 × 48 · 1x ║

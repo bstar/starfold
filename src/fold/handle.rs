@@ -290,6 +290,8 @@ impl Note {
 /// module doc.
 #[derive(Debug, Clone)]
 pub enum Event {
+    /// The core has selected a completed transfer in its destination browser.
+    TransferRevealed,
     Recovery,
     Places,
     Listing(PathBuf),

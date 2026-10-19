@@ -516,8 +516,6 @@ fn run_copy_move(
                 }
             }
         }
-        let _ = &target;
-
         let items_ref: &[Item] = owned_items.as_deref().unwrap_or(items);
         let result = match kind {
             OpKind::Copy => copy_subtree(items_ref, options, progress),
@@ -525,7 +523,10 @@ fn run_copy_move(
             _ => unreachable!("run_copy_move only handles Copy and Move"),
         };
         match result {
-            Ok(()) => outcome.done += 1,
+            Ok(()) => {
+                outcome.done += 1;
+                outcome.completed_targets.push(target);
+            }
             // A cancellation mid-subtree surfaces from `copy_subtree` or
             // `move_subtree` as an ordinary `Err`, the same as a real
             // failure -- distinguished here, after the fact, by asking

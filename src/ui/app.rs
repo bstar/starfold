@@ -399,6 +399,21 @@ impl App {
         let Some(entry) = state.cursor_entry() else {
             return;
         };
+        if (entry.kind == EntryKind::File || entry.link_kind == Some(EntryKind::File))
+            && crate::fold::file_type::classify(&entry.path, &[])
+                == crate::fold::file_type::FileType::Comic
+        {
+            let path = entry.path.clone();
+            drop(state);
+            self.layout.focus_set(ModuleId::Preview);
+            self.layout.preview_open = true;
+            if self.last_preview_for.as_ref() != Some(&path) {
+                self.last_preview_for = Some(path.clone());
+                self.core.send(Command::Preview(path));
+            }
+            self.repaint = true;
+            return;
+        }
         // Archive navigation is authoritative even before the audio helper's
         // supported-extension handshake has completed.
         if (entry.kind == EntryKind::File || entry.link_kind == Some(EntryKind::File))
@@ -479,6 +494,10 @@ impl App {
     fn stop_audio(&mut self) {
         #[cfg(feature = "terminal-graphics")]
         self.close_audio_relay();
+        #[cfg(feature = "terminal-graphics")]
+        if let Some(state) = self.graphical.as_mut() {
+            state.audio_pointer_held = false;
+        }
         if let Err(error) = self.audio.stop() {
             self.note = Some((error, NoteLevel::Error, Instant::now()));
         }
@@ -497,13 +516,40 @@ impl App {
     }
 
     fn audio_presentation_for(&self, body: Rect) -> Presentation {
+        #[cfg(feature = "terminal-graphics")]
+        let native = self
+            .graphical
+            .as_ref()
+            .is_some_and(|s| !s.cell_mode && s.surface_mode);
         let rgb = |c: starkit::theme::color::Rgb| [c.r, c.g, c.b];
+        let (bg, inset_bg) = (rgb(self.theme.panel_bg), None);
+        #[cfg(feature = "terminal-graphics")]
+        let (bg, inset_bg) = if native {
+            (rgb(self.theme.rack.frame), Some(rgb(self.theme.rack.inset)))
+        } else {
+            (bg, inset_bg)
+        };
         Presentation {
             generation: self.audio_generation,
             width: body.width,
             height: body.height,
             focused: self.layout.focus() == ModuleId::Preview,
             graphics: self.audio_graphics_config(),
+            pixel_size: {
+                #[cfg(feature = "terminal-graphics")]
+                {
+                    self.native_audio_target(body)
+                        .filter(|_| {
+                            self.audio.native_pixels_available()
+                                && self.audio_graphics_config().is_some()
+                        })
+                        .map(|r| [r.width, r.height])
+                }
+                #[cfg(not(feature = "terminal-graphics"))]
+                {
+                    None
+                }
+            },
             visible: self.audio_here() && self.layout.preview_open,
             native_skins: {
                 #[cfg(feature = "terminal-graphics")]
@@ -530,7 +576,8 @@ impl App {
                 }
             },
             theme: audio_embed::Palette {
-                bg: rgb(self.theme.panel_bg),
+                bg,
+                inset_bg,
                 fg: rgb(self.theme.panel_fg),
                 muted: rgb(self.theme.dim),
                 accent: rgb(self.theme.accent),
@@ -555,7 +602,18 @@ impl App {
         {
             return None;
         }
-        let (cell_width, cell_height) = self.audio_cell_size?;
+        #[allow(unused_mut)]
+        let (mut cell_width, mut cell_height) = self.audio_cell_size?;
+        #[cfg(feature = "terminal-graphics")]
+        if !self.audio.native_pixels_available() {
+            if let Some((body, target)) = self.layout.last.as_ref().and_then(|r| {
+                let body = audio_body(r.rect_of(ModuleId::Preview));
+                self.native_audio_target(body).map(|target| (body, target))
+            }) {
+                cell_width = (target.width / body.width.max(1)).clamp(1, 64);
+                cell_height = (target.height / body.height.max(1)).clamp(1, 128);
+            }
+        }
         if !(1..=64).contains(&cell_width) || !(1..=128).contains(&cell_height) {
             return None;
         }
@@ -1240,6 +1298,11 @@ impl App {
         let batch: Vec<Event> = self.core.drain().take(DRAIN_CAP).collect();
         for event in batch {
             match event {
+                Event::TransferRevealed => {
+                    self.filter = None;
+                    self.layout.focus_set(ModuleId::Stack);
+                    self.repaint = true;
+                }
                 Event::Recovery => self.overlays.sync_recovery(&self.core.state()),
                 Event::Note(note) => {
                     self.note = Some((note.text, note.level, Instant::now()));
@@ -1791,8 +1854,9 @@ impl App {
                 }
             }
         }
-        let picture_changed =
-            picture_address(self.view.preview.as_deref()) != picture_address(preview.as_deref());
+        let old_picture = picture_address(self.view.preview.as_deref());
+        let new_picture = picture_address(preview.as_deref());
+        let picture_changed = old_picture != new_picture;
 
         let ops: Vec<panels::operations::OpRow> = state
             .queue
@@ -1894,6 +1958,13 @@ impl App {
         self.extension_updated();
         if picture_changed {
             self.forget_picture();
+            // Kitty's raster rows include cells hidden from ratatui's diff.
+            // Once the picture disappears, erase those physical placeholders
+            // inside the next synchronized frame before drawing text. Ordinary
+            // animation frames keep their incremental presentation.
+            if old_picture.is_some() && new_picture.is_none() {
+                self.repaint = true;
+            }
         }
         self.clamp_scrolls();
     }
@@ -2136,6 +2207,8 @@ impl App {
                 KeyCode::Down => Some("down".into()),
                 KeyCode::PageUp => Some("pageup".into()),
                 KeyCode::PageDown => Some("pagedown".into()),
+                KeyCode::Home => Some("home".into()),
+                KeyCode::End => Some("end".into()),
                 _ => None,
             };
             if extension_key
@@ -3484,7 +3557,7 @@ impl App {
 
     fn archive_preview_available(&self) -> bool {
         matches!(self.view.preview.as_deref(), Some(Preview::Document(document))
-            if matches!(document.content, crate::fold::preview::model::Content::Archive(_)))
+            if document.kind == "Comic book" || matches!(document.content, crate::fold::preview::model::Content::Archive(_)))
             && self
                 .core
                 .state()
@@ -3494,13 +3567,18 @@ impl App {
 
     fn browse_archive_preview(&mut self) {
         if self.archive_preview_available() {
-            self.activate_entry();
+            self.core.send(Command::Enter);
             self.layout.focus_set(ModuleId::Stack);
             self.repaint = true;
         }
     }
 
     fn panel_words(&self, module: ModuleId) -> Vec<panels::Word> {
+        if module == ModuleId::Preview
+            && matches!(self.view.preview.as_deref(), Some(Preview::Document(d)) if d.kind == "Comic book")
+        {
+            return panels::comic_words();
+        }
         if module == ModuleId::Preview && self.archive_preview_available() {
             return vec![panels::Word::BrowseArchive, panels::Word::Close];
         }
@@ -3540,7 +3618,32 @@ impl App {
     }
 
     fn word_click(&mut self, word: panels::Word) {
+        let comic = matches!(self.view.preview.as_deref(), Some(Preview::Document(d)) if d.kind == "Comic book");
         match word {
+            panels::Word::ComicPrevious
+            | panels::Word::ComicNext
+            | panels::Word::ComicFitPage
+            | panels::Word::ComicFitWidth => {
+                let action = match word {
+                    panels::Word::ComicPrevious => "previous",
+                    panels::Word::ComicNext => "next",
+                    panels::Word::ComicFitPage => "fit_page",
+                    _ => "fit_width",
+                };
+                self.extension_input(starfold_preview_protocol::Input::Action {
+                    action: action.into(),
+                });
+            }
+            panels::Word::ZoomOut | panels::Word::ZoomIn if comic => {
+                self.extension_input(starfold_preview_protocol::Input::Action {
+                    action: if word == panels::Word::ZoomIn {
+                        "zoom_in"
+                    } else {
+                        "zoom_out"
+                    }
+                    .into(),
+                });
+            }
             panels::Word::BrowseArchive => self.browse_archive_preview(),
             panels::Word::AudioOutput(_) => {
                 #[cfg(feature = "terminal-graphics")]
@@ -3820,13 +3923,12 @@ impl App {
                 .as_ref()
                 .is_some_and(|state| !state.cell_mode);
             self.layout.tab_rows = if pixels { 2 } else { 1 };
+            self.layout.workspace_sidebar =
+                self.cfg.ui.workspace_navigation == crate::config::WorkspaceNavigation::Sidebar;
             self.layout.native_rack = self
                 .graphical
                 .as_ref()
                 .is_some_and(|state| state.uses_pixel_layout());
-            if self.layout.native_rack && area.height >= 40 {
-                self.layout.tab_rows = if area.height >= 50 { 9 } else { 5 };
-            }
             if pixels && area.width >= layout::MIN_COLS + 4 && area.height >= layout::MIN_ROWS + 2 {
                 padding = (1, 0);
             }
@@ -3884,7 +3986,7 @@ impl App {
         }
         self.tab_hits.clear();
         if let Some(rect) = regions.tabs {
-            let mut rect = if rect.height >= 5 {
+            let mut rect = if !regions.workspace_sidebar && rect.height >= 5 {
                 Rect::new(
                     rect.x + 1,
                     rect.bottom() - 2,
@@ -3901,7 +4003,16 @@ impl App {
             }
             let items = self.tab_items();
             let active = self.core.state().tabs.active().id;
-            self.tab_hits = super::tabs::rail(
+            let render = if self.layout.native_rack {
+                if regions.workspace_sidebar {
+                    super::tabs::sidebar
+                } else {
+                    super::tabs::numbered
+                }
+            } else {
+                super::tabs::rail
+            };
+            self.tab_hits = render(
                 rect,
                 &items,
                 active,
@@ -3956,30 +4067,12 @@ impl App {
             }
         }
 
-        if let (Some((x, y)), Some(dest)) = (self.dnd.hover_coords, self.dnd.hover.as_ref()) {
-            let stack = regions.rect_of(ModuleId::Stack);
-            if x >= stack.x && x < stack.right() && y >= stack.y && y < stack.bottom() {
-                let row = if self.commander {
-                    pane_rect(stack, usize::from(x >= stack.x + stack.width / 2))
-                } else {
-                    stack
-                };
-                let content_x = row.x.saturating_add(1);
-                let content_width = row.width.saturating_sub(2);
-                if content_width > 0 {
-                    let style = Style::default()
-                        .fg(panels::rgb(self.theme.row_cursor_fg))
-                        .bg(panels::rgb(self.theme.row_cursor_bg));
-                    buf.set_string(content_x, y, " ".repeat(usize::from(content_width)), style);
-                    let text = drop_target_hint(
-                        self.dnd.offer.as_ref(),
-                        dest,
-                        self.dnd.hover_allowed,
-                        content_width.saturating_sub(2),
-                    );
-                    buf.set_string(content_x + 1, y, text, style.add_modifier(Modifier::BOLD));
-                }
-            }
+        if let Some((row, text)) = self.drop_target_row(&regions) {
+            let style = Style::default()
+                .fg(panels::rgb(self.theme.row_cursor_fg))
+                .bg(panels::rgb(self.theme.row_cursor_bg));
+            buf.set_string(row.x, row.y, " ".repeat(usize::from(row.width)), style);
+            buf.set_string(row.x + 1, row.y, text, style.add_modifier(Modifier::BOLD));
         }
 
         let placement = if let Some(editor) = self.editor.as_mut() {
@@ -4031,7 +4124,14 @@ impl App {
 
         {
             let ov = self.operations_view();
-            panels::operations::render(regions.rect_of(ModuleId::Operations), buf, &ov, &mut bars);
+            if !regions.rect_of(ModuleId::Operations).is_empty() {
+                panels::operations::render(
+                    regions.rect_of(ModuleId::Operations),
+                    buf,
+                    &ov,
+                    &mut bars,
+                );
+            }
         }
 
         let hotkeys_enabled = self.filter.is_none()
@@ -4692,6 +4792,87 @@ mod tests {
         }
     }
 
+    #[test]
+    fn completed_copy_reveals_actual_name_and_skipped_copies_keep_focus() {
+        use crate::fold::ops::ConflictPolicy;
+        for case in ["normal", "renamed", "skipped", "nested", "hidden", "failed"] {
+            let mut cfg = Config::default();
+            cfg.ops.conflicts = if case == "skipped" {
+                ConflictPolicy::Skip
+            } else {
+                ConflictPolicy::RenameNew
+            };
+            let (core, fake) = fake::handle(cfg.core());
+            let source = fake.home().join("copy-source");
+            let destination = fake.home().join("copy-target");
+            std::fs::create_dir(&source).unwrap();
+            std::fs::create_dir(&destination).unwrap();
+            for i in 0..40 {
+                std::fs::write(destination.join(format!("a-{i:02}.txt")), b"existing").unwrap();
+            }
+            let target_dir = if case == "nested" {
+                let dir = destination.join("nested");
+                std::fs::create_dir(&dir).unwrap();
+                dir
+            } else {
+                destination.clone()
+            };
+            let name = if case == "hidden" {
+                ".arrived.txt"
+            } else {
+                "zz-arrived.txt"
+            };
+            let input = source.join(name);
+            if case != "failed" {
+                std::fs::write(&input, b"copied payload").unwrap();
+            }
+            if matches!(case, "renamed" | "skipped") {
+                std::fs::write(target_dir.join(name), b"original destination").unwrap();
+            }
+            let mut app = App::new(
+                core,
+                cfg,
+                fake.home().join("config.toml"),
+                None,
+                Graphics::disabled(),
+            );
+            app.core.send(Command::RestoreCommander {
+                dirs: [source, destination],
+                active: 1,
+                enabled: true,
+            });
+            fake.pump();
+            app.tick();
+            app.core.send(Command::SetFilter("does-not-match".into()));
+            app.core.send(Command::FocusPane(0));
+            app.layout.focus_set(ModuleId::Operations);
+            app.core.send(Command::QueueDrop {
+                kind: OpKind::Copy,
+                sources: vec![input],
+                dest: target_dir.clone(),
+            });
+            fake.pump();
+            app.tick();
+            fake.pump();
+            app.tick();
+            if matches!(case, "skipped" | "failed") {
+                assert_eq!(app.active_pane, 0, "{case}");
+                assert_eq!(app.layout.focus(), ModuleId::Operations, "{case}");
+            } else {
+                let expected = target_dir.join(if case == "renamed" {
+                    "zz-arrived (1).txt"
+                } else {
+                    name
+                });
+                assert_eq!(std::fs::read(&expected).unwrap(), b"copied payload");
+                assert_eq!(app.active_pane, 1, "{case}");
+                assert_eq!(app.view.cursor_path, Some(expected), "{case}");
+                assert_eq!(app.layout.focus(), ModuleId::Stack, "{case}");
+                assert!(app.core.state().active_frame().filter.is_empty());
+            }
+        }
+    }
+
     fn app() -> (App, fake::Fake, tempfile::TempDir) {
         let cfg = Config::default();
         let (core, fk) = fake::handle(cfg.core());
@@ -4774,6 +4955,46 @@ mod tests {
         let smaller = Rect::new(0, 0, 100, 40);
         app.draw(smaller, &mut Buffer::empty(smaller));
         assert!(app.layout.preview_resize.is_none());
+    }
+
+    #[test]
+    fn leaving_a_raster_preview_invalidates_terminal_image_rows() {
+        for document in [false, true] {
+            let (mut app, fake, temp) = app();
+            let path = temp.path().join("plain.txt");
+            std::fs::write(&path, b"plain text after image").unwrap();
+            app.core.send(Command::Push(temp.path().to_path_buf()));
+            fake.pump();
+            app.refresh();
+            let source = Arc::new(RgbaImage::new(64, 48));
+            app.view.preview = Some(Arc::new(if document {
+                let mut pdf = crate::fold::preview::model::Document::new("PDF");
+                pdf.image = Some(source);
+                Preview::Document(pdf)
+            } else {
+                Preview::Image {
+                    data: source,
+                    width: 64,
+                    height: 48,
+                    format: "png",
+                }
+            }));
+            app.graphics.set_mode(Mode::Kitty);
+            let area = Rect::new(0, 0, 100, 30);
+            app.draw(area, &mut Buffer::empty(area));
+            assert!(!app.picture_ids.is_empty(), "raster must have been painted");
+            app.repaint = false;
+
+            app.core.send(Command::Preview(path));
+            fake.pump();
+            app.refresh();
+            assert!(matches!(
+                app.view.preview.as_deref(),
+                Some(Preview::Text { .. })
+            ));
+            assert!(app.picture_ids.is_empty());
+            assert!(app.repaint, "text must erase the terminal's old image rows");
+        }
     }
 
     #[test]

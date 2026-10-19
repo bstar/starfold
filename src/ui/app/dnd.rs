@@ -20,6 +20,32 @@ fn final_drop_operation(status: Option<(OpStatus, usize)>, intended: OpKind) -> 
 }
 
 impl App {
+    /// One destination-row hint for both cell and native presentations.
+    pub(super) fn drop_target_row(&self, regions: &Regions) -> Option<(Rect, String)> {
+        let (x, y) = self.dnd.hover_coords?;
+        let dest = self.dnd.hover.as_ref()?;
+        let stack = regions.rect_of(ModuleId::Stack);
+        if !stack.contains((x, y).into()) {
+            return None;
+        }
+        let pane = if self.commander {
+            pane_rect(stack, usize::from(x >= stack.x + stack.width / 2))
+        } else {
+            stack
+        };
+        if !pane.contains((x, y).into()) || pane.width <= 2 {
+            return None;
+        }
+        let row = Rect::new(pane.x + 1, y, pane.width - 2, 1);
+        let label = drop_target_hint(
+            self.dnd.offer.as_ref(),
+            dest,
+            self.dnd.hover_allowed,
+            row.width.saturating_sub(2),
+        );
+        Some((row, label))
+    }
+
     pub(super) fn dnd_autoscroll(&mut self) {
         let Some((x, y)) = self.dnd.hover_coords else {
             self.dnd_edge = None;

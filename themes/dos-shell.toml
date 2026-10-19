@@ -1,0 +1,34 @@
+# STAR/FOLD DOS Shell palette. Shared STAR/KIT theme format.
+
+[meta]
+name = "DOS Shell"
+id = "dos-shell"
+variant = "light"
+
+[base16]
+base00 = "#d8d8d8"
+base01 = "#c0c0c0"
+base02 = "#aaaaaa"
+base03 = "#808080"
+base04 = "#505050"
+base05 = "#000000"
+base06 = "#000080"
+base07 = "#ffffff"
+base08 = "#aa0000"
+base09 = "#aa5500"
+base0A = "#805000"
+base0B = "#006000"
+base0C = "#006060"
+base0D = "#0000aa"
+base0E = "#800080"
+base0F = "#aa5500"
+
+[graphical]
+bg = "#c0c0c0"
+inset_bg = "#e0e0e0"
+fg = "#101010"
+muted = "#505050"
+accent = "#0000aa"
+selected = "#a8c8e8"
+border = "#606060"
+error = "#aa0000"
