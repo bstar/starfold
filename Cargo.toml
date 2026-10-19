@@ -22,7 +22,7 @@ resolver = "2"
 
 [workspace.dependencies]
 # One release pin for the application and every preview helper.
-starkit = { git = "https://github.com/bstar/starkit", rev = "183f298a143efbc6b90e30ce22013dcc8e5d2e69", version = "0.9", default-features = false }
+starkit = { git = "https://github.com/bstar/starkit", rev = "7c4e223fb8e3db1df7e2f25348d2f83cf1d1c8a1", version = "0.12", default-features = false }
 
 [dependencies]
 starfold-archive = { version = "0.1", path = "extensions/archive" }
