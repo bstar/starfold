@@ -343,9 +343,10 @@ fn transport_measurement_preserves_cover_mode() {
         graphics.set_mode(mode);
         let size = transport_cell_size(&mut graphics);
         assert_eq!(graphics.mode(), mode);
-        if mode == Mode::Kitty {
-            assert!(size.is_some());
-        }
+        // Forcing a protocol does not measure a terminal. A disabled test
+        // instance has no geometry; its picker's estimated font size must not
+        // become the embedded player's physical transport dimensions.
+        assert_eq!(size, None, "unmeasured transport in {mode:?}");
     }
 }
 
