@@ -534,7 +534,7 @@ failures remain visible in OPERATIONS. Same-device recovery uses atomic rename.
 The Linux restart test sets Trash environment variables only in subprocesses,
 using disposable private bins; normal tests must not empty the user's Trash.
 
-## KIT 0.12 candidate compatibility
+## KIT 0.13 candidate compatibility
 
 The bundled `starfold-preview-comic` reads CBZ/CBR through the versioned preview
 protocol, using the existing archive engines inside its supervised process.
@@ -545,7 +545,7 @@ directly so it cannot recurse into the reader. Never extract an entire comic
 or decode every page eagerly. `STARFOLD_COMIC_TEST_FILE` enables optional tests
 against a local comic without copying it into the repository.
 
-Development main pins an immutable KIT 0.12 candidate revision with a git-sourced
+Development main pins an immutable KIT 0.13 candidate revision with a git-sourced
 lockfile, so ordinary builds need no sibling checkout. This is an unreleased
 testing candidate; use immutable version tags when making a framework release.
 Keep dependency updates in their own commit, with the manifest and lock together.
@@ -555,3 +555,7 @@ checkout in a disposable tracked copy. `STAR_KIT_CHECKOUT` selects another
 candidate. No candidate path or path-patched lock is committed. Live canvases
 and embedded input are opt-in; ordinary application keys, media, SSH and
 presentation retain their current contracts.
+
+The current pin aligns the shared engines and public UI candidate. It does not
+complete this application's migration to `ui::application::Host`; retain that
+migration and its behavioral/visual acceptance as separate work.
