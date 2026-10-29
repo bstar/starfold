@@ -3894,8 +3894,8 @@ dependencies = [
 
 [[package]]
 name = "starkit"
-version = "0.12.2"
-source = "git+https://github.com/bstar/starkit?rev=7c4e223fb8e3db1df7e2f25348d2f83cf1d1c8a1#7c4e223fb8e3db1df7e2f25348d2f83cf1d1c8a1"
+version = "0.13.0"
+source = "git+https://github.com/bstar/starkit?rev=a48b35761a0974cdaf18c58df8de7732756a03df#a48b35761a0974cdaf18c58df8de7732756a03df"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3908,6 +3908,7 @@ dependencies = [
  "flate2",
  "image",
  "memmap2",
+ "pkg-config",
  "png 0.18.1",
  "ratatui",
  "ratatui-image",
