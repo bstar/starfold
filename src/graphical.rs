@@ -258,7 +258,7 @@ pub fn main() -> Result<()> {
         let _log = starkit::logging::init(&crate::PATHS, true)?;
         let config_path = crate::PATHS.config_file()?;
         let config = crate::config::Config::load(&config_path)?;
-        return client::run_with_preference(
+        return client::run_with_osc72_preference(
             Launch {
                 executable: if options.ssh.is_some() {
                     options.remote_executable
@@ -289,7 +289,7 @@ pub fn main() -> Result<()> {
         let _log = starkit::logging::init(&crate::PATHS, true)?;
         let path = crate::PATHS.config_file()?;
         let config = crate::config::Config::load(&path)?;
-        return client::run_terminal_socket_with_preference(
+        return client::run_terminal_socket_with_osc72_preference(
             &socket,
             terminal_event,
             presentation_options()?,

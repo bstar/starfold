@@ -416,6 +416,11 @@ tags create a draft release.
 
 ## Native terminal graphics experiment
 
+FOLD's vendored crossterm parser exposes OSC 72 as a complete event. Its local
+and terminal-socket frontends explicitly use KIT's OSC 72 preference entry
+points; ordinary preferences now leave that extension disabled so stock
+parsers cannot turn terminal capability replies into application shortcuts.
+
 On `experiment/terminal-graphics`, STAR/KIT owns the native Rust pixel renderer
 (`tiny-skia` and `cosmic-text`). Do not add browser engines, Electron, webviews
 or JavaScript rendering. The persistent FOLD controller and SSH scene relay
