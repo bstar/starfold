@@ -82,6 +82,7 @@ let
     pkgs.ffmpeg
     pkgs.ncurses
     pkgs.util-linux
+    pkgs.tesseract
   ];
   terminals = map (s: s.package) (builtins.filter (s: s.available) resolved);
   package = pkgs.writeShellApplication {

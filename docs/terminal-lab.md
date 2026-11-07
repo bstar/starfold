@@ -16,13 +16,13 @@ nix build .#terminal-lab --out-link result-terminal-lab
 # Full run. Choose a new or empty output directory.
 nix run .#terminal-lab -- --binary ./target/release/starfold \
   --output ./target/terminal-lab/run-001 \
-  --profiles cells,auto --themes all --media --idle-seconds 70
+  --profiles cells,graphical --themes all --media --idle-seconds 70
 
 # Smaller run during development.
 nix develop .#terminal-lab -c python3 scripts/terminal_lab/lab.py \
   --binary ./target/release/starfold --output ./target/terminal-lab/quick-001 \
   --terminals kitty,ghostty,wezterm,alacritty,foot,xterm \
-  --profiles auto --themes 2
+  --profiles graphical --themes 2
 
 # Multiplexer, ASCII and monochrome policy.
 nix run .#terminal-lab -- --binary ./target/release/starfold \
@@ -77,9 +77,23 @@ and stops the displays and private buses.
   and resumed. A changed screenshot is an observation, not proof of movie motion,
   pacing, pause retention or audio correctness. Disconnects are checked separately.
 
-When native mode is selected, the controller checks switch to cells with F9 and
-then return to native mode for image/theme/movie captures. This does not establish
-every native pointer target. `cells,auto` adds an explicit cell run. `tmux` uses a
+The default `cells,graphical` profiles create separate cases. `graphical` explicitly
+requests `--graphical` and stays in that presentation for navigation, marking,
+copying, Commander, help, text/archive/image previews, wheel input, resize, themes
+and optional movie checks. Visible-text assertions use Tesseract OCR on actual
+emulator screenshots, supplied by Nix. OCR failures retain screenshots for review;
+they do not alone establish an application rendering defect. Copies still verify
+real destination bytes. A terminal that falls back to cells gets red unsupported
+graphical checks, never replacement cell passes. The matrix identifies which
+presentation supplied functional assertions.
+The graphical pointer check locates the painted image filename using OCR word
+bounds, clicks that display location, then checks the preview's fixture colors.
+The resize assertion also requires visible graphical text after the grid changes.
+
+The legacy `auto` profile switches to cells for controller checks, then returns to
+native for image/theme/movie captures. Its historical results are labeled as cell
+functional coverage. Neither profile establishes every native pointer target,
+desktop drag/drop, or physical display fidelity. `tmux` uses a
 new private server. `ascii` and `mono` set STAR_KIT_ASCII=1 and NO_COLOR=1; their
 visual limitations are intentional.
 

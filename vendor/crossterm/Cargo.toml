@@ -215,6 +215,7 @@ features = [
     "std",
     "stdio",
     "termios",
+    "fs",
 ]
 default-features = false
 

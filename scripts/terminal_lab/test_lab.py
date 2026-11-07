@@ -4,14 +4,60 @@ from pathlib import Path
 import tempfile
 import unittest
 import base64
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from hypothesis import given, settings, strategies as st
 
 from PIL import Image
-from lab import collect_evidence, help_open, image_protocol, protocol_observations, quadrant_pattern, report, sgr_colors
+from lab import Case, collect_evidence, help_open, image_protocol, protocol_observations, quadrant_pattern, report, sgr_colors
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_graphical_assertions_read_pixels_and_cache_unchanged_frames(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def screenshot(path):
+                image = Image.new('RGB', (100, 100), 'black')
+                image.paste('#202020', (20, 20, 80, 80))
+                image.save(path)
+                return image
+            case = Case.__new__(Case)
+            case.profile, case.native, case.bridge = 'graphical', True, root
+            case.ocr_cache = None
+            case.display = SimpleNamespace(screenshot=screenshot)
+            with patch('lab.command', return_value=SimpleNamespace(stdout=b'10-source. txt\nKEYS\nnew tab')) as ocr:
+                with patch('lab.observe', side_effect=AssertionError('Cell text must not supply graphical assertions')):
+                    self.assertIn('10-source.txt', case.screen())
+                    # The alternate reading doubles the cropped 60x60 window.
+                    with Image.open(root / 'ocr.png') as captured:
+                        self.assertEqual(captured.size, (120, 120))
+                    self.assertTrue(help_open(case.screen()))
+                    self.assertEqual(ocr.call_count, 2)
+            self.assertTrue((root / 'ocr.txt').is_file())
+
+    def test_report_separates_graphical_assertions_from_historical_auto(self):
+        cases = [
+            {'terminal': 'sample', 'profile': 'auto', 'presentation': 'native',
+             'checks': {'copy-operations': {'status': 'pass', 'detail': 'Historical cells'}}},
+            {'terminal': 'sample', 'profile': 'graphical', 'presentation': 'native',
+             'assertion_presentation': 'graphical',
+             'checks': {'copy-operations': {'status': 'pass', 'detail': 'Real graphical copy'}}},
+            {'terminal': 'fallback', 'profile': 'graphical', 'presentation': 'cells',
+             'assertion_presentation': 'unavailable',
+             'checks': {'graphical-mode': {'status': 'unsupported', 'detail': 'Cell fallback'}}},
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report(root, cases, {})
+            import csv
+            with (root / 'matrix.csv').open() as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual([row['Functional checks in'] for row in rows],
+                             ['cells', 'graphical', 'unavailable'])
+            self.assertEqual(rows[2]['graphical-mode'], 'unsupported')
+            self.assertEqual(rows[2]['copy-operations'], 'not-run')
+
     def test_protocol_columns_use_wire_evidence_and_keep_unknowns(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

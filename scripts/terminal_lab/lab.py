@@ -23,7 +23,7 @@ import tomllib
 import uuid
 import zipfile
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageOps
 from terminals import EXTERNAL, MANUAL, WAYLAND, launch
 
 HERE = Path(__file__).resolve().parent
@@ -413,6 +413,8 @@ class Case:
                        'profile': profile, 'checks': {}, 'themes': [], 'evidence': self.directory.name}
         self.window = None
         self.log = None
+        self.native = False
+        self.ocr_cache = None
         self.files = fixtures(self.directory)
 
     def check(self, name, status, detail, evidence=None):
@@ -422,6 +424,33 @@ class Case:
             self.result['checks'][name]['evidence'] = evidence
 
     def screen(self):
+        if self.profile == 'graphical' and self.native:
+            # Pixel text is not present in the terminal's cell stream. Read the
+            # real emulator screenshot; never toggle to cells to satisfy checks.
+            capture = self.bridge / 'ocr.png'
+            image = self.display.screenshot(capture).convert('RGB')
+            signature = hashlib.sha256(image.tobytes()).digest()
+            if self.ocr_cache and self.ocr_cache[0] == signature:
+                return self.ocr_cache[1]
+            # Ignore the empty Xvfb desktop around a resized terminal. Its large
+            # black margin otherwise defeats OCR's automatic segmentation.
+            bounds = ImageChops.difference(image, Image.new('RGB', image.size, image.getpixel((0, 0)))).getbbox()
+            if bounds:
+                image = image.crop(bounds)
+            image.save(capture)
+            text = command(['tesseract', capture, 'stdout', '--psm', '11'], timeout=10).stdout.decode(errors='replace')
+            # Different pane fills can defeat Tesseract's automatic threshold.
+            # Retain both independent readings of the same captured pixels.
+            alternate = ImageOps.invert(ImageOps.grayscale(image))
+            alternate.resize((image.width * 2, image.height * 2)).save(capture)
+            text += '\n' + command(['tesseract', capture, 'stdout', '--psm', '11'], timeout=10).stdout.decode(errors='replace')
+            # OCR often inserts spaces around filename punctuation and separates
+            # adjacent labels with newlines. Preserve the raw transcript too.
+            (self.bridge / 'ocr.txt').write_text(text)
+            text = re.sub(r'\s+', ' ', text)
+            text = re.sub(r'(?<=\w)\s*([.-])\s*(?=\w)', r'\1', text)
+            self.ocr_cache = (signature, text)
+            return text
         return observe(self.bridge).get('screen', '')
 
     def key(self, key):
@@ -496,7 +525,8 @@ class Case:
             command(['gsettings', '--schemadir', schemas, 'set',
                      'org.gnome.Terminal.Legacy.Settings', 'always-check-default-terminal', 'false'], env)
         session = 'lab-' + uuid.uuid4().hex[:12]
-        fold = [str(self.binary)] + ([] if self.profile == 'auto' else ['--cells'])
+        fold = [str(self.binary)] + (['--graphical'] if self.profile == 'graphical' else
+                                    [] if self.profile == 'auto' else ['--cells'])
         fold += ['--session', session, str(self.files)]
         if self.profile == 'tmux':
             fold = ['tmux', '-L', session, '-f', '/dev/null', 'new-session', '-s', 'lab', *fold]
@@ -568,14 +598,19 @@ class Case:
         native = 'Starting STAR graphical renderer' in (self.bridge / 'output.bin').read_bytes().decode(errors='replace')
         self.native = native
         self.result['presentation'] = 'native' if native else 'cells'
-        self.check('native-ui', 'observed' if native else ('not-run' if self.profile != 'auto' else 'unsupported'),
+        self.check('native-ui', 'observed' if native else ('not-run' if self.profile not in ('auto', 'graphical') else 'unsupported'),
                    'FOLD selected native pixels.' if native else 'FOLD selected cell fallback; not a startup failure.', shot)
         capabilities = next((line.split('Terminal presentation capabilities', 1)[-1]
                              for line in logs.splitlines() if 'Terminal presentation capabilities' in line), None)
         self.result['capabilities'] = capabilities
+        if self.profile == 'graphical':
+            self.result['assertion_presentation'] = 'graphical' if native else 'unavailable'
+            self.check('graphical-mode', 'observed' if native else 'unsupported',
+                       'Dedicated graphical run; screenshot OCR supplies visible-text assertions, with no F9 fallback.' if native else
+                       'Requested graphical mode selected cells; graphical checks are unsupported on this run.', shot)
 
     def functional(self):
-        if self.native:
+        if self.native and self.profile != 'graphical':
             self.key('F9')
             self.expect('10-source.txt')
         self.key('alt+1')
@@ -611,15 +646,19 @@ class Case:
             shot, _ = self.shot('commander')
             self.check('commander', 'pass', 'Both file panes rendered; Tab was delivered.', shot)
         except TimeoutError as e:
-            self.check('commander', 'fail', str(e))
+            shot, _ = self.shot('commander-failed')
+            self.check('commander', 'fail', str(e), shot)
         self.key('v')
+        if self.profile == 'graphical':
+            self.graphical_pointer()
         self.key('question')
         try:
             wait_until(lambda: help_open(self.screen()), timeout=3, reason='help overlay')
             shot, _ = self.shot('help')
             self.check('help', 'pass', 'Help opened from the emulator keyboard.', shot)
         except TimeoutError as e:
-            self.check('help', 'fail', str(e))
+            shot, _ = self.shot('help-failed')
+            self.check('help', 'fail', str(e), shot)
         self.key('Escape')
         self.filter('30-unicode')
         try:
@@ -628,9 +667,11 @@ class Case:
             self.check('text-preview', 'pass', 'Text preview contains the fixture body.', shot)
             self.check('unicode', 'unsupported' if self.profile == 'ascii' else 'observed',
                        'ASCII was explicitly requested; Unicode rendering is not established.' if self.profile == 'ascii' else
+                       'Graphical text screenshot recorded; Unicode glyph coverage/width needs visual review.' if self.profile == 'graphical' else
                        'Unicode bytes reached the cell grid; font coverage/width needs visual review.', shot)
         except TimeoutError as e:
-            self.check('text-preview', 'fail', str(e))
+            shot, _ = self.shot('text-preview-failed')
+            self.check('text-preview', 'fail', str(e), shot)
         self.clear_filter()
         self.filter('40-archive')
         self.key('Return')
@@ -639,7 +680,8 @@ class Case:
             shot, _ = self.shot('archive')
             self.check('archive', 'pass', 'Entered a generated ZIP and listed its member.', shot)
         except TimeoutError as e:
-            self.check('archive', 'fail', str(e))
+            shot, _ = self.shot('archive-failed')
+            self.check('archive', 'fail', str(e), shot)
         self.key('h')
         self.clear_filter()
         # Actual wheel events, with enough files to change the viewport.
@@ -662,13 +704,14 @@ class Case:
             new = observe(self.bridge)
             resized = (old.get('columns'), old.get('rows')) != (new.get('columns'), new.get('rows'))
             shot, _ = self.shot('resized')
-            self.check('resize', 'pass' if resized and new.get('exit_code') is None else 'fail',
+            painted = self.profile != 'graphical' or 'FILES' in self.screen()
+            self.check('resize', 'pass' if resized and painted and new.get('exit_code') is None else 'fail',
                        f"PTY grid {old.get('columns')}x{old.get('rows')} → {new.get('columns')}x{new.get('rows')}; remained alive.", shot)
             command(['xdotool', 'windowsize', self.window, '1200', '820'], self.display.env)
             time.sleep(.5)
         self.filter('20-picture')
         time.sleep(.7)
-        shot, image = self.shot('image-cells')
+        shot, image = self.shot('image-graphical' if self.profile == 'graphical' else 'image-cells')
         hits = image_markers(image)
         pattern = quadrant_pattern(image)
         raw = (self.bridge / 'output.bin').read_bytes()
@@ -683,15 +726,39 @@ class Case:
                    'Image present with palette-reduced colors.' if pattern else 'Source colors and fixture pattern not verified.', shot)
         self.result['image_protocol'] = image_protocol(raw)
         self.clear_filter()
-        if self.native:
+        if self.native and self.profile != 'graphical':
             self.key('F9')
             time.sleep(.6)
             self.filter_native_image()
+        if self.profile == 'graphical':
+            self.check('native-image', self.result['checks']['image-preview']['status'],
+                       'Fixture evaluated in the dedicated graphical presentation.', shot)
         self.check('clipboard', 'manual', 'OSC 52 permission prompts and readback need an explicit clipboard test; not inferred from terminal identity.')
         self.check('desktop-dnd', 'manual', 'Real desktop OSC 72 drag/drop requires a separate source/target interaction.')
         self.check('ssh', 'not-run', 'This local emulator suite does not establish SSH latency, remote audio, or bridge correctness.')
         self.check('audio', 'not-run', 'Silent fixture is supplied for manual AMP/device testing; no audible correctness claim.')
         self.check('video', 'not-run', 'Use --media for pause/resume and visual movie captures.')
+
+    def graphical_pointer(self):
+        # Locate the actual painted filename, rather than guessing KIT's hit
+        # rectangles from font sizes or assuming a cell-aligned pixel layout.
+        capture = self.bridge / 'pointer.png'
+        self.display.screenshot(capture)
+        tsv = command(['tesseract', capture, 'stdout', '--psm', '11', 'tsv']).stdout.decode(errors='replace')
+        words = csv.DictReader(tsv.splitlines(), delimiter='\t')
+        target = next((word for word in words if word.get('text', '').startswith('20-picture')), None)
+        if target is None:
+            shot, _ = self.shot('graphical-pointer-failed')
+            self.check('graphical-pointer', 'fail', 'OCR could not locate the painted fixture filename for the click.', shot)
+            return
+        x = int(target['left']) + int(target['width']) // 2
+        y = int(target['top']) + int(target['height']) // 2
+        command(['xdotool', 'mousemove', str(x), str(y), 'click', '1'], self.display.env)
+        time.sleep(.8)
+        shot, image = self.shot('graphical-pointer')
+        hits = image_markers(image)
+        self.check('graphical-pointer', 'pass' if all(n >= 12 for n in hits) else 'fail',
+                   f'Clicked painted image filename at display pixels ({x}, {y}); preview source-color pixels {hits}.', shot)
 
     def filter_native_image(self):
         # Use the same real keys; native text lives in image payloads, not pyte.
@@ -784,10 +851,16 @@ class Case:
     def run(self):
         try:
             self.start()
-            self.functional()
-            self.themes()
-            if self.args.media:
-                self.media()
+            if self.profile == 'graphical' and not self.native:
+                for name in ('copy-operations', 'commander', 'help', 'text-preview', 'archive',
+                             'mouse-wheel', 'graphical-pointer', 'resize', 'image-preview', 'native-image',
+                             'theme-switch', 'theme-colors', 'video'):
+                    self.check(name, 'unsupported', 'Graphical mode unavailable; no cell substitute was tested.')
+            else:
+                self.functional()
+                self.themes()
+                if self.args.media:
+                    self.media()
             self.key('Escape')
             self.key('q')
             wait_until(lambda: observe(self.bridge).get('exit_code') is not None, timeout=7, reason='clean FOLD exit')
@@ -807,7 +880,7 @@ class Case:
                     os.kill(self.dbus, signal.SIGTERM)
             if self.log:
                 self.log.close()
-            for name in ('input.bin', 'output.bin', 'state.json'):
+            for name in ('input.bin', 'output.bin', 'state.json', 'ocr.txt'):
                 source = self.bridge / name
                 if source.exists():
                     shutil.copy2(source, self.directory / name)
@@ -850,11 +923,11 @@ def protocol_observations(output, result):
 def report(output, results, metadata):
     data = {'schema': 1, 'metadata': metadata, 'results': results, 'external_targets': EXTERNAL}
     (output / 'results.json').write_text(json.dumps(data, indent=2))
-    features = ['startup', 'native-ui', 'copy-operations', 'commander', 'text-preview',
-                'image-preview', 'mouse-wheel', 'desktop-dnd', 'resize', 'theme-switch', 'theme-colors', 'video', 'clean-exit']
+    features = ['startup', 'native-ui', 'graphical-mode', 'copy-operations', 'commander', 'help', 'text-preview', 'archive',
+                'image-preview', 'graphical-pointer', 'mouse-wheel', 'desktop-dnd', 'resize', 'theme-switch', 'theme-colors', 'video', 'clean-exit']
     rows = []
     csv_rows = []
-    measured_headers = ['Terminal / version / profile', 'Presentation', 'Images', 'Colors', 'Themes']
+    measured_headers = ['Terminal / version / profile', 'Presentation', 'Functional checks in', 'Images', 'Colors', 'Themes']
     headers = measured_headers + ['Drag and drop' if f == 'desktop-dnd' else f for f in features] + list(protocol_observations(output, {}))
     protocol_note = ('Protocol columns show observed wire traffic, not a complete terminal support inventory. '
                      'not-observed means no evidence in this scenario; manual means a dedicated interaction is needed. '
@@ -868,14 +941,15 @@ def report(output, results, metadata):
                 '| ' + ' | '.join('---' for _ in headers) + ' |']
     for result in results:
         checks = result.get('checks', {})
-        statuses = [checks.get(f, {}).get('status', result.get('status', 'not-run')) for f in features]
+        statuses = [checks.get(f, {}).get('status', 'unavailable' if result.get('status') == 'unavailable' else 'not-run') for f in features]
         label = f"{result['terminal']} {result.get('version') or ''} / {result.get('profile', 'provisioning')}"
         presentation = result.get('presentation') or ('native' if checks.get('native-ui', {}).get('status') == 'observed' else 'cells' if checks.get('startup', {}).get('status') == 'pass' else '—')
         rgb = max((t.get('rgb_colors_emitted', 0) for t in result.get('themes', [])), default=0)
         environment = result.get('terminal_environment', {})
         palette = 'monochrome' if environment.get('NO_COLOR') else '256-color palette' if '256color' in environment.get('TERM', '') else '16-color palette'
         colors = 'native RGB' if presentation == 'native' else 'RGB SGR' if rgb else palette if result.get('themes') else '—'
-        measured = [label, presentation, result.get('image_protocol', '—'), colors, str(len(result.get('themes', [])))]
+        assertion_presentation = result.get('assertion_presentation', 'cells' if checks.get('copy-operations') else 'not-run')
+        measured = [label, presentation, assertion_presentation, result.get('image_protocol', '—'), colors, str(len(result.get('themes', [])))]
         protocols = list(protocol_observations(output, result).values())
         markdown.append('| ' + ' | '.join(measured + statuses + protocols) + ' |')
         csv_rows.append(measured + statuses + protocols)
@@ -945,7 +1019,7 @@ def main():
     parser.add_argument('--binary', type=Path, help='Release executable or installed wrapper; defaults to ./target/release/starfold')
     parser.add_argument('--output', type=Path, default=Path('target/terminal-lab/latest'))
     parser.add_argument('--terminals', default='all', help='Comma-separated emulator IDs, or all')
-    parser.add_argument('--profiles', default='cells,auto', help='cells,auto,ascii,mono,tmux,rgb (comma separated; rgb explicitly supplies COLORTERM)')
+    parser.add_argument('--profiles', default='cells,graphical', help='cells,graphical,auto,ascii,mono,tmux,rgb (graphical never substitutes cell checks; rgb supplies COLORTERM)')
     parser.add_argument('--themes', default='all', help='all, or maximum themes to capture in each case')
     parser.add_argument('--media', action='store_true', help='Add movie pause/resume captures')
     parser.add_argument('--idle-seconds', type=float, default=15)
@@ -976,7 +1050,7 @@ def main():
     args.executable = executable_target(binary)
     args.executable_sha256 = digest(args.executable)
     profiles = args.profiles.split(',')
-    if any(p not in ('cells', 'auto', 'ascii', 'mono', 'tmux', 'rgb') for p in profiles):
+    if any(p not in ('cells', 'graphical', 'auto', 'ascii', 'mono', 'tmux', 'rgb') for p in profiles):
         parser.error('Unknown profile')
     if args.themes != 'all' and (not args.themes.isdigit() or int(args.themes) < 1):
         parser.error('--themes must be all or a positive integer')
@@ -1029,7 +1103,9 @@ def main():
             for profile in profiles:
                 previous = next((r for r in results if r['terminal'] == terminal['id'] and r.get('profile') == profile), None)
                 if previous and 'clean-exit' in previous.get('checks', {}) and not any(
-                        c['status'] == 'fail' for c in previous['checks'].values()):
+                        c['status'] == 'fail' for c in previous['checks'].values()) and not (
+                        profile == 'graphical' and previous.get('presentation') == 'native'
+                        and 'graphical-pointer' not in previous.get('checks', {})):
                     print(f"KEEP {terminal['id']} {profile}", flush=True)
                     continue
                 old = output / (terminal['id'] + '-' + profile)

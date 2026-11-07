@@ -8,7 +8,7 @@ use crate::event::sys::Waker;
 use crate::event::{
     source::EventSource, sys::unix::parse::parse_event, timeout::PollTimeout, Event, InternalEvent,
 };
-use crate::terminal::sys::file_descriptor::{tty_fd, FileDesc};
+use crate::terminal::sys::file_descriptor::{event_tty_fd, FileDesc};
 
 // Tokens to identify file descriptor
 const TTY_TOKEN: Token = Token(0);
@@ -34,7 +34,7 @@ pub(crate) struct UnixInternalEventSource {
 
 impl UnixInternalEventSource {
     pub fn new() -> io::Result<Self> {
-        UnixInternalEventSource::from_file_descriptor(tty_fd()?)
+        UnixInternalEventSource::from_file_descriptor(event_tty_fd()?)
     }
 
     pub(crate) fn from_file_descriptor(input_fd: FileDesc<'static>) -> io::Result<Self> {

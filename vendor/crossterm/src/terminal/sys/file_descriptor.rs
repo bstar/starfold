@@ -109,6 +109,29 @@ impl AsRawFd for FileDesc<'_> {
     }
 }
 
+/// Open an independent nonblocking handle for the event parser. Readiness
+/// guarantees some bytes, not a complete escape sequence: a second blocking
+/// read must not overrun `event::poll`'s deadline while awaiting the rest.
+/// Do not set O_NONBLOCK on stdin or a dup: stdout may share its open-file
+/// description, and terminal painting must retain ordinary blocking writes.
+#[cfg(feature = "events")]
+pub(crate) fn event_tty_fd() -> io::Result<FileDesc<'static>> {
+    use rustix::fs::{open, Mode, OFlags};
+    let input = tty_fd()?;
+    // SAFETY: input owns or borrows this live descriptor for the whole lookup.
+    let borrowed = unsafe { rustix::fd::BorrowedFd::borrow_raw(input.raw_fd()) };
+    let path = rustix::termios::ttyname(borrowed, Vec::new())?;
+    let reader = open(
+        &path,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOCTTY,
+        Mode::empty(),
+    )?;
+    #[cfg(feature = "libc")]
+    return Ok(FileDesc::new(reader.into_raw_fd(), true));
+    #[cfg(not(feature = "libc"))]
+    Ok(FileDesc::Owned(reader))
+}
+
 #[cfg(not(feature = "libc"))]
 impl AsFd for FileDesc<'_> {
     fn as_fd(&self) -> BorrowedFd<'_> {

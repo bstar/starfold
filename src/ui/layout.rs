@@ -233,11 +233,10 @@ impl LayoutState {
             );
             // Keep this bottom edge independent of Preview's requested height,
             // so a divider drag exchanges rows with the browser without drift.
-            let logical_height = body
-                .height
-                .saturating_sub(body.height / 8)
-                .max(stack_floor + collapsed_rows + ops + gaps)
-                .min(body.height);
+            // Use every available logical row. Reserving an eighth of the
+            // grid made KIT stretch the remaining file rows over the same
+            // pixel area, adding padding around the fixed-size filenames.
+            let logical_height = body.height;
             let available = logical_height.saturating_sub(stack_floor + ops + gaps);
             let requested = if !self.preview_open {
                 collapsed_rows

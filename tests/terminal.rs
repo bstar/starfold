@@ -70,6 +70,75 @@ fn pty() -> (File, File) {
     (master, slave)
 }
 
+#[test]
+fn fragmented_focus_report_does_not_block_the_frame_loop() {
+    let (master, slave) = pty();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", "fragmented_focus_poll_child", "--nocapture"])
+        .env("STARFOLD_TEST_POLL_CHILD", "1")
+        .stdin(Stdio::from(slave.try_clone().unwrap()))
+        .stdout(Stdio::from(slave.try_clone().unwrap()))
+        .stderr(Stdio::from(slave));
+    let mut child = Running {
+        child: command.spawn().unwrap(),
+        master: Some(master),
+    };
+    let mut output = Vec::new();
+    let mut until = |child: &mut Running, marker: &[u8], duration: Duration| {
+        let deadline = Instant::now() + duration;
+        while Instant::now() < deadline {
+            let mut bytes = [0; 4096];
+            match child.master.as_mut().unwrap().read(&mut bytes) {
+                Ok(n) => output.extend_from_slice(&bytes[..n]),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(_) => break,
+            }
+            if output.windows(marker.len()).any(|w| w == marker) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        false
+    };
+    assert!(until(&mut child, b"POLL_READY", Duration::from_secs(5)));
+    child.master.as_mut().unwrap().write_all(b"\x1b[").unwrap();
+    let returned = until(&mut child, b"POLL_RETURNED", Duration::from_millis(500));
+    // Complete the report even on failure so a blocked reader can unwind.
+    child.master.as_mut().unwrap().write_all(b"O").unwrap();
+    assert!(
+        returned,
+        "A partial focus report blocked timed input polling until more input arrived"
+    );
+    assert!(until(&mut child, b"FOCUS_RECEIVED", Duration::from_secs(2)));
+}
+
+#[test]
+fn fragmented_focus_poll_child() {
+    if std::env::var_os("STARFOLD_TEST_POLL_CHILD").is_none() {
+        return;
+    }
+    use starkit::crossterm::{event, terminal};
+    terminal::enable_raw_mode().unwrap();
+    // SAFETY: F_GETFL only inspects these inherited, live descriptors.
+    let flags = unsafe { [libc::fcntl(0, libc::F_GETFL), libc::fcntl(1, libc::F_GETFL)] };
+    event::poll(Duration::ZERO).unwrap();
+    // SAFETY: as above; initializing input must not alter output's flags.
+    assert_eq!(flags, unsafe {
+        [libc::fcntl(0, libc::F_GETFL), libc::fcntl(1, libc::F_GETFL)]
+    });
+    println!("POLL_READY");
+    io::stdout().flush().unwrap();
+    assert!(!event::poll(Duration::from_millis(80)).unwrap());
+    println!("POLL_RETURNED");
+    io::stdout().flush().unwrap();
+    assert!(event::poll(Duration::from_secs(2)).unwrap());
+    assert_eq!(event::read().unwrap(), event::Event::FocusLost);
+    println!("FOCUS_RECEIVED");
+    io::stdout().flush().unwrap();
+    terminal::disable_raw_mode().unwrap();
+}
+
 fn frame(child: &mut Running) -> Vec<u8> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut output = Vec::new();

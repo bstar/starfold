@@ -27,21 +27,7 @@ impl std::fmt::Debug for Colors {
 }
 impl Colors {
     pub fn palette(theme: &Core) -> starkit::native_surface::style::Palette {
-        use starkit::native_surface::style::{Palette, REFERENCE_PALETTE, SILVER_PALETTE};
-        match theme.id.as_str() {
-            "winamp-classic" => return REFERENCE_PALETTE,
-            "winamp-silver" => return SILVER_PALETTE,
-            _ => {}
-        }
-        let mut palette = Palette::from_theme(theme);
-        // Match AMP's graphical interpretation of Kanagawa: raised slate
-        // frames around darker wells, rather than terminal-base-colored frames.
-        if theme.name == "Kanagawa" {
-            palette.bg = [theme.header_bg.r, theme.header_bg.g, theme.header_bg.b];
-            let inset = theme.bg.mix(Rgb::new(0, 0, 0), 0.12);
-            palette.inset_bg = Some([inset.r, inset.g, inset.b]);
-        }
-        palette
+        starkit::native_surface::style::Palette::for_chrome(theme)
     }
 
     pub fn from_palette(palette: starkit::native_surface::style::Palette) -> Self {
