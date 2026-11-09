@@ -2,7 +2,7 @@
 
 ```
 starfold [--verbose] [DIR]
-starfold list DIR [--hidden] [--sort name|size|time|ext|created|accessed|type]
+starfold list DIR [--json] [--hidden] [--sort name|size|time|ext|created|accessed|type]
 ```
 
 `--verbose` raises the log level to debug. It goes to the log file at
@@ -46,6 +46,7 @@ a trailing `/`; a symlink to one counts as a directory here too.
 
 | Flag | Does |
 | --- | --- |
+| `--json` | schema 1 JSON for application file selectors; includes a truncation flag and non-followed link kinds |
 | `--hidden` | include entries whose name starts with `.` |
 | `--sort KEY` | `name`, `size`, `time` (also `modified`), `ext`, `created`, `accessed`, or `type`. Default `name` |
 

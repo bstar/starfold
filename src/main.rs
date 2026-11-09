@@ -74,7 +74,12 @@ fn main() -> Result<()> {
     let _log = starkit::logging::init(&PATHS, cli.verbose)?;
 
     match cli.command {
-        Some(cli::Command::List { dir, hidden, sort }) => run_list(dir, hidden, sort),
+        Some(cli::Command::List {
+            dir,
+            hidden,
+            sort,
+            json,
+        }) => run_list(dir, hidden, sort, json),
         Some(cli::Command::Update { action }) => updates::command(action),
         None => {
             updates::startup();
@@ -94,7 +99,7 @@ fn main() -> Result<()> {
 /// `format::{size,when,mode}`) directly on the calling thread, because there
 /// is nothing here that benefits from a second thread: the process reads one
 /// directory and exits.
-fn run_list(dir: PathBuf, hidden: bool, sort: cli::SortArg) -> Result<()> {
+fn run_list(dir: PathBuf, hidden: bool, sort: cli::SortArg, json: bool) -> Result<()> {
     let cfg = fold::listing::ListConfig {
         show_hidden: hidden,
         sort: fold::sort::SortOrder {
@@ -113,6 +118,32 @@ fn run_list(dir: PathBuf, hidden: bool, sort: cli::SortArg) -> Result<()> {
     if let Some(reason) = &listing.error {
         eprintln!("{}: {reason}", dir.display());
         std::process::exit(1);
+    }
+
+    if json {
+        let entries: Vec<_> = fold::sort::order(&listing.entries, cfg.sort, cfg.show_hidden)
+            .into_iter()
+            .map(|i| {
+                let entry = &listing.entries[i];
+                serde_json::json!({
+                    "path": entry.path.to_str(),
+                    "name": entry.display,
+                    "is_dir": entry.kind == fold::entry::EntryKind::Dir,
+                    "is_symlink": entry.kind == fold::entry::EntryKind::Symlink,
+                    "bytes": entry.len,
+                    "selectable": entry.path.to_str().is_some()
+                        && entry.kind != fold::entry::EntryKind::Other,
+                    "modified_ns": entry.modified
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| duration.as_nanos()),
+                })
+            })
+            .collect();
+        serde_json::to_writer(
+            std::io::stdout().lock(),
+            &serde_json::json!({"schema":1,"directory":dir,"entries":entries,"truncated":listing.truncated}),
+        )?;
+        return Ok(());
     }
 
     let tz = jiff::tz::TimeZone::system();

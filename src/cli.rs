@@ -56,6 +56,9 @@ pub enum Command {
         /// How to order the listing.
         #[arg(long, value_enum, default_value_t)]
         sort: SortArg,
+        /// Emit a versioned listing for application file selectors.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -146,9 +149,15 @@ mod tests {
     fn list_takes_a_directory_and_defaults_to_a_visible_name_sort() {
         let cli = Cli::parse_from(["starfold", "list", "/tmp"]);
         match cli.command {
-            Some(Command::List { dir, hidden, sort }) => {
+            Some(Command::List {
+                dir,
+                hidden,
+                sort,
+                json,
+            }) => {
                 assert_eq!(dir, std::path::PathBuf::from("/tmp"));
                 assert!(!hidden);
+                assert!(!json);
                 assert_eq!(sort, SortArg::Name);
             }
             other => panic!("{other:?}"),

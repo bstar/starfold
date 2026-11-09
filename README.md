@@ -50,11 +50,18 @@ and `enter` or `X` resumes it.
 
 ```sh
 starfold list .
+starfold list . --json --hidden
 ```
 
 Prints the current directory and exits, with no window involved — the same
 reader the column itself uses. [On the command line](docs/cli.md) has the
 rest of it.
+
+`--json` emits schema 1 with the canonical `directory`, `entries`, and a
+`truncated` flag. Entries expose their path, display name, directory/link kind,
+size, modification time, and whether they can be selected. Non-UTF-8 paths have
+a null path and are unselectable; links are listed without following targets.
+STAR/VAULT uses this interface for its backup-aware file selector.
 
 ## What it does
 
