@@ -25,7 +25,7 @@ jobs:
     steps:
       - name: Install the native Arch toolchain
         run: pacman -Syu --needed --noconfirm base-devel rust git ffmpeg alsa-lib clang pkgconf python
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Prepare an unprivileged builder
         run: |
           useradd --create-home builder
