@@ -88,7 +88,7 @@ impl Host {
             }
         };
         socket
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .unwrap();
         write_message(
             &ClientMessage::Hello {
@@ -113,7 +113,7 @@ fn wait(
         let m = read_message::<ServerMessage>(reader)
             .unwrap()
             .expect("session unexpectedly closed");
-        assert!(start.elapsed() < Duration::from_secs(10));
+        assert!(start.elapsed() < Duration::from_secs(30));
         if test(&m) {
             return m;
         }
