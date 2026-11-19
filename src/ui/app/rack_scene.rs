@@ -59,9 +59,7 @@ impl<'a> Canvas<'a> {
             })
             .cloned();
         let target = pixel_bounds(rect, cell, placements);
-        let surface = colors
-            .style()
-            .panel(target.width.max(1), target.height.max(1), "");
+        let surface = colors.browser_panel(target.width.max(1), target.height.max(1), "");
         Self {
             rect,
             cell,
@@ -126,7 +124,7 @@ impl<'a> Canvas<'a> {
         let mut px = self.pixels(r);
         px.x += 6;
         px.width = px.width.saturating_sub(12);
-        let font = 11;
+        let font = 12;
         rack::mono(
             &mut self.surface,
             px,
@@ -167,7 +165,7 @@ impl<'a> Canvas<'a> {
         px.height = px.height.saturating_sub(4);
         self.colors
             .style()
-            .button(&mut self.surface, px, label, "fold-control", pressed);
+            .tool(&mut self.surface, px, label, "fold-control", pressed);
         self.hits.push((r, hit));
     }
     fn header_action(&mut self, r: Rect, label: &str, hit: RackHit, hotkeys: bool) {
@@ -203,8 +201,7 @@ impl<'a> Canvas<'a> {
     fn title(&mut self, label: &str) {
         self.surface = self
             .colors
-            .style()
-            .panel(self.target.width, self.target.height, label);
+            .browser_panel(self.target.width, self.target.height, label);
     }
     fn finish(self, scene: &mut Scene, hits: &mut Vec<(Rect, RackHit)>) {
         // A fully native pane replaces its cell-content surface, including
@@ -431,7 +428,7 @@ impl App {
             return false;
         }
         let stack = regions.rect_of(ModuleId::Stack);
-        if stack.contains((x, y).into()) {
+        if layout::rack_browser(regions) && stack.contains((x, y).into()) {
             let pane = usize::from(self.commander && x >= stack.x + stack.width / 2);
             let rect = if self.commander {
                 pane_rect(stack, pane)
@@ -552,6 +549,16 @@ impl App {
                                 ),
                                 &rack::hex(background.mix(p.accent, 0.05)),
                                 4,
+                            );
+                            c.surface.fill(
+                                R::new(
+                                    r.x + 6,
+                                    r.y + 2,
+                                    2.min(r.width),
+                                    r.height.saturating_sub(4),
+                                ),
+                                &rack::hex(p.accent),
+                                0,
                             );
                         }
                         let text = R::new(r.x + 10, r.y, r.width.saturating_sub(20), r.height / 2);
@@ -752,12 +759,13 @@ impl App {
     pub(super) fn rack_scene(&mut self, scene: &mut Scene, regions: &Regions, cell: (u16, u16)) {
         self.graphical.as_mut().unwrap().rack_hits.clear();
         let stack = regions.rect_of(ModuleId::Stack);
-        if stack.width < 100 || stack.height < 10 {
+        if !layout::rack_browser(regions) {
             return;
         }
         let palette = self.theme.rack.clone();
         let p = &palette;
         let mut hits = vec![];
+        let mut breadcrumb_hits = Vec::new();
         for pane in 0..if self.commander { 2 } else { 1 } {
             let rect = if self.commander {
                 pane_rect(stack, pane)
@@ -839,8 +847,11 @@ impl App {
             let crumbs = breadcrumb_slots(path_area, path, &self.view.home);
             let crumb_font = starkit::native_surface::Metrics::from_cell(cell.0, cell.1)
                 .font
-                .min(11);
-            for (index, (r, label, target)) in crumbs.iter().enumerate() {
+                .min(12);
+            let show_path =
+                view.filter.is_none() && (pane != self.active_pane || self.filter.is_none());
+            for (index, (r, label, target)) in crumbs.iter().enumerate().filter(|_| show_path) {
+                breadcrumb_hits.push((*r, pane, target.clone()));
                 let mut px = c.pixels(*r);
                 // Preserve the full interior at fractional placement edges.
                 px.width = px
@@ -857,7 +868,7 @@ impl App {
                         p.muted
                     }),
                     crumb_font,
-                    false,
+                    target == path,
                 );
                 if index + 1 < crumbs.len() && label != "/" {
                     let gap = c.pixels(Rect::new(r.right(), r.y, 3, 1));
@@ -945,7 +956,13 @@ impl App {
                 if selected {
                     c.fill(
                         Rect::new(list.x, y, list.width, 1),
-                        p.inset.mix(p.accent, 0.10),
+                        p.inset.mix(p.accent, 0.12),
+                    );
+                    let row = c.pixels(Rect::new(list.x, y, list.width, 1));
+                    c.surface.fill(
+                        R::new(row.x, row.y, 2.min(row.width), row.height),
+                        &rack::hex(p.accent),
+                        0,
                     );
                 }
                 let icon = row.icon();
@@ -983,11 +1000,7 @@ impl App {
                 format!(
                     "{} entries · {marked} marked{}",
                     view.rows.len(),
-                    if pane == self.active_pane {
-                        " · active"
-                    } else {
-                        ""
-                    }
+                    if view.focused { " · active" } else { "" }
                 ),
                 true,
                 true,
@@ -1067,7 +1080,9 @@ impl App {
             );
             c.finish(scene, &mut hits);
         }
-        self.graphical.as_mut().unwrap().rack_hits = hits;
+        let state = self.graphical.as_mut().unwrap();
+        state.rack_hits = hits;
+        state.breadcrumb_hits = breadcrumb_hits;
     }
 
     fn rack_operations(

@@ -271,7 +271,8 @@ still requires a real logged-in Mac and remains a separate verification gate.
 `scripts/test-graphical-drag.py` injects real X11 mouse events into a private
 Kitty, verifies OSC 72 was used, clicks Copy and Move, checks exact file bytes,
 and bounds hover traffic. Run it only in an isolated Xvfb display; it requires
-libX11/libXtst and JetBrainsMono Nerd Font for its fixed 9pt geometry:
+libX11/libXtst, JetBrainsMono Nerd Font, ImageMagick, and Tesseract to locate
+file rows and menu actions in the captured window:
 
 ```sh
 xvfb-run -a -s '-screen 0 1920x1080x24' python3 scripts/test-graphical-drag.py \
@@ -343,9 +344,11 @@ The source of the shared renderer is in STAR/KIT's `src/terminal_graphics/native
 The graphical presentation uses KIT native surfaces for compact pane toolbars,
 continuous storage meters, and the padded status bar. Tabs keep their close
 buttons and grow with the label within a bounded width. Their 28px strip uses
-an active underline. File names use 11px text; breadcrumb text is capped at
-11px using KIT's cell metrics, with explicit path separators. Operations collapses to
-an idle/history strip and expands for active work, failures, or explicit focus.
+an active underline. File names use 12px text. Breadcrumb text is capped at
+12px using KIT's cell metrics, with explicit path separators and a bold current
+segment. A thin accent and tinted background indicate the cursor row. Operations
+collapses to an idle/history strip and expands for active work, failures, or
+explicit focus.
 These surfaces are negotiated using the `native_surfaces` frontend capability.
 The additive `pixel_layout` capability supplies shared KIT pixel gaps and panel
 insets, independent of terminal cell proportions. Rendering and mouse projection
@@ -357,15 +360,11 @@ Preview's native Close button uses AMP's 30×24px header target with a 10px
 right inset. Its pointer target follows the painted pixel bounds through
 resizing and zoom; the former cell-word position is ordinary header space.
 
-Native pane frames use KIT's `Style::frame`/`Style::panel`; focus uses AMP's
-original one-pixel corner mask with AMP's exact theme accent (foreground for
-Silver) at the same physical
-bounds. Its stroke stays one physical pixel at enlarged terminal sizes. Legacy `Panel` markers contribute
-to scroll identity but are removed before pixel painting, so a second outline
-cannot leak through the frame's rounded corners.
-The same KIT panel constructor also wraps previews and short file panes whose
-contents still come from the cell controller. They do not fall back to a
-separate border-only treatment when the preview grows.
+Native pane frames use a flat one-pixel KIT border. The focus outline keeps
+AMP's one-pixel corner mask and theme accent (foreground for Silver) at its
+physical size through terminal zoom. The same frame wraps previews and compact
+file panes whose contents come from the cell controller. Legacy panel markers
+supply scroll identity and are removed before pixel painting.
 
 The graphical view resolves the selected theme using AMP's pane palette roles,
 including Kanagawa's raised slate frames and darker content wells. Set

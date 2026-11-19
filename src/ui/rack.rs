@@ -53,6 +53,28 @@ impl Colors {
         &self.shared
     }
 
+    pub fn browser_panel(&self, width: u16, height: u16, title: &str) -> Surface {
+        let mut surface = self.style().surface(width, height);
+        surface.background = hex(self.inset);
+        surface.nodes.push(Primitive::Border {
+            rect: R::new(0, 0, width, height),
+            color: hex(self.shadow),
+            radius: 0,
+        });
+        if !title.is_empty() && width >= 36 && height >= 32 {
+            surface.fill(R::new(1, 1, width - 2, 30), &hex(self.title), 0);
+            mono(
+                &mut surface,
+                R::new(18, 7, width - 36, 24),
+                title,
+                self.foreground,
+                12,
+                true,
+            );
+        }
+        surface
+    }
+
     /// AMP's original one-pixel corner mask and exact selection color. Keep
     /// this in physical pixels so terminal zoom never thickens the outline.
     pub fn focus(&self, surface: &mut Surface, rect: R) {

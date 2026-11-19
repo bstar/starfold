@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Real mouse Copy/Move smoke test in a private Xvfb display (Kitty >= 0.49).
 
-Requires JetBrainsMono Nerd Font, libX11 and libXtst. Uses a fixed 1800x1000,
-9pt fixture so coordinates are explicit. Run ONLY under a private Xvfb display:
+Requires JetBrainsMono Nerd Font, libX11, libXtst, ImageMagick and Tesseract. Locates
+file rows and menu actions in actual Kitty captures. Run ONLY under a private Xvfb display:
 this script injects X11 pointer events. Unit tests cover varying geometry,
 marked sets, fast releases, cancellation, self-drops and scrollbar ownership.
 """
 import argparse
 import ctypes
+import csv
+import io
 import ctypes.util
 import os
 import pathlib
@@ -52,6 +54,45 @@ with tempfile.TemporaryDirectory(prefix='fold-drag-pixels-') as temp:
  env={**os.environ,'STARFOLD_DIR':str(root/'app'),'STARFOLD_CONFIG_DIR':str(root/'config'),'STARFOLD_LOG':'starfold=debug,starkit=debug'},stdout=log,stderr=log)
  def rc(*args):return subprocess.check_output([kitten,'@','--to',address,*args],stderr=subprocess.PIPE,timeout=10)
  def key(k):rc('send-key',k);time.sleep(.35)
+ def locate(image, word, crop=None):
+  command=['tesseract',str(image),'stdout','--psm','11','tsv']
+  left=top=0
+  scale=1
+  pixels=None
+  if crop is not None:
+   left,top=crop
+   scale=3
+   pixels=subprocess.check_output([
+    'magick',str(image),'-crop',f'160x90+{left}+{top}','+repage',
+    '-resize','300%','-colorspace','Gray','png:-'],timeout=10)
+   command[1]='stdin'
+  data=subprocess.check_output(command,input=pixels,stderr=subprocess.DEVNULL,timeout=10)
+  for row in csv.DictReader(io.StringIO(data.decode()),delimiter='\t'):
+   if row['text'].strip().casefold()==word.casefold():
+    x=int(row['left'])+int(row['width'])//2
+    y=int(row['top'])+int(row['height'])//2
+    return left+x//scale,top+y//scale
+  raise AssertionError(f'{word!r} is missing from {image}')
+
+ def click(x,y):
+  motion(x,y);button(1);button(0)
+
+ def drop(action):
+  screen=out/'before.png'
+  rc('screenshot',str(screen))
+  sx,sy=locate(screen,'payload.bin')
+  dx,dy=locate(screen,'RIGHT')
+  # The list beneath the right pane heading accepts its directory's drops.
+  dy+=145
+  motion(sx,sy);button(1)
+  for step in (.1,.35,.65,1):
+   motion(round(sx+(dx-sx)*step),round(sy+(dy-sy)*step))
+  time.sleep(.4);button(0);time.sleep(.7)
+  menu=out/f'dropped-{action.lower()}.png'
+  rc('screenshot',str(menu))
+  # Move is unhighlighted initially, which makes its text easier to locate.
+  mx,my=locate(menu,'Move',crop=(dx-14,dy-40))
+  click(mx,my-16 if action=='Copy' else my)
  app_log=root/'app/cache/starfold.log'
  try:
   deadline=time.monotonic()+30
@@ -59,15 +100,11 @@ with tempfile.TemporaryDirectory(prefix='fold-drag-pixels-') as temp:
    assert time.monotonic()<deadline
    time.sleep(.1)
   time.sleep(.7)
-  for k in ['v','enter','tab','j','enter','tab']:key(k)
-  rc('screenshot',str(out/'before.png'))
-
-  # Actual X11 events exercise Kitty's desktop drag protocol.
-  motion(160,82);button(1)
-  for x,y in [(190,82),(300,120),(600,160),(950,210),(1150,250)]:motion(x,y)
-  time.sleep(.4);button(0);time.sleep(.7)
-  rc('screenshot',str(out/'dropped.png'))
-  motion(1180,268);button(1);button(0)
+  for k in ['v','enter']:key(k)
+  rc('screenshot',str(out/'directories.png'))
+  click(*locate(out/'directories.png','right/'))
+  key('enter')
+  drop('Copy')
   deadline=time.monotonic()+8
   while not (right/'payload.bin').exists():
    if time.monotonic()>deadline:
@@ -80,10 +117,7 @@ with tempfile.TemporaryDirectory(prefix='fold-drag-pixels-') as temp:
   # A second drop uses Move through the mouse menu.
   (right/'payload.bin').unlink()
   time.sleep(.6)
-  motion(160,82);button(1)
-  for x,y in [(190,82),(600,160),(1150,250)]:motion(x,y)
-  button(0);time.sleep(.7)
-  motion(1180,284);button(1);button(0)
+  drop('Move')
   deadline=time.monotonic()+8
   while (left/'payload.bin').exists() or not (right/'payload.bin').exists():
    assert time.monotonic()<deadline, 'Mouse Move did not complete'

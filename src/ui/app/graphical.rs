@@ -23,6 +23,7 @@ pub(super) struct State {
     pub(super) base_scrollbars: Vec<Component>,
     placements: Vec<starkit::terminal_graphics::placement::Placement>,
     rack_hits: Vec<(Rect, RackHit)>,
+    breadcrumb_hits: Vec<(Rect, usize, PathBuf)>,
     preview_close: Option<starkit::native_surface::PixelRect>,
     viewport: Option<Viewport>,
     preserved_preview: Option<(u16, u16)>,
@@ -130,8 +131,6 @@ fn pixel_placements(
     regions: &Regions,
     commander: bool,
     v: Viewport,
-    modals: &[Rect],
-    overlay: &[Span],
 ) -> Vec<starkit::terminal_graphics::placement::Placement> {
     use starkit::native_surface::{Metrics, PixelRect as R};
     use starkit::terminal_graphics::placement::{self, Placement};
@@ -278,11 +277,24 @@ fn pixel_placements(
             });
         }
     }
+    result
+}
+
+fn append_modal_placements(
+    placements: &mut Vec<starkit::terminal_graphics::placement::Placement>,
+    v: Viewport,
+    modals: &[Rect],
+    overlay: &[Span],
+) {
+    use starkit::native_surface::PixelRect as R;
+    use starkit::terminal_graphics::placement::Placement;
+    let cw = (v.width / u32::from(v.columns)).max(1) as u16;
+    let ch = (v.height / u32::from(v.rows)).max(1) as u16;
     for source in modals {
         if source.width == 0 || source.height == 0 {
             continue;
         }
-        let parent = result
+        let parent = placements
             .iter()
             .rev()
             .find(|p| p.source.contains(source.x, source.y));
@@ -298,7 +310,7 @@ fn pixel_placements(
             .unwrap_or((source.x.saturating_mul(cw), source.y.saturating_mul(ch)));
         let width = source.width.saturating_mul(cw).min(v.width as u16);
         let height = source.height.saturating_mul(ch).min(v.height as u16);
-        result.push(Placement {
+        placements.push(Placement {
             source: (*source).into(),
             target: R::new(
                 // Mouse reports identify terminal cells. A menu row straddling
@@ -318,7 +330,6 @@ fn pixel_placements(
             ),
         });
     }
-    result
 }
 
 pub(super) fn scrollbar(track: Rect, thumb: starkit::chrome::scrollbar::Thumb) -> Component {
@@ -432,7 +443,7 @@ impl App {
         }
         let regions = self.layout.last.as_ref()?;
         let viewport = state.viewport?;
-        let placements = pixel_placements(regions, self.commander, viewport, &[], &[]);
+        let placements = pixel_placements(regions, self.commander, viewport);
         let p = placements
             .iter()
             .find(|p| p.source == regions.rect_of(ModuleId::Preview).into())?;
@@ -652,50 +663,29 @@ impl App {
                 self.repaint = true;
                 return;
             }
-            if let Some(regions) = self.layout.last.as_ref() {
-                let pane = if self.commander {
-                    usize::from(
-                        x >= regions.rect_of(ModuleId::Stack).x
-                            + regions.rect_of(ModuleId::Stack).width / 2,
-                    )
-                } else {
-                    0
-                };
-                let rect = if self.commander {
-                    pane_rect(regions.rect_of(ModuleId::Stack), pane)
-                } else {
-                    regions.rect_of(ModuleId::Stack)
-                };
-                let view = if self.commander {
-                    self.pane_view(pane)
-                } else {
-                    self.stack_view()
-                };
-                let body = starkit::chrome::frame::body(rect, &panels::words(ModuleId::Stack));
-                let mut rule = panels::stack::split(body, view.crumbs.len(), view.fold_rows).rule;
-                rule.x += 2;
-                rule.width = rule
-                    .width
-                    .saturating_sub(2 + breadcrumb_detail_width(&view));
-                let path = if self.commander {
+            let breadcrumb = self
+                .graphical
+                .as_ref()
+                .unwrap()
+                .breadcrumb_hits
+                .iter()
+                .find(|(rect, _, _)| rect.contains((x, y).into()))
+                .cloned();
+            if let Some((_, pane, target)) = breadcrumb {
+                let current = if self.commander {
                     &self.panes[pane].dir
                 } else {
                     &self.view.active_dir
                 };
-                if let Some((_, _, target)) = breadcrumb_slots(rule, path, &self.view.home)
-                    .into_iter()
-                    .find(|(r, _, _)| r.contains((x, y).into()))
-                {
-                    let current = path == &target;
-                    if self.commander {
-                        self.focus_pane(pane);
-                    }
-                    if !current {
-                        self.core.send(Command::Push(target));
-                    }
-                    self.repaint = true;
-                    return;
+                let navigate = *current != target;
+                if self.commander {
+                    self.focus_pane(pane);
                 }
+                if navigate {
+                    self.core.send(Command::Push(target));
+                }
+                self.repaint = true;
+                return;
             }
             if self.rack_background_click(x, y) {
                 self.repaint = true;
@@ -844,7 +834,7 @@ impl App {
         if content.width == 0 || content.height == 0 {
             return;
         }
-        let placements = pixel_placements(regions, self.commander, viewport, &[], &[]);
+        let placements = pixel_placements(regions, self.commander, viewport);
         let Some(p) = placements.iter().find(|p| p.source == outer.into()) else {
             return;
         };
@@ -1356,6 +1346,7 @@ impl Controller for App {
         true
     }
     fn presentation(&mut self, cells: bool) {
+        Controller::input(self, Input::CancelPointer);
         let state = self.graphical.as_mut().unwrap();
         state.preserved_preview = self
             .layout
@@ -1366,6 +1357,7 @@ impl Controller for App {
         state.cell_mode = cells;
         state.placements.clear();
         state.rack_hits.clear();
+        state.breadcrumb_hits.clear();
         state.pointer_capture = None;
         state.audio_pointer_held = false;
         state.base_buffer = None;
@@ -1581,6 +1573,9 @@ impl Controller for App {
         }
         let state = self.graphical.as_mut().unwrap();
         state.placements.clear();
+        state.rack_hits.clear();
+        state.breadcrumb_hits.clear();
+        state.resize_handle = None;
         state.viewport = Some(viewport);
         // Keep compact chrome at the established terminal floor.
         state.padded_chrome = !state.cell_mode
@@ -1629,7 +1624,7 @@ impl Controller for App {
         };
         if pixels {
             scene.background = hex(starkit::theme::Resolve::core(&self.theme).bg);
-            scene.placements = pixel_placements(&regions, self.commander, viewport, &[], &[]);
+            scene.placements = pixel_placements(&regions, self.commander, viewport);
         }
         let _rack = panels::stack::rack_scope(pixels && layout::rack_browser(&regions));
         // The preview may have changed the list capacity during this draw.
@@ -1644,8 +1639,8 @@ impl Controller for App {
             pane.dir.hash(&mut targets);
             pane.key.hash(&mut targets);
         }
+        self.core.state().tabs.active().id.hash(&mut targets);
         let mut scroll_targets = targets.clone();
-        self.core.state().tabs.active().id.hash(&mut scroll_targets);
         self.audio_path.hash(&mut scroll_targets);
         self.audio_here().hash(&mut scroll_targets);
         let modal = self.overlays.is_open() || self.places.is_some() || self.tab_picker.is_some();
@@ -1793,6 +1788,7 @@ impl Controller for App {
                 });
             }
         }
+        let mut row_hits = Vec::new();
         {
             let pane_count = if self.commander { self.panes.len() } else { 1 };
             for pane in 0..pane_count {
@@ -1973,6 +1969,7 @@ impl Controller for App {
                                 _ => "file",
                             },
                         };
+                        row_hits.push(Rect::new(list.x, y, list.width, 1));
                         scene.components.push(Component::ListRow {
                             rect: starkit::terminal_graphics::Rect {
                                 x: list.x,
@@ -2079,6 +2076,10 @@ impl Controller for App {
                         } else {
                             ModuleId::Stack
                         };
+                        if module == ModuleId::Stack && layout::rack_browser(&regions) {
+                            scene.components.push(component);
+                            continue;
+                        }
                         let title = match module {
                             ModuleId::Preview if self.audio_here() => "STAR/AMP".to_string(),
                             ModuleId::Preview => format!(
@@ -2230,6 +2231,26 @@ impl Controller for App {
             }
         }
         scene.interaction = targets.finish();
+        for (rect, hit) in &self.tab_hits {
+            (rect.x, rect.y, rect.width, rect.height).hash(&mut targets);
+            std::mem::discriminant(hit).hash(&mut targets);
+            if let super::super::tabs::Hit::Tab(id) | super::super::tabs::Hit::Close(id) = hit {
+                id.hash(&mut targets);
+            }
+        }
+        for (rect, hit) in &self.graphical.as_ref().unwrap().rack_hits {
+            (rect.x, rect.y, rect.width, rect.height).hash(&mut targets);
+            std::mem::discriminant(hit).hash(&mut targets);
+            match hit {
+                RackHit::Action(action) => action.hash(&mut targets),
+                RackHit::Word(word) => std::mem::discriminant(word).hash(&mut targets),
+                RackHit::Pane(pane, action) => (pane, action).hash(&mut targets),
+                RackHit::Operation(index) => index.hash(&mut targets),
+            }
+        }
+        for (rect, pane, path) in &self.graphical.as_ref().unwrap().breadcrumb_hits {
+            (rect.x, rect.y, rect.width, rect.height, pane, path).hash(&mut targets);
+        }
         let extension_rect = panels::preview::content_rect(regions.rect_of(ModuleId::Preview));
         self.extension_viewport(
             extension_rect,
@@ -2411,7 +2432,16 @@ impl Controller for App {
                         .iter()
                         .map(|(r, _)| *r),
                 );
+                clickable.extend(
+                    self.graphical
+                        .as_ref()
+                        .unwrap()
+                        .breadcrumb_hits
+                        .iter()
+                        .map(|(rect, _, _)| *rect),
+                );
                 clickable.extend(self.tab_hits.iter().map(|(rect, _)| *rect));
+                clickable.extend(row_hits);
                 let status = self.status_view(Instant::now());
                 for x in regions.status.x..if self.layout.native_rack {
                     regions.status.x
@@ -2447,47 +2477,13 @@ impl Controller for App {
                         } else {
                             self.panel_words(module)
                         };
-                        clickable.extend(
-                            starkit::chrome::header::slots(rect, &words)
-                                .into_iter()
-                                .map(|(_, rect)| rect),
-                        );
-                        if module == ModuleId::Stack {
-                            let view = if self.commander {
-                                self.pane_view(pane)
-                            } else {
-                                self.stack_view()
-                            };
-                            let body = starkit::chrome::frame::body(rect, &panels::words(module));
-                            let mut rule =
-                                panels::stack::split(body, view.crumbs.len(), view.fold_rows).rule;
-                            rule.x += 2;
-                            rule.width = rule
-                                .width
-                                .saturating_sub(2 + breadcrumb_detail_width(&view));
-                            let path = if self.commander {
-                                &self.panes[pane].dir
-                            } else {
-                                &self.view.active_dir
-                            };
-                            let list =
-                                panels::stack::split(body, view.crumbs.len(), view.fold_rows).list;
-                            if !view.loading && view.error.is_none() {
-                                clickable.extend(
-                                    view.rows
-                                        .iter()
-                                        .skip(view.scroll)
-                                        .take(usize::from(list.height))
-                                        .enumerate()
-                                        .map(|(index, _)| {
-                                            Rect::new(list.x, list.y + index as u16, list.width, 1)
-                                        }),
-                                );
-                            }
+                        if !(pixels && layout::rack_browser(&regions)) || module != ModuleId::Stack
+                        {
                             clickable.extend(
-                                breadcrumb_slots(rule, path, &self.view.home)
+                                starkit::chrome::header::slots(rect, &words)
                                     .into_iter()
-                                    .map(|(rect, _, _)| rect),
+                                    .filter(|(word, _)| !pixels || *word != panels::Word::Close)
+                                    .map(|(_, rect)| rect),
                             );
                         }
                     }
@@ -2529,9 +2525,8 @@ impl Controller for App {
             } else {
                 Vec::new()
             };
-            scene.placements = pixel_placements(
-                &regions,
-                self.commander,
+            append_modal_placements(
+                &mut scene.placements,
                 viewport,
                 &modal_rects,
                 &overlay_spans,
@@ -5512,20 +5507,34 @@ mod tests {
                 ..Viewport::default()
             },
         );
-        let rect = pane_rect(
-            app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack),
-            0,
-        );
-        let body = starkit::chrome::frame::body(rect, &panels::words(ModuleId::Stack));
-        let mut rule = panels::stack::split(body, 0, 0).rule;
-        rule.x += 2;
-        rule.width = rule.width.saturating_sub(2);
-        let slots = breadcrumb_slots(rule, &left, &app.view.home);
-        let target = slots
+        let parent = fake.home().join("Pictures");
+        let target = app
+            .graphical
+            .as_ref()
+            .unwrap()
+            .breadcrumb_hits
             .iter()
-            .find(|(_, label, _)| label == "Pictures")
+            .find(|(_, pane, path)| *pane == 0 && *path == parent)
             .unwrap()
             .0;
+        app.focus_pane(0);
+        let viewport = app.graphical.as_ref().unwrap().viewport.unwrap();
+        app.filter = Some(TextInput::single());
+        let filtered = Controller::scene(&mut app, viewport);
+        assert!(app
+            .graphical
+            .as_ref()
+            .unwrap()
+            .breadcrumb_hits
+            .iter()
+            .all(|(_, pane, _)| *pane != 0));
+        assert!(filtered
+            .pointer_regions
+            .iter()
+            .all(|rect| *rect != target.into()));
+        app.filter = None;
+        app.focus_pane(1);
+        Controller::scene(&mut app, viewport);
         app.graphical_pointer("down", 0, target.x, target.y, 0);
         fake.pump();
         app.tick();

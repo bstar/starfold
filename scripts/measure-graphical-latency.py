@@ -42,6 +42,8 @@ def main():
             (files / f"{index:02}-preview.txt").write_text(f"STAR/FOLD latency preview {index}\n" * 50)
         environment = dict(os.environ, STARFOLD_DIR=str(root / "app"),
                            STARFOLD_CONFIG_DIR=str(root / "config"))
+        for key in ("TMUX", "TMUX_PANE", "STY", "SSH_CONNECTION", "SSH_TTY"):
+            environment.pop(key, None)
         address = f"unix:{root}/kitty.sock"
         session_path = root / "app/graphical/latency.sock"
         started_app = time.monotonic()
@@ -49,7 +51,7 @@ def main():
             terminal = subprocess.Popen([
                 options.kitty, "--hold", "--config", "/dev/null", "--listen-on", address,
                 "-o", "allow_remote_control=yes", "--title", "STAR-FOLD-LATENCY-PROOF",
-                binary, "graphical", "--session", "latency", str(files),
+                binary, "graphical", "--graphical", "--session", "latency", str(files),
             ], env=environment, stdout=log, stderr=log)
 
             def rc(*command):

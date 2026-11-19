@@ -56,12 +56,14 @@ def main():
         env = dict(os.environ, PATH=str(helper) + ":" + os.environ["PATH"],
                    STARFOLD_DIR=str(root / "app"), STARFOLD_CONFIG_DIR=str(config),
                    STARAMP_DIR=str(root / "amp"), STARAMP_CONFIG_DIR=str(root / "amp-config"))
+        for key in ("TMUX", "TMUX_PANE", "STY", "SSH_CONNECTION", "SSH_TTY"):
+            env.pop(key, None)
         command = [args.kitty, "--hold", "--config", "/dev/null", "--listen-on", address,
                    "-o", "allow_remote_control=yes", "-o", "remember_window_size=no",
                    "-o", "initial_window_width=1800", "-o", "initial_window_height=1000"]
         if args.x11:
             command += ["-o", "linux_display_server=x11"]
-        command += [str(Path(args.binary).resolve()), "graphical", "--session", "layout", str(files)]
+        command += [str(Path(args.binary).resolve()), "graphical", "--graphical", "--session", "layout", str(files)]
         with (output / "kitty.log").open("w") as log:
             terminal = subprocess.Popen(command, env=env, stdout=log, stderr=log)
 
@@ -92,6 +94,9 @@ def main():
                     assert time.monotonic() < deadline, "Graphical startup timed out"
                     time.sleep(.2)
                 time.sleep(1)
+                assert "Native Rust graphical renderer started" in (
+                    root / "app/cache/starfold.log"
+                ).read_text(), "Kitty fell back to cell presentation"
                 shot("fold")
                 key("ctrl+t")
                 key("v")

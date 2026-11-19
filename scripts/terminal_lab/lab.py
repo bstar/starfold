@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -28,6 +29,23 @@ from terminals import EXTERNAL, MANUAL, WAYLAND, launch
 
 HERE = Path(__file__).resolve().parent
 STATUSES = ('pass', 'fail', 'observed', 'unsupported', 'unavailable', 'manual', 'not-run')
+
+
+def test_display_number():
+    # Xvfb's automatic scan starts at :0 and can replace Xwayland's
+    # filesystem socket when the desktop has no abstract listener.
+    host_display = re.search(r':(\d+)(?:\.\d+)?$', os.environ.get('DISPLAY', ''))
+    for _ in range(32):
+        number = 1000 + secrets.randbelow(9000)
+        if host_display and number == int(host_display[1]):
+            continue
+        if any(os.path.lexists(path) for path in (
+            f'/tmp/.X{number}-lock', f'/tmp/.X11-unix/X{number}',
+            f'/tmp/.X11-unix/X{number}_',
+        )):
+            continue
+        return number
+    raise RuntimeError('Could not find an unused X11 display for the terminal lab')
 
 
 def command(args, env=None, timeout=15, check=True):
@@ -122,18 +140,28 @@ class Display:
         self.env['XDG_CACHE_HOME'] = str(root / 'display-cache')
         self.env['HOME'] = str(root / 'display-home')
         Path(self.env['HOME']).mkdir()
+        number = test_display_number()
         read, write = os.pipe()
-        log = self.log('xvfb.log')
-        xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(write), '-screen', '0',
-                                 '1280x900x24', '-nolisten', 'tcp', '-ac'],
-                                pass_fds=(write,), env=self.env, stdout=log, stderr=log)
-        self.processes.append(xvfb)
-        os.close(write)
         import select
-        if not select.select([read], [], [], 15)[0]:
-            raise RuntimeError('Xvfb failed; inspect infrastructure/xvfb.log')
-        self.env['DISPLAY'] = ':' + os.read(read, 32).decode().strip()
-        os.close(read)
+        try:
+            log = self.log('xvfb.log')
+            try:
+                xvfb = subprocess.Popen(
+                    ['Xvfb', f':{number}', '-displayfd', str(write), '-screen', '0',
+                     '1280x900x24', '-nolisten', 'tcp', '-ac'],
+                    pass_fds=(write,), env=self.env, stdout=log, stderr=log)
+                self.processes.append(xvfb)
+            finally:
+                os.close(write)
+            if (not select.select([read], [], [], 15)[0]
+                    or os.read(read, 32).strip() != str(number).encode()):
+                raise RuntimeError('Xvfb failed; inspect infrastructure/xvfb.log')
+        except BaseException:
+            self.close()
+            raise
+        finally:
+            os.close(read)
+        self.env['DISPLAY'] = f':{number}'
         self.spawn(['openbox', '--sm-disable'], 'openbox.log')
         time.sleep(.5)
         self.wayland = None
