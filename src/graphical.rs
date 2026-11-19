@@ -54,7 +54,17 @@ impl Options {
         }
         // Generated at the launch site, including when the controller is remote.
         // No local/SSH window can attach to another launch's live workspace.
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        // Some clocks (macOS) are too coarse to separate two launches in one
+        // process, so the stamp is kept strictly increasing.
+        static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as u64;
+        let stamp = LAST
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |last| Some(now.max(last + 1)),
+            )
+            .map_or(now, |last| now.max(last + 1));
         Ok(format!("window-{:x}-{stamp:x}", std::process::id()))
     }
 }

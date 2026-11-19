@@ -15,6 +15,16 @@ fn run(root: &Path, binary: &Path, args: &[&str]) -> Output {
     if cfg!(target_os = "linux") {
         command.env("APPIMAGE", root.join("starfold"));
     }
+    // Another test thread can fork while this binary's copy is still open
+    // for writing; exec then fails with ETXTBSY until that child execs.
+    for _ in 0..50 {
+        match command.output() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
+            result => return result.unwrap(),
+        }
+    }
     command.output().unwrap()
 }
 fn cache(root: &Path) -> PathBuf {
