@@ -33,7 +33,7 @@ binary, since existing processes keep the old executable loaded.
 Verify the AMP helper FOLD actually selects, not just `staramp` on PATH.
 An adjacent `target/release/starfold-staramp` takes priority over the launcher's
 private PATH. On this workstation it must link to
-`/home/bstar/projects/star/staramp-graphical/scripts/run-local.sh`, so AMP
+`/home/bstar/projects/star/staramp/scripts/run-local.sh`, so AMP
 rebuilds cannot leave FOLD using a stale copied executable. Run the native
 playback probe against that adjacent helper. An already running embed child
 keeps its old executable until the player is closed and opened again.

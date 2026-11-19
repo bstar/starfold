@@ -6,9 +6,6 @@ cd "$(dirname "$0")/.."
 fold_root=$PWD
 kit_root=${STARFOLD_KIT_SOURCE:-}
 amp_default="$fold_root/../staramp"
-if [ -f "$fold_root/../staramp-graphical/Cargo.toml" ]; then
-    amp_default="$fold_root/../staramp-graphical"
-fi
 amp_root=${STARFOLD_AMP_SOURCE:-"$amp_default"}
 [ -f "$amp_root/Cargo.toml" ] || {
     echo 'Set STARFOLD_AMP_SOURCE to the matching STAR/AMP checkout.' >&2
