@@ -45,7 +45,7 @@ package() {
     cd "$srcdir/starfold-$pkgver"
     install -Dm755 "$srcdir/target/release/starfold" "$pkgdir/usr/bin/starfold"
     install -Dm755 "$srcdir/target-amp/release/staramp" "$pkgdir/usr/bin/starfold-staramp"
-    for helper in starfold-preview-pdf starfold-preview-video starfold-preview-nvim starfold-archive; do
+    for helper in starfold-preview-pdf starfold-preview-video starfold-preview-nvim starfold-preview-comic starfold-archive; do
         install -Dm755 "$srcdir/target/release/$helper" "$pkgdir/usr/bin/$helper"
     done
     install -Dm644 packaging/starfold.desktop "$pkgdir/usr/share/applications/starfold.desktop"

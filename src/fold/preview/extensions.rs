@@ -259,17 +259,7 @@ fn helper_path(id: &str) -> PathBuf {
     }
 
     // Never search the browsed directory or use its executables.
-    {
-        let executable = std::env::current_exe().unwrap_or_default();
-        let directory = executable.parent().unwrap_or(Path::new("/"));
-        #[cfg(test)]
-        let directory = if directory.file_name().is_some_and(|name| name == "deps") {
-            directory.parent().unwrap_or(directory)
-        } else {
-            directory
-        };
-        directory.join(format!("starfold-preview-{id}"))
-    }
+    crate::paths::helper(&format!("starfold-preview-{id}"))
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Info {

@@ -15,15 +15,7 @@ use std::{
 pub fn executable() -> PathBuf {
     std::env::var_os("STARFOLD_ARCHIVE_EXTENSION")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let current = std::env::current_exe().unwrap_or_default();
-            let folder = current.parent().unwrap_or(Path::new("/"));
-            if folder.file_name().is_some_and(|n| n == "deps") {
-                folder.parent().unwrap_or(folder).join("starfold-archive")
-            } else {
-                folder.join("starfold-archive")
-            }
-        })
+        .unwrap_or_else(|| crate::paths::helper("starfold-archive"))
 }
 pub fn request(
     request: Request,

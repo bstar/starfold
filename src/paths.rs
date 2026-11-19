@@ -17,6 +17,31 @@ pub use starcore::paths::{own_dir, Paths};
 /// dotfile manager wants.
 pub const PATHS: Paths = Paths::new("starfold", "STARFOLD_DIR", "STARFOLD_CONFIG_DIR");
 
+/// A helper executable installed beside STAR/FOLD (archive engine, preview
+/// extensions). Test executables sit deeper inside Cargo's target directory --
+/// `deps/`, or `build/<package>/<hash>/out/` with newer Cargo -- so tests look
+/// for the helper in that directory's ancestors.
+pub(crate) fn helper(name: &str) -> std::path::PathBuf {
+    let executable = std::env::current_exe().unwrap_or_default();
+    let directory = executable
+        .parent()
+        .unwrap_or(std::path::Path::new("/"))
+        .to_path_buf();
+    #[cfg(test)]
+    if let Some(found) = directory
+        .ancestors()
+        .map(|ancestor| ancestor.join(name))
+        .find(|path| path.is_file())
+    {
+        return found;
+    }
+    if directory.file_name().is_some_and(|n| n == "deps") {
+        directory.parent().unwrap_or(&directory).join(name)
+    } else {
+        directory.join(name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
