@@ -6,7 +6,7 @@ pkgdesc='A stack-based terminal file manager in the STAR family'
 arch=('x86_64')
 url='https://github.com/bstar/starfold'
 license=('MIT' 'LicenseRef-UnRAR')
-depends=('glibc' 'gcc-libs' 'ffmpeg' 'alsa-lib' '7zip' 'unar')
+depends=('glibc' 'gcc-libs' 'ffmpeg' 'alsa-lib' '7zip' 'unarchiver')
 makedepends=('rust>=1.92' 'git' 'clang' 'pkgconf')
 optdepends=('xdg-utils: open files with desktop applications'
             'libvips: thumbnail very large images'

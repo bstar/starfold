@@ -345,6 +345,7 @@ fn startup_redraw_and_resize_need_no_cursor_position_reply() {
         .env("STARFOLD_DIR", &config)
         .env("STARFOLD_CONFIG_DIR", &config)
         .env("TERM", "xterm-256color")
+        .env("LC_ALL", "C.UTF-8")
         .stdin(Stdio::from(slave.try_clone().unwrap()))
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave.try_clone().unwrap()));
@@ -494,6 +495,7 @@ fn osc72_capability_reply_and_internal_drop_copy() {
         .env("STARFOLD_DIR", &config)
         .env("STARFOLD_CONFIG_DIR", &config)
         .env("TERM", "xterm-256color")
+        .env("LC_ALL", "C.UTF-8")
         .stdin(Stdio::from(slave.try_clone().unwrap()))
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave));
@@ -750,6 +752,7 @@ fn osc72_remote_desktop_drop_streams_file() {
         .env("STARFOLD_DIR", &config)
         .env("STARFOLD_CONFIG_DIR", &config)
         .env("TERM", "xterm-256color")
+        .env("LC_ALL", "C.UTF-8")
         .stdin(Stdio::from(slave.try_clone().unwrap()))
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave));
@@ -884,6 +887,7 @@ fn osc72_commander_drag_between_panes() {
         .env("STARFOLD_DIR", &config)
         .env("STARFOLD_CONFIG_DIR", &config)
         .env("TERM", "xterm-256color")
+        .env("LC_ALL", "C.UTF-8")
         .stdin(Stdio::from(slave.try_clone().unwrap()))
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave));
@@ -1059,6 +1063,7 @@ fn workspace_child(config: &std::path::Path, dir: Option<&std::path::Path>) -> R
         .env("STARFOLD_DIR", config)
         .env("STARFOLD_CONFIG_DIR", config)
         .env("TERM", "xterm-256color")
+        .env("LC_ALL", "C.UTF-8")
         .stdin(Stdio::from(slave.try_clone().unwrap()))
         .stdout(Stdio::from(slave.try_clone().unwrap()))
         .stderr(Stdio::from(slave));
