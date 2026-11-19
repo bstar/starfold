@@ -179,7 +179,7 @@ fn archive_extension_creates_an_interoperable_zip_and_extracts_it() {
         options: Default::default(),
     });
     let mut zip = zip::ZipArchive::new(std::fs::File::open(&archive).unwrap()).unwrap();
-    assert_eq!(zip.by_index(0).unwrap().name(), "note.txt");
+    assert_eq!(zip.by_index(0).unwrap().name().unwrap(), "note.txt");
     let dest = tmp.path().join("extracted");
     run(starfold_archive_protocol::Request::Extract {
         source: archive,

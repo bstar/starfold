@@ -132,7 +132,7 @@ sha2 = "0.10"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSFileManager", "NSString", "NSURL", "NSError"] }
 
 [dev-dependencies]
-zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 lopdf = { version = "0.42", default-features = false }
 pdf-extract = "0.12"
 # Anything that parses foreign input gets a property test, and so does every

@@ -43,7 +43,7 @@ pub fn list(path: &Path, limit: usize) -> anyhow::Result<(Vec<ArchiveEntry>, boo
                     "ZIP method requires native engine"
                 );
                 anyhow::ensure!(!e.is_symlink(), "Archive links are unsupported");
-                entries.push(entry(e.name(), e.size(), e.is_dir()));
+                entries.push(entry(&e.name()?, e.size(), e.is_dir()));
             }
         }
         Format::SevenZip => {
@@ -168,7 +168,7 @@ pub fn extract(path: &Path, root: &Path, progress: &Progress) -> anyhow::Result<
                     "Archive links and special files are unsupported"
                 );
                 anyhow::ensure!(!e.encrypted(), "Encrypted archives are unsupported");
-                let (name, dir, size) = (e.name().to_string(), e.is_dir(), e.size());
+                let (name, dir, size) = (e.name()?.into_owned(), e.is_dir(), e.size());
                 sink.copy(&name, dir, size, &mut e)?;
             }
         }

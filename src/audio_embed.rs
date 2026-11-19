@@ -330,8 +330,9 @@ enum ChildMessage {
         cells: Vec<Cell>,
         #[serde(default)]
         images: Vec<TransportImage>,
+        /// Boxed: a native surface is far larger than every other message.
         #[serde(default)]
-        surface: Option<starcore::native_surface::Surface>,
+        surface: Option<Box<starcore::native_surface::Surface>>,
     },
     Status {
         playing: bool,
@@ -1249,7 +1250,7 @@ fn handle_io(player: &mut Running, event: IoEvent, shared: &Arc<Mutex<Shared>>) 
                     height,
                     cells,
                     images,
-                    surface,
+                    surface: surface.map(|surface| *surface),
                 };
                 // A resize or button-mode change can overtake a frame in the
                 // reader slot. Its images belong to the old negotiation, so
@@ -1693,7 +1694,7 @@ mod tests {
             height,
             cells,
             images,
-            surface,
+            surface: surface.map(|surface| *surface),
         };
         assert!(frame.images.is_empty());
         assert!(validate_frame(&frame, None).is_ok());

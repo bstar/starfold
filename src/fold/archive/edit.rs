@@ -1203,7 +1203,7 @@ mod tests {
         assert_eq!(pending(&root), 0);
         let mut zip = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
         assert_eq!(zip.len(), 1);
-        assert_eq!(zip.by_index(0).unwrap().name(), "folder/one.txt");
+        assert_eq!(zip.by_index(0).unwrap().name().unwrap(), "folder/one.txt");
     }
     #[test]
     fn empty_directories_survive_save_and_duplicate_additions_are_rejected() {

@@ -590,7 +590,7 @@ pub fn rebuild_edited(
         .create_new(true)
         .open(output)?;
     let mut writer = zip::ZipWriter::new(out);
-    writer.set_raw_comment(original.comment().to_vec().into());
+    writer.set_raw_comment(original.comment().to_vec().into())?;
     let mut names = std::collections::HashSet::new();
     for index in 0..original.len() {
         let file = original.by_index_raw(index)?;
@@ -598,10 +598,10 @@ pub fn rebuild_edited(
         if change.is_some_and(|c| c.name.is_none()) {
             continue;
         }
-        let name = change
-            .and_then(|c| c.name.as_ref())
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| file.name().into());
+        let name = match change.and_then(|c| c.name.as_ref()) {
+            Some(path) => path.to_string_lossy().into_owned(),
+            None => file.name()?.into_owned(),
+        };
         crate::safe_path(&name)?;
         if change.is_some() {
             anyhow::ensure!(
@@ -627,7 +627,8 @@ pub fn rebuild_edited(
                     anyhow::anyhow!("Unlock this ZIP before saving encrypted members")
                 })?;
                 // Preserve AES strength; upgrading legacy ZipCrypto to AES keeps edits encrypted.
-                let mode = aes_strength(file.extra_data()).unwrap_or(zip::AesMode::Aes256);
+                let mode =
+                    aes_strength(file.extra_data().as_deref()).unwrap_or(zip::AesMode::Aes256);
                 options = options.with_aes_encryption(mode, password);
                 drop(file);
                 original.by_index_decrypt(index, password.as_bytes())?;
