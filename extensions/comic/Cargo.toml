@@ -9,7 +9,7 @@ license = "MIT"
 anyhow = "1"
 starfold-preview-protocol = { version = "0.1", path = "../protocol" }
 starfold-archive = { version = "0.1", path = "../archive" }
-starkit = { workspace = true, features = ["image", "gif", "bmp", "webp"] }
+starcore = { workspace = true, features = ["image", "gif", "bmp", "webp"] }
 
 [dev-dependencies]
 tempfile = "3"

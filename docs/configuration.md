@@ -105,7 +105,7 @@ FOLD adds `gruvbox-light`, `gruvbox-light-soft`, `dos-shell`,
 
 The shared files are the same ones STAR/AMP and STAR/CORD use, because all three
 programs take their theme engine from
-[STAR/KIT](https://github.com/bstar/starkit). A theme set in one looks like
+[STAR/CORE](https://github.com/bstar/starcore). A theme set in one looks like
 the theme set in another.
 
 Your own themes go in `~/.local/starfold/themes/` as `<id>.toml`, and a file

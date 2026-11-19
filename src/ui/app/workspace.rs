@@ -326,9 +326,9 @@ impl App {
         };
         #[cfg(feature = "terminal-graphics")]
         if self.graphical.is_some() {
-            starkit::terminal_graphics::session::Controller::input(
+            starcore::terminal_graphics::session::Controller::input(
                 self,
-                starkit::terminal_graphics::protocol::Input::CancelPointer,
+                starcore::terminal_graphics::protocol::Input::CancelPointer,
             );
         }
         self.cfg.ui.workspace_navigation = next;
@@ -340,11 +340,11 @@ impl App {
             "Numbered sessions selected"
         };
         self.note = Some(
-            match starkit::config::edit::set(
+            match starcore::config::edit::set(
                 &self.cfg_path,
                 "ui",
                 "workspace_navigation",
-                &starkit::config::edit::Value::Str(name.into()),
+                &starcore::config::edit::Value::Str(name.into()),
             ) {
                 Ok(()) => (message.into(), NoteLevel::Info, Instant::now()),
                 Err(error) => (
@@ -689,7 +689,7 @@ pub(super) fn operation_row(op: &Op, state: &crate::fold::State) -> panels::oper
 mod tests {
     use super::*;
     use crate::ui::fake;
-    use starkit::crossterm::event::KeyModifiers;
+    use starcore::crossterm::event::KeyModifiers;
     fn app() -> (App, fake::Fake, tempfile::TempDir) {
         let cfg = Config::default();
         let (core, fake) = fake::handle(cfg.core());

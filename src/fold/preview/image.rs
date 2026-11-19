@@ -1,6 +1,6 @@
 //! Bounded raster decoding, independent of preview scheduling and rendering.
 use super::{Preview, PreviewConfig};
-use starkit::image::{DynamicImage, ImageFormat, ImageReader, Limits, RgbaImage};
+use starcore::image::{DynamicImage, ImageFormat, ImageReader, Limits, RgbaImage};
 use std::fs;
 use std::io::Read as _;
 use std::path::Path;
@@ -18,7 +18,7 @@ const MAX_THUMBNAIL_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_HELPER_SOURCE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 pub(super) fn looks_like_image(path: &Path, head: &[u8]) -> bool {
-    ImageFormat::from_path(path).is_ok() || starkit::image::guess_format(head).is_ok()
+    ImageFormat::from_path(path).is_ok() || starcore::image::guess_format(head).is_ok()
 }
 
 pub(super) fn build_image(
@@ -68,7 +68,7 @@ fn decode_animation(
     path: &Path,
     cfg: &PreviewConfig,
     cancel: &std::sync::atomic::AtomicBool,
-) -> Result<starkit::animation::Animation, String> {
+) -> Result<starcore::animation::Animation, String> {
     // Bound both encoded input and accumulated composited frames.
     let deadline = Instant::now() + Duration::from_millis(cfg.timeout_ms.max(15_000));
     let mut bytes = Vec::new();
@@ -80,7 +80,7 @@ fn decode_animation(
     if bytes.len() as u64 > MAX_IN_PROCESS_FILE_BYTES {
         return Err("GIF input exceeds limit".into());
     }
-    starkit::animation::Animation::gif(&bytes, 64_000_000, || {
+    starcore::animation::Animation::gif(&bytes, 64_000_000, || {
         cancel.load(std::sync::atomic::Ordering::Relaxed) || Instant::now() >= deadline
     })
     .map_err(|e| e.to_string())
@@ -133,7 +133,7 @@ fn source_format(path: &Path) -> &'static str {
         .or_else(|| {
             let mut head = [0u8; 32];
             let n = fs::File::open(path).ok()?.read(&mut head).ok()?;
-            starkit::image::guess_format(&head[..n]).ok()
+            starcore::image::guess_format(&head[..n]).ok()
         })
         .map(format_name)
         .unwrap_or("image")
@@ -192,7 +192,7 @@ fn thumbnail_with_vips(path: &Path, target: u32, timeout_ms: u64) -> Result<Rgba
     if length > MAX_THUMBNAIL_FILE_BYTES {
         return Err("thumbnail output is too large".into());
     }
-    starkit::graphics::open_limited(output.path(), target)
+    starcore::graphics::open_limited(output.path(), target)
         .map(|image| image.to_rgba8())
         .map_err(|e| e.to_string())
 }
@@ -214,21 +214,21 @@ mod tests {
 
     fn write_gif(path: &Path, frames: usize) {
         let mut encoder =
-            starkit::image::codecs::gif::GifEncoder::new(fs::File::create(path).unwrap());
+            starcore::image::codecs::gif::GifEncoder::new(fs::File::create(path).unwrap());
         encoder
-            .set_repeat(starkit::image::codecs::gif::Repeat::Infinite)
+            .set_repeat(starcore::image::codecs::gif::Repeat::Infinite)
             .unwrap();
         for index in 0..frames {
             encoder
-                .encode_frame(starkit::image::Frame::from_parts(
+                .encode_frame(starcore::image::Frame::from_parts(
                     RgbaImage::from_pixel(
                         4,
                         4,
-                        starkit::image::Rgba([index as u8 * 200, 30, 40, 255]),
+                        starcore::image::Rgba([index as u8 * 200, 30, 40, 255]),
                     ),
                     0,
                     0,
-                    starkit::image::Delay::from_numer_denom_ms(100, 1),
+                    starcore::image::Delay::from_numer_denom_ms(100, 1),
                 ))
                 .unwrap();
         }

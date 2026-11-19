@@ -9,7 +9,7 @@
 //! a hand that has already found those letters in the key table does not
 //! have to relearn them here.
 //!
-//! The box is STAR/KIT's `chrome::overlay` now, the same shape every other
+//! The box is STAR/CORE's `chrome::overlay` now, the same shape every other
 //! overlay opens in, with the count of what collided in the title's own
 //! detail (`"conflicts — 3 already exist"`) rather than baked into the title
 //! string, and the four answers moved from a body row onto the bottom
@@ -17,12 +17,12 @@
 //! hints. [`layout`] is, as before, the one computation [`render`] and
 //! [`super::Overlays::click`] both read.
 
-use starkit::chrome::overlay::{self, Anchor};
-use starkit::chrome::scrollbar;
-use starkit::crossterm::event::{KeyCode, KeyEvent};
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::Style;
+use starcore::chrome::overlay::{self, Anchor};
+use starcore::chrome::scrollbar;
+use starcore::crossterm::event::{KeyCode, KeyEvent};
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::Style;
 
 use super::rename;
 use crate::fold::ops::{Conflict, ConflictPolicy, OpId};
@@ -169,7 +169,7 @@ impl RenameSequence {
 
 /// The footer's four answers, read out in the order they appear left to
 /// right -- [`layout`] walks this once to place each word's clickable span,
-/// and [`render`] joins the same words with STAR/KIT's own middle dot to draw
+/// and [`render`] joins the same words with STAR/CORE's own middle dot to draw
 /// the border's footer back.
 const WORDS: [&str; 4] = ["o overwrite", "s skip", "r edit name", "esc leave queued"];
 
@@ -200,18 +200,18 @@ pub(super) struct Layout {
 
 /// Where the box lands, sized to the list: `None` when `area` cannot fit even
 /// the smallest box this dialogue draws. Mirrors
-/// [`starkit::chrome::confirm::layout`]'s own two-pass sizing -- a probe rect
+/// [`starcore::chrome::confirm::layout`]'s own two-pass sizing -- a probe rect
 /// picks the width, then the real rect is asked for with the height the list
 /// actually needs.
 pub(super) fn layout(area: Rect, p: &Prompt) -> Option<Layout> {
     let rows = p.conflicts.len().max(1) as u16;
-    let extra = starkit::chrome::frame::extra_rows();
+    let extra = starcore::chrome::frame::extra_rows();
     let want_h = rows + 2 + extra;
     let rect = overlay::rect(area, (30, 70), want_h, 5 + extra, Anchor::Centre);
     if rect.height < 5 {
         return None;
     }
-    let inner = starkit::chrome::frame::body(rect, starkit::chrome::frame::NO_WORDS);
+    let inner = starcore::chrome::frame::body(rect, starcore::chrome::frame::NO_WORDS);
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
@@ -219,19 +219,19 @@ pub(super) fn layout(area: Rect, p: &Prompt) -> Option<Layout> {
     let footer_y = rect.y + rect.height - 1;
 
     let drawn = format!(" {} ", footer_text());
-    let drawn_w = starkit::wrap::width_of(&drawn);
+    let drawn_w = starcore::wrap::width_of(&drawn);
     let room = rect.width.saturating_sub(2);
     let footer_fits = drawn_w <= room;
     let end_x = rect.x + rect.width.saturating_sub(2);
     let drawn_start = (end_x + 1).saturating_sub(drawn_w);
     let footer_start = drawn_start + 1; // past the frame's own leading space
 
-    let sep_w = starkit::wrap::width_of(" \u{b7} ");
+    let sep_w = starcore::wrap::width_of(" \u{b7} ");
     let mut x = footer_start;
     let mut spans = [(0u16, 0u16); 4];
     for (i, word) in WORDS.iter().enumerate() {
         let start = x;
-        let end = x + starkit::wrap::width_of(word);
+        let end = x + starcore::wrap::width_of(word);
         spans[i] = (start, end);
         x = end + sep_w;
     }
@@ -291,7 +291,7 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, p: &Prompt, bars: &mu
     let footer = footer_text();
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
-    let core: &starkit::theme::Theme = theme;
+    let core: &starcore::theme::Theme = theme;
     overlay::render(
         l.rect,
         buf,
@@ -358,7 +358,7 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, p: &Prompt, bars: &mu
 mod tests {
     use super::*;
     use crate::ui::theme::tests_support::theme;
-    use starkit::crossterm::event::KeyModifiers;
+    use starcore::crossterm::event::KeyModifiers;
     use std::path::PathBuf;
 
     fn key(c: char) -> KeyEvent {

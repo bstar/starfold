@@ -1,6 +1,6 @@
 # Native graphical STAR/FOLD inside Kitty
 
-This presentation uses the established STAR/FOLD controller with STAR/KIT's native
+This presentation uses the established STAR/FOLD controller with STAR/CORE's native
 Rust renderer. There is no Electron, Chromium, webview, HTML, CSS or JavaScript
 rendering. The earlier separate GPUI desktop experiment remains on
 `experiment/graphical-presentation`; this mode draws inside the existing terminal.
@@ -36,12 +36,12 @@ STAR_GRAPHICS_SCALE=150 starfold-graphical
 Accepted scale values are 100–200. Labels and chrome use the terminal’s font
 and size when Kitty can report them; file labels are clipped to one line.
 The same theme colors, hit targets, stack/Commander layout and 60×21 floor apply.
-STAR/KIT resolves Kitty’s reported font locally, including for SSH attachments.
+STAR/CORE resolves Kitty’s reported font locally, including for SSH attachments.
 Override it with `STAR_GRAPHICS_FONT="JetBrainsMono Nerd Font"`; optionally use
 `STAR_GRAPHICS_FONT_SIZE=16` for a pixel size override. If the terminal font
 cannot be found, an installed monospace font or bundled Liberation Mono is used.
 Swash rasterization can differ slightly from Kitty’s antialiasing and hinting.
-The graphical presentation uses STAR/KIT's shared AMP pane frames, title strips
+The graphical presentation uses STAR/CORE's shared AMP pane frames, title strips
 and buttons, with independent file panes and a compact tab rail. Embedded
 STAR/AMP keeps its own player artwork and controls. Its native canvas is placed
 at its original physical size rather than stretched through the preview pane;
@@ -59,7 +59,7 @@ The [earlier rack study](graphical/treatments/README.md) and its
 [Classic](graphical/treatments/native-classic.png),
 [Mocha](graphical/treatments/native-mocha.png) and
 [Latte](graphical/treatments/native-latte.png) captures document the previous
-presentation. Native painting and pointer input now use KIT's same placement
+presentation. Native painting and pointer input now use CORE's same placement
 edges, including panel padding and resized rows.
 
 Reconnect after changing the terminal font family. Installed fonts supply Unicode
@@ -188,7 +188,7 @@ music preview, not movie playback.
 
 ### Launch after an ordinary SSH login
 
-With the experimental STAR/KIT Kitty integration installed on the **client
+With the experimental STAR/CORE Kitty integration installed on the **client
 machine**, use the normal workflow:
 
 ```sh
@@ -204,7 +204,7 @@ files, operations, navigation and previews. Copy/Move menus can release the
 desktop pointer immediately, with Move cleanup deferred until remote delivery.
 
 Install the Kitty watcher and fixed local frontend once per client machine as
-described in [STAR/KIT's integration instructions](https://github.com/bstar/starkit/tree/experiment/terminal-graphics/integrations/kitty).
+described in [STAR/CORE's integration instructions](https://github.com/bstar/starcore/tree/experiment/terminal-graphics/integrations/kitty).
 Open a new Kitty window after installation. The remote STAR/FOLD build must
 also be current and feature-enabled. Without the integration, an ordinary SSH
 launch retains the original remote frontend and its desktop drop limitation.
@@ -230,7 +230,7 @@ Each segment navigates its pane to that ancestor; the current segment is bold.
 Long paths collapse on the left, with an ellipsis that opens the hidden parent.
 Filter and truncated-list indicators remain on the right.
 Clickable breadcrumbs, tabs, header actions, menu rows and dialog buttons advertise
-hand-pointer regions to KIT. Hover feedback uses local OSC 22 output without an SSH
+hand-pointer regions to CORE. Hover feedback uses local OSC 22 output without an SSH
 round trip; the preview resize cursor retains priority during divider dragging.
 
 Native file drags capture the pressed file or marked set before selection changes.
@@ -262,7 +262,7 @@ nix develop -c cargo test --features terminal-graphics
 nix develop -c cargo clippy --all-targets --all-features -- -D warnings -A dead_code
 ```
 
-The shared KIT tests verify native pixels, Unicode shaping/clipping, image cache
+The shared CORE tests verify native pixels, Unicode shaping/clipping, image cache
 reuse, resize, password masking, invalid input, dirty-region reconstruction,
 pointer input and actual Kitty screenshots. Shared headless tests need no window
 system. Linux native Kitty screenshots run under Xvfb. Interactive macOS Kitty
@@ -290,12 +290,12 @@ menu; FOLD then owns both copying and source removal. This avoids Hyprland's
 pointer grab making the menu unclickable. Kitty's temporary drag files and macOS
 promises retain their terminal offer until consumption is done.
 For graphical SSH on Linux, launch the client locally with
-`starfold-graphical --ssh HOST`. STAR/KIT captures local URI capabilities and
+`starfold-graphical --ssh HOST`. STAR/CORE captures local URI capabilities and
 releases the desktop drag without waiting for disk IO, then streams file data over SSH when
 Copy/Move is chosen. Move removes local sources only after successful remote
 publication; changed sources and cleanup errors remain in OPERATIONS. Both ends
 need a current feature-enabled build. Ordinary SSH shells use this same local
-frontend when the STAR/KIT Kitty integration above is installed. Without it,
+frontend when the STAR/CORE Kitty integration above is installed. Without it,
 they retain the Kitty transfer path and its Hyprland mouse limitation.
 
 `scripts/test-graphical-ssh-drag.py` tests real Nautilus drops through a private
@@ -313,10 +313,10 @@ python3 scripts/test-graphical-ssh-drag.py --inject-host-mouse --origin 2574,110
 It verifies mouse Copy/Move actions, transferred bytes, symlink preservation and
 source removal after Move. Omit `--tree` for the regular-file case. This is a
 loopback integration gate, not a WAN measurement.
-Add `--plain-ssh --watcher /path/to/starkit/integrations/kitty/star_kit.py` to
+Add `--plain-ssh --watcher /path/to/starcore/integrations/kitty/star_core.py` to
 exercise an ordinary `ssh -tt` login followed by the remote graphical launch,
 including terminal negotiation, local frontend startup and the existing TTY
-message relay. The installed `~/.local/bin/star-kit-terminal` must invoke the
+message relay. The installed `~/.local/bin/star-core-terminal` must invoke the
 tested build's `--graphical-terminal-client` entrypoint.
 Popup layers align to the cell grid so cell-precision mouse events cannot select
 the adjacent action when panel padding puts a popup between rows.
@@ -337,20 +337,20 @@ do not describe the native replacement.
 
 Sessions and controller logs live under `~/.local/starfold/graphical` (or
 `STARFOLD_DIR/graphical`). Application debug logs remain in the usual log directory.
-The source of the shared renderer is in STAR/KIT's `src/terminal_graphics/native.rs`.
+The source of the shared renderer is in STAR/CORE's `src/terminal_graphics/native.rs`.
 
 ### Native chrome and embedded player ownership
 
-The graphical presentation uses KIT native surfaces for compact pane toolbars,
+The graphical presentation uses CORE native surfaces for compact pane toolbars,
 continuous storage meters, and the padded status bar. Tabs keep their close
 buttons and grow with the label within a bounded width. Their 28px strip uses
 an active underline. File names use 12px text. Breadcrumb text is capped at
-12px using KIT's cell metrics, with explicit path separators and a bold current
+12px using CORE's cell metrics, with explicit path separators and a bold current
 segment. A thin accent and tinted background indicate the cursor row. Operations
 collapses to an idle/history strip and expands for active work, failures, or
 explicit focus.
 These surfaces are negotiated using the `native_surfaces` frontend capability.
-The additive `pixel_layout` capability supplies shared KIT pixel gaps and panel
+The additive `pixel_layout` capability supplies shared CORE pixel gaps and panel
 insets, independent of terminal cell proportions. Rendering and mouse projection
 use the same placements, including modal layers and captured scrollbars. Pane
 headings use AMP's fixed 12px typography; text bitmaps are not resized. Older clients keep
@@ -360,7 +360,7 @@ Preview's native Close button uses AMP's 30×24px header target with a 10px
 right inset. Its pointer target follows the painted pixel bounds through
 resizing and zoom; the former cell-word position is ordinary header space.
 
-Native pane frames use a flat one-pixel KIT border. The focus outline keeps
+Native pane frames use a flat one-pixel CORE border. The focus outline keeps
 AMP's one-pixel corner mask and theme accent (foreground for Silver) at its
 physical size through terminal zoom. The same frame wraps previews and compact
 file panes whose contents come from the cell controller. Legacy panel markers
@@ -372,7 +372,7 @@ including Kanagawa's raised slate frames and darker content wells. Set
 (the default) follows the selected theme. Cell presentation keeps its theme.
 
 STAR/AMP's native player lives in STAR/AMP (`src/embed/native.rs`). The optional
-`native_surface_v1` embed extension returns KIT primitives and owns transport,
+`native_surface_v1` embed extension returns CORE primitives and owns transport,
 seek, volume and visualizer hit geometry. FOLD places the returned surface and
 forwards input through the existing supervised child protocol. Older helpers
 continue to provide cells. Local animation is capped at 30 FPS and SSH at 15 FPS;
@@ -444,7 +444,7 @@ and warnings retain their theme colors.
 
 The workspace sidebar and pane gaps share the theme’s base background, with a
 subtle selected row and text actions. Horizontal and vertical pane gaps use
-the same KIT metric, including the Commander split. Native Preview spans the browser width. Operations appears
+the same CORE metric, including the Commander split. Native Preview spans the browser width. Operations appears
 on its own full-width row below Preview only while the queue contains operations
 or transient worker activity is in progress; clearing the queue releases that
 space. Completed and failed operations remain visible until removed.
@@ -483,7 +483,7 @@ the panel in dark themes.
 Audio-device failures allow silent video and show a notice
 inside Preview. Ordinary cell mode shows the poster and metadata only.
 
-STAR/KIT owns the native FFmpeg decoder, H.264/AAC encoder, bounded scheduling,
+STAR/CORE owns the native FFmpeg decoder, H.264/AAC encoder, bounded scheduling,
 local CPAL audio, timeline surface and media transport. STAR/FOLD selects files
 and supplies controls. This does not invoke a browser, Electron, MPV, or a new
 window. STAR/AMP remains a separate player owned by its own repository.
@@ -566,7 +566,7 @@ VAAPI: two actual 3840×2160 movies sustained approximately 24 fps. Generated 4K
 24/30 fps sources kept pace; a 60 fps source reached approximately 46 fps.
 A 3840×1600 HDR movie also kept pace at approximately 24 fps with tone mapping.
 These measurements exclude Kitty upload/display and do not guarantee smooth 4K60.
-Run KIT's `movie-bench` example with `--features media` to measure another machine.
+Run CORE's `movie-bench` example with `--features media` to measure another machine.
 
 On 2026-10-18, the local 3840×2076, 23.976 fps PQ/BT.2020 Predator source
 delivered 81 frames in a six-second original-size decoder/conversion baseline.
@@ -574,6 +574,6 @@ With processing fitted to 1280×692, three four-second seek/playback checks at
 600, 900 and 1800 seconds followed the source cadence after startup, with zero
 reported dropped frames or audio underruns. First-frame seek latency was
 0.7–1.6 seconds. These checks include muted device playback, but exclude Kitty
-upload, visible frame pacing and listening. KIT's ignored
+upload, visible frame pacing and listening. CORE's ignored
 `real_file_preview_seek_diagnostic` test accepts `STAR_VIDEO_TEST_FILE`, optional
 `STAR_VIDEO_TEST_AUDIO=1`, and `STAR_VIDEO_TEST_NATIVE=1` for original-size comparison.

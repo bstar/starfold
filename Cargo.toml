@@ -12,8 +12,8 @@ categories = ["command-line-utilities", "filesystem"]
 
 [features]
 default = ["terminal-graphics"]
-media = ["starkit/media"]
-terminal-graphics = ["media", "starkit/terminal-graphics"]
+media = ["starcore/media"]
+terminal-graphics = ["media", "starcore/terminal-graphics"]
 
 [workspace]
 members = ["extensions/protocol", "extensions/pdf", "extensions/comic", "extensions/video", "extensions/nvim", "extensions/archive", "extensions/archive-protocol"]
@@ -22,7 +22,7 @@ resolver = "2"
 
 [workspace.dependencies]
 # One release pin for the application and every preview helper.
-starkit = { git = "https://github.com/bstar/starkit", tag = "v0.24.0", version = "0.24", default-features = false }
+starcore = { git = "https://github.com/bstar/starcore", tag = "v0.25.0", version = "0.25", default-features = false }
 
 [dependencies]
 starfold-archive = { version = "0.1", path = "extensions/archive" }
@@ -36,7 +36,7 @@ starfold-preview-protocol = { version = "0.1", path = "extensions/protocol" }
 #
 # It is also the one copy of `ratatui`, `crossterm`, `ratatui-image` and
 # `image` in the tree. Everything under `src/ui/` reaches them through
-# `starkit::`, and none of the four is a direct dependency here: a widget built
+# `starcore::`, and none of the four is a direct dependency here: a widget built
 # against a second copy of ratatui does not satisfy a signature expecting the
 # first, and the compiler reports that as two versions carrying the same
 # number.
@@ -47,7 +47,7 @@ starfold-preview-protocol = { version = "0.1", path = "extensions/protocol" }
 # The `version` is not redundant with the tag: cargo-deny counts a dependency
 # with no version requirement as a wildcard and `wildcards = "deny"` refuses
 # it, whether or not the source is a git URL pinned to a tag.
-starkit = { workspace = true, features = [
+starcore = { workspace = true, features = [
     "image",
     "bmp",
     "gif",
@@ -64,7 +64,7 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 thiserror = "2"
 
-# Logging -- file only, through STAR/KIT's writer. stdout belongs to the
+# Logging -- file only, through STAR/CORE's writer. stdout belongs to the
 # alternate screen.
 tracing = "0.1"
 

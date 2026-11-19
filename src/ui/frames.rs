@@ -15,7 +15,7 @@
 //!
 //! ## Determinism
 //!
-//! Every app here is built with [`starkit::graphics::Graphics::disabled`]
+//! Every app here is built with [`starcore::graphics::Graphics::disabled`]
 //! (so an image preview falls back to half blocks rather than reaching for a
 //! terminal protocol nothing here has), UTC, and the clock pinned to
 //! [`crate::fold::testing::now`] -- the same instant the fixture's own
@@ -39,10 +39,10 @@
 
 use std::path::PathBuf;
 
-use starkit::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use starkit::graphics::Graphics;
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
+use starcore::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use starcore::graphics::Graphics;
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
 
 use super::app::App;
 use super::fake;
@@ -609,7 +609,7 @@ fn preview_symlink_shows_its_target() {
 }
 
 /// With graphics disabled, an image preview falls back to half blocks --
-/// [`starkit::graphics::halfblocks`], asserted directly since a `▀` is the
+/// [`starcore::graphics::halfblocks`], asserted directly since a `▀` is the
 /// one thing that says a picture, rather than a placeholder, was drawn.
 /// PREVIEW is focused (`alt+2`) so it gets half the body to draw the
 /// picture in.

@@ -1,7 +1,7 @@
 //! Supervised CBZ/CBR reader. Archive members are decoded in memory, never extracted.
 use anyhow::{ensure, Result};
+use starcore::image::{self, RgbaImage};
 use starfold_preview_protocol::{Input, Limits, Presentation, Raster, Request, TextPage, Viewport};
-use starkit::image::{self, RgbaImage};
 use std::{
     cmp::Ordering,
     io::{self, Write},

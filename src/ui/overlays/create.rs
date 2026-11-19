@@ -1,11 +1,11 @@
 //! Name entry for a new empty file or directory.
 
-use starkit::chrome::overlay::{self, Anchor};
-use starkit::crossterm::event::KeyEvent;
-use starkit::input::{Edit, TextInput};
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::Style;
+use starcore::chrome::overlay::{self, Anchor};
+use starcore::crossterm::event::KeyEvent;
+use starcore::input::{Edit, TextInput};
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::Style;
 use std::path::PathBuf;
 
 use crate::fold::create::{self, Kind};
@@ -70,7 +70,7 @@ pub fn rect(area: Rect) -> Rect {
     overlay::rect(
         area,
         (24, 60),
-        4 + starkit::chrome::frame::extra_rows(),
+        4 + starcore::chrome::frame::extra_rows(),
         3,
         Anchor::Centre,
     )
@@ -86,7 +86,7 @@ pub fn render(
     if rr.width < 8 || rr.height < 3 {
         return None;
     }
-    let core: &starkit::theme::Theme = theme;
+    let core: &starcore::theme::Theme = theme;
     let inner = overlay::render(
         rr,
         buf,
@@ -129,7 +129,7 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use starkit::crossterm::event::{KeyCode, KeyModifiers};
+    use starcore::crossterm::event::{KeyCode, KeyModifiers};
 
     #[test]
     fn invalid_name_stays_open_and_valid_name_submits() {

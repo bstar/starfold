@@ -3,7 +3,7 @@
 PDF, comic-book and video previews are bundled executable providers. PDF uses Hayro 0.8.0
 in `starfold-preview-pdf`; its rendering dependencies are not linked into the
 main executable. `starfold-preview-video` supplies posters and playback actions.
-STAR/KIT still owns media decoding, audio output and SSH transport; STAR/AMP
+STAR/CORE still owns media decoding, audio output and SSH transport; STAR/AMP
 owns transport artwork and hit testing. Ordinary cell clients display video
 posters and PDF pages using their existing image/half-block presentation.
 
@@ -110,7 +110,7 @@ frames are rejected. `cancel`/`close` end a session; the host also terminates
 and reaps stalled or superseded processes and their process groups.
 
 Presentation supports bounded fields/text pages, one raw RGBA8 raster attachment,
-validated KIT native surfaces with a cell explanation, and media-service
+validated CORE native surfaces with a cell explanation, and media-service
 requests. The image attachment must be exactly width × height × 4 bytes;
 dimensions must respect host limits. Controls advertise consumed keys. FOLD
 retains global shortcuts, placement, focus and terminal input; pointer precision

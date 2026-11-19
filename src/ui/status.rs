@@ -13,9 +13,9 @@
 
 use std::time::{Duration, Instant};
 
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::{Modifier, Style};
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::{Modifier, Style};
 
 use super::panels::{fit, rgb, width_of};
 use super::theme::Theme;
@@ -134,7 +134,7 @@ fn elide_head(text: &str, width: u16) -> String {
         return String::new();
     }
     let keep = usize::from(width - 1);
-    let clusters: Vec<&str> = starkit::wrap::clusters(text).map(|(_, c)| c).collect();
+    let clusters: Vec<&str> = starcore::wrap::clusters(text).map(|(_, c)| c).collect();
     let mut back = Vec::new();
     let mut used = 0usize;
     for c in clusters.iter().rev() {
@@ -379,7 +379,7 @@ fn render_hints(
     }
 
     let mut used = 0u16;
-    for (start, cluster) in starkit::wrap::clusters(&text) {
+    for (start, cluster) in starcore::wrap::clusters(&text) {
         let w = width_of(cluster);
         if used + w > area.width {
             break;
@@ -411,9 +411,9 @@ pub fn native_surface(
     v: &View<'_>,
     cw: u16,
     ch: u16,
-) -> starkit::native_surface::Surface {
-    use starkit::native_surface::{Metrics, PixelRect as R, Surface};
-    let hex = |c: starkit::theme::color::Rgb| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
+) -> starcore::native_surface::Surface {
+    use starcore::native_surface::{Metrics, PixelRect as R, Surface};
+    let hex = |c: starcore::theme::color::Rgb| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
     let mut s = Surface::new(area.width * cw, area.height * ch, hex(v.theme.panel_bg));
     let m = Metrics::from_cell(cw, ch);
     let h = s.height;
@@ -482,7 +482,7 @@ mod tests {
     #[cfg(feature = "terminal-graphics")]
     #[test]
     fn native_footer_matches_ascii_content_priority_and_click_targets() {
-        use starkit::native_surface::Primitive;
+        use starcore::native_surface::Primitive;
         let t = theme("terminal");
         let now = Instant::now();
         let note = ("Permission denied".to_string(), NoteLevel::Error, now);

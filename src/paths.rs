@@ -1,6 +1,6 @@
 //! Where STAR/FOLD keeps its files.
 //!
-//! A name for [`starkit::paths::Paths`], and nothing else -- the layout
+//! A name for [`starcore::paths::Paths`], and nothing else -- the layout
 //! itself is documented there: everything under one directory,
 //! `~/.local/starfold` by default, rather than scattered across the three
 //! XDG roots, so the config, the session and the log can be backed up, moved
@@ -10,7 +10,7 @@
 // use it, and neither exists until a later phase -- but it is part of the
 // paths vocabulary this file exists to name.
 #[allow(unused_imports)]
-pub use starkit::paths::{own_dir, Paths};
+pub use starcore::paths::{own_dir, Paths};
 
 /// This application's directories. `$STARFOLD_DIR` moves everything;
 /// `$STARFOLD_CONFIG_DIR` moves only the configuration, which is what a
@@ -23,7 +23,7 @@ mod tests {
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// STAR/KIT's own tests cover the layout; what is worth asserting here is
+    /// STAR/CORE's own tests cover the layout; what is worth asserting here is
     /// that this application's own three strings reach it -- an environment
     /// variable spelled for another program would relocate nothing.
     #[test]

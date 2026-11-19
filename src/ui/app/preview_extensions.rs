@@ -141,7 +141,7 @@ impl App {
             _ => return true,
         };
         let mut prefixes = Vec::new();
-        use starkit::crossterm::event::KeyModifiers;
+        use starcore::crossterm::event::KeyModifiers;
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             prefixes.push("ctrl");
         }
@@ -476,7 +476,7 @@ mod editor_tests {
         let key = |c| {
             KeyEvent::new(
                 KeyCode::Char(c),
-                starkit::crossterm::event::KeyModifiers::NONE,
+                starcore::crossterm::event::KeyModifiers::NONE,
             )
         };
         app.key(key('i'));
@@ -499,7 +499,7 @@ mod editor_tests {
         flush(&mut app, &fake);
         app.key(KeyEvent::new(
             KeyCode::Esc,
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         flush(&mut app, &fake);
         assert!(app.preview_extension().unwrap().modified);
@@ -511,7 +511,7 @@ mod editor_tests {
         assert!(app.overlays.is_open());
         app.key(KeyEvent::new(
             KeyCode::Esc,
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         app.core
             .send(Command::Preview(fake.home().join("different.txt")));
@@ -525,7 +525,7 @@ mod editor_tests {
         }
         app.key(KeyEvent::new(
             KeyCode::Enter,
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         flush(&mut app, &fake);
         assert_eq!(
@@ -541,7 +541,7 @@ mod editor_tests {
         }
         app.key(KeyEvent::new(
             KeyCode::Enter,
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         flush(&mut app, &fake);
         assert!(!app.extension_interactive());
@@ -639,7 +639,7 @@ mod editor_tests {
         app.layout.focus_set(ModuleId::Stack);
         app.key(KeyEvent::new(
             KeyCode::Char('s'),
-            starkit::crossterm::event::KeyModifiers::CONTROL,
+            starcore::crossterm::event::KeyModifiers::CONTROL,
         ));
         fake.pump();
         let mut published = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
@@ -751,7 +751,7 @@ mod editor_tests {
             app.focus_pane(0);
             app.key(KeyEvent::new(
                 KeyCode::BackTab,
-                starkit::crossterm::event::KeyModifiers::NONE,
+                starcore::crossterm::event::KeyModifiers::NONE,
             ));
             fake.pump();
             app.tick();
@@ -759,7 +759,7 @@ mod editor_tests {
             assert_ne!(app.view.cursor_path.as_ref(), Some(&path));
             app.key(KeyEvent::new(
                 KeyCode::BackTab,
-                starkit::crossterm::event::KeyModifiers::NONE,
+                starcore::crossterm::event::KeyModifiers::NONE,
             ));
             fake.pump();
             app.tick();
@@ -771,7 +771,7 @@ mod editor_tests {
         }
         app.key(KeyEvent::new(
             KeyCode::F(7),
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         assert_eq!(app.layout.focus(), ModuleId::Preview);
     }
@@ -786,7 +786,7 @@ mod editor_tests {
         let theme = app.theme_name.clone();
         app.key(KeyEvent::new(
             KeyCode::Char('t'),
-            starkit::crossterm::event::KeyModifiers::ALT,
+            starcore::crossterm::event::KeyModifiers::ALT,
         ));
         assert_ne!(
             app.theme_name, theme,
@@ -795,12 +795,12 @@ mod editor_tests {
         assert!(!app.extension_dirty());
         app.key(KeyEvent::new(
             KeyCode::Tab,
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         assert_eq!(app.layout.focus(), ModuleId::Stack);
         app.key(KeyEvent::new(
             KeyCode::BackTab,
-            starkit::crossterm::event::KeyModifiers::SHIFT,
+            starcore::crossterm::event::KeyModifiers::SHIFT,
         ));
         assert_eq!(app.layout.focus(), ModuleId::Preview);
         app.layout.focus_set(ModuleId::Stack);
@@ -829,7 +829,7 @@ mod editor_tests {
         app.layout.focus_set(ModuleId::Preview);
         app.key(KeyEvent::new(
             KeyCode::Char('c'),
-            starkit::crossterm::event::KeyModifiers::CONTROL,
+            starcore::crossterm::event::KeyModifiers::CONTROL,
         ));
         settle(&mut app, &fake, |app| app.quit);
         assert!(!app.overlays.is_open());
@@ -862,7 +862,7 @@ mod editor_tests {
             if choice == 'c' {
                 app.key(KeyEvent::new(
                     KeyCode::Esc,
-                    starkit::crossterm::event::KeyModifiers::NONE,
+                    starcore::crossterm::event::KeyModifiers::NONE,
                 ));
                 assert!(!app.quit && app.extension_dirty());
                 assert_eq!(std::fs::read_to_string(&path).unwrap(), "original\n");
@@ -870,7 +870,7 @@ mod editor_tests {
                 let key = if choice == 'f' { 's' } else { choice };
                 app.key(KeyEvent::new(
                     KeyCode::Char(key),
-                    starkit::crossterm::event::KeyModifiers::NONE,
+                    starcore::crossterm::event::KeyModifiers::NONE,
                 ));
                 settle(&mut app, &fake, |app| {
                     app.quit
@@ -909,7 +909,7 @@ mod editor_tests {
         assert_eq!(app.core.state().preview.as_ref().unwrap().0, path);
         app.key(KeyEvent::new(
             KeyCode::Esc,
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         app.tick();
         assert!(!app.overlays.is_open());
@@ -920,7 +920,7 @@ mod editor_tests {
         settle(&mut app, &fake, |app| app.overlays.is_open());
         app.key(KeyEvent::new(
             KeyCode::Char('s'),
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         settle(&mut app, &fake, |app| {
             app.extension_interactive()
@@ -940,7 +940,7 @@ mod editor_tests {
         settle(&mut app, &fake, |app| app.overlays.is_open());
         app.key(KeyEvent::new(
             KeyCode::Char('d'),
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         settle(&mut app, &fake, |app| !app.layout.preview_open);
         assert_eq!(std::fs::read_to_string(&second).unwrap(), "second\n");

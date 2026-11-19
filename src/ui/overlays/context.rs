@@ -8,7 +8,7 @@ use crate::{
         theme::Theme,
     },
 };
-use starkit::{
+use starcore::{
     chrome::overlay::{self, Anchor},
     crossterm::event::{KeyCode, KeyEvent},
     input::{Edit, TextInput},
@@ -420,7 +420,7 @@ impl Destination {
             1 => {
                 let _ = self.handle(KeyEvent::new(
                     KeyCode::Tab,
-                    starkit::crossterm::event::KeyModifiers::NONE,
+                    starcore::crossterm::event::KeyModifiers::NONE,
                 ));
             }
             2 => {
@@ -467,7 +467,7 @@ impl Destination {
                 if index == 6 {
                     return self.handle(KeyEvent::new(
                         KeyCode::Enter,
-                        starkit::crossterm::event::KeyModifiers::NONE,
+                        starcore::crossterm::event::KeyModifiers::NONE,
                     ));
                 }
                 self.cycle_field();
@@ -475,7 +475,7 @@ impl Destination {
         } else if row == r.height.saturating_sub(3) {
             return self.handle(KeyEvent::new(
                 KeyCode::Enter,
-                starkit::crossterm::event::KeyModifiers::NONE,
+                starcore::crossterm::event::KeyModifiers::NONE,
             ));
         }
         None
@@ -611,7 +611,7 @@ impl Destination {
 mod tests {
     use super::*;
     use proptest::prelude::*;
-    use starkit::crossterm::event::KeyModifiers;
+    use starcore::crossterm::event::KeyModifiers;
     fn target() -> Target {
         Target {
             clicked: "/tmp/book.zip".into(),

@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
-use starkit::chrome::overlay::{self, Anchor};
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::Style;
+use starcore::chrome::overlay::{self, Anchor};
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::Style;
 
 use crate::fold::ops::{DeleteHow, Op, OpId, OpKind};
 use crate::ui::panels::{elide_middle, fit, rgb};

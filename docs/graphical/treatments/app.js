@@ -24,7 +24,7 @@ const projectFiles = [
   ['staramp', '—', '09 Oct', 'Folder', '▰'],
   ['starcord', '—', '08 Oct', 'Folder', '▰'],
   ['starfold', '—', '09 Oct', 'Folder', '▰'],
-  ['starkit', '—', '09 Oct', 'Folder', '▰'],
+  ['starcore', '—', '09 Oct', 'Folder', '▰'],
   ['README.md', '8.2 KB', '08 Oct', 'Text', '≡'],
   ['flake.nix', '3.4 KB', '09 Oct', 'Text', '≡'],
 ];

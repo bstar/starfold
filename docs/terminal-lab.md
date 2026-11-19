@@ -94,7 +94,7 @@ The legacy `auto` profile switches to cells for controller checks, then returns 
 native for image/theme/movie captures. Its historical results are labeled as cell
 functional coverage. Neither profile establishes every native pointer target,
 desktop drag/drop, or physical display fidelity. `tmux` uses a
-new private server. `ascii` and `mono` set STAR_KIT_ASCII=1 and NO_COLOR=1; their
+new private server. `ascii` and `mono` set STAR_CORE_ASCII=1 and NO_COLOR=1; their
 visual limitations are intentional.
 
 ## Reading the report

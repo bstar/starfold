@@ -6,12 +6,12 @@
 
 use std::path::PathBuf;
 
-use starkit::chrome::overlay::{self, Anchor};
-use starkit::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use starkit::input::{Edit, TextInput};
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::Style;
+use starcore::chrome::overlay::{self, Anchor};
+use starcore::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use starcore::input::{Edit, TextInput};
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::Style;
 
 use crate::fold::places::LocationInfo;
 use crate::ui::panels::{elide_middle, fit, rgb, width_of};
@@ -1101,7 +1101,7 @@ mod tests {
     use super::*;
     use crate::ui::theme::tests_support::theme;
     use proptest::prelude::*;
-    use starkit::crossterm::event::KeyModifiers;
+    use starcore::crossterm::event::KeyModifiers;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)

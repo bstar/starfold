@@ -37,7 +37,7 @@ def main():
     state = {'command': command, 'pid': None, 'exit_code': None,
              'output_bytes': 0, 'input_bytes': 0, 'resizes': [],
              'environment': {k: os.environ.get(k) for k in
-                             ('TERM', 'COLORTERM', 'TERM_PROGRAM', 'LANG', 'NO_COLOR', 'STAR_KIT_ASCII')}}
+                             ('TERM', 'COLORTERM', 'TERM_PROGRAM', 'LANG', 'NO_COLOR', 'STAR_CORE_ASCII')}}
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, size)
     # Enter raw mode before the child can issue queries. TCSAFLUSH after fork

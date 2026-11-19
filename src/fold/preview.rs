@@ -2,7 +2,7 @@
 //!
 //! [`Preview`] is a value, not a widget: it is built on `starfold-io` from a
 //! path and a cancel flag, and the panel that draws it never touches a
-//! filesystem itself. `starkit::image::RgbaImage` is allowed here even though
+//! filesystem itself. `starcore::image::RgbaImage` is allowed here even though
 //! nothing under `src/fold/` may draw -- it is a decoded picture, not a
 //! terminal crate, the same distinction that lets `jiff` and `serde` live
 //! here too.
@@ -41,16 +41,16 @@ pub enum Preview {
         /// "showing 5 of many" without counting newlines itself.
         lines: usize,
     },
-    Animation(Arc<starkit::animation::Animation>),
+    Animation(Arc<starcore::animation::Animation>),
     #[cfg(feature = "media")]
     Video {
         path: PathBuf,
-        poster: starkit::media::Poster,
+        poster: starcore::media::Poster,
         metadata: Arc<model::Document>,
         extension: Option<extensions::Info>,
     },
     Image {
-        data: Arc<starkit::image::RgbaImage>,
+        data: Arc<starcore::image::RgbaImage>,
         width: u32,
         height: u32,
         /// `"png"`, `"jpeg"`, and so on -- a label for the status line, not
@@ -180,7 +180,7 @@ fn build_file(path: &Path, full_len: u64, cfg: &PreviewConfig, cancel: &AtomicBo
 
     #[cfg(feature = "media")]
     if super::file_type::classify(path, &head) == super::file_type::FileType::Video {
-        return match starkit::media::poster(path, Arc::new(AtomicBool::new(false))) {
+        return match starcore::media::poster(path, Arc::new(AtomicBool::new(false))) {
             Ok(poster) => Preview::Video {
                 metadata: Arc::new(providers::movie_details(path)),
                 path: path.to_owned(),
@@ -430,7 +430,7 @@ mod tests {
     fn bmp_previews_decode_pixels_and_detect_the_format_without_an_extension() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("picture.bmp");
-        starkit::image::RgbImage::from_pixel(17, 11, starkit::image::Rgb([12, 34, 56]))
+        starcore::image::RgbImage::from_pixel(17, 11, starcore::image::Rgb([12, 34, 56]))
             .save(&path)
             .unwrap();
         for name in ["picture.bmp", "picture.bin"] {
@@ -468,7 +468,7 @@ mod tests {
     fn an_image_wider_than_the_preview_limit_is_downscaled() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("wide.png");
-        starkit::image::RgbaImage::from_pixel(4100, 10, starkit::image::Rgba([12, 34, 56, 255]))
+        starcore::image::RgbaImage::from_pixel(4100, 10, starcore::image::Rgba([12, 34, 56, 255]))
             .save(&path)
             .unwrap();
 

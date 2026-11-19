@@ -1,6 +1,6 @@
 //! Exercise the real detached controller, with no display server or renderer.
 #![cfg(all(unix, feature = "terminal-graphics"))]
-use starkit::terminal_graphics::protocol::*;
+use starcore::terminal_graphics::protocol::*;
 use std::{
     fs,
     io::{BufReader, Write},
@@ -68,7 +68,7 @@ impl Host {
     }
     fn connect_with_capabilities(
         &self,
-        capabilities: Option<starkit::terminal_graphics::capabilities::Capabilities>,
+        capabilities: Option<starcore::terminal_graphics::capabilities::Capabilities>,
     ) -> (UnixStream, BufReader<UnixStream>) {
         // bind creates the filesystem entry before listen completes. macOS
         // can expose that short interval to the test's existence check.
@@ -367,15 +367,15 @@ fn capability_report_does_not_start_a_controller_or_require_electron() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let capabilities: starkit::terminal_graphics::capabilities::Capabilities =
+    let capabilities: starcore::terminal_graphics::capabilities::Capabilities =
         serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         capabilities.image_transport,
-        starkit::terminal_graphics::capabilities::ImageTransport::None
+        starcore::terminal_graphics::capabilities::ImageTransport::None
     );
     assert_eq!(
         capabilities.pointer_precision,
-        starkit::terminal_graphics::capabilities::PointerPrecision::None
+        starcore::terminal_graphics::capabilities::PointerPrecision::None
     );
     assert!(!capabilities.keyboard);
     assert!(!capabilities.paste);
@@ -387,9 +387,9 @@ fn capability_report_does_not_start_a_controller_or_require_electron() {
 
 #[test]
 fn live_presentation_changes_keep_the_same_controller_and_key_route() {
-    use starkit::terminal_graphics::capabilities::{Capabilities, ImageTransport};
+    use starcore::terminal_graphics::capabilities::{Capabilities, ImageTransport};
     let host = Host::start();
-    let mut capabilities = Capabilities::detected(&starkit::graphics::Graphics::disabled());
+    let mut capabilities = Capabilities::detected(&starcore::graphics::Graphics::disabled());
     capabilities.cell_presentation = Some(false);
     capabilities.presentation_switch = true;
     capabilities.image_transport = ImageTransport::Kitty;

@@ -29,9 +29,9 @@
 //! list, though, so the fix is in the test rather than in the table: a
 //! spelling of the exact shape `g<char>` -- `gg`, `gh`, `gr` -- is recognised
 //! as a chord and checked against [`g_prefix`] instead of
-//! [`starkit::keymap::KeySpec::parse`], which would (correctly) refuse to
+//! [`starcore::keymap::KeySpec::parse`], which would (correctly) refuse to
 //! parse two characters as one key. That refusal is also what keeps `gh` and
-//! `gr` out of [`GLOBAL`] and [`MODULES`]: `starkit::keymap::Keymap::
+//! `gr` out of [`GLOBAL`] and [`MODULES`]: `starcore::keymap::Keymap::
 //! from_table` drops whatever alternative it cannot parse rather than
 //! panicking on it, so the chord spellings sit in [`BINDINGS`] for the help
 //! overlay and contribute no dispatch entry of their own -- `g_prefix` is
@@ -72,8 +72,8 @@
 
 use std::sync::LazyLock;
 
-use starkit::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use starkit::keymap::{Binding as KitBinding, Keymap, MouseHelp};
+use starcore::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use starcore::keymap::{Binding as KitBinding, Keymap, MouseHelp};
 
 pub type Binding = KitBinding<Action>;
 
@@ -662,7 +662,7 @@ pub const MOUSE: &[MouseHelp] = &[
 ///
 /// `Keymap::from_table` parses each binding's alternatives with
 /// `KeySpec::parse` and silently drops whatever does not parse as one key
-/// (logging it rather than panicking) -- see `starkit::keymap::Keymap::
+/// (logging it rather than panicking) -- see `starcore::keymap::Keymap::
 /// from_table`. That is what lets `gh`'s and `gr`'s single, two-character
 /// spelling sit in [`BINDINGS`] for the help overlay to print without ever
 /// producing an entry here: `g_prefix` is the only way to reach them.
@@ -691,7 +691,7 @@ const ALL_MODULES: &[Module] = &[Module::Stack, Module::Preview, Module::Operati
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shadow {
     pub module: Module,
-    /// The key spelling, exactly as [`starkit::keymap::KeySpec::parse`]
+    /// The key spelling, exactly as [`starcore::keymap::KeySpec::parse`]
     /// accepts it.
     pub keys: &'static str,
     pub module_action: Action,
@@ -774,14 +774,14 @@ pub fn module(m: Module, k: KeyEvent) -> Option<Action> {
 /// The global table, tried after the focused module has declined.
 /// The three application shortcuts can be overridden without affecting editor keys.
 pub fn resolve_configured(k: KeyEvent, shortcuts: &crate::config::Shortcuts) -> Option<Action> {
-    let k = starkit::keymap::normalise(k)?;
+    let k = starcore::keymap::normalise(k)?;
     for (keys, action) in [
         (&shortcuts.next_theme, Action::NextTheme),
         (&shortcuts.previous_theme, Action::PrevTheme),
         (&shortcuts.presentation, Action::TogglePresentation),
     ] {
-        if starkit::keymap::alternatives(keys)
-            .filter_map(starkit::keymap::KeySpec::parse)
+        if starcore::keymap::alternatives(keys)
+            .filter_map(starcore::keymap::KeySpec::parse)
             .any(|spec| spec.matches(k))
         {
             return Some(action);
@@ -796,13 +796,13 @@ pub fn resolve_configured(k: KeyEvent, shortcuts: &crate::config::Shortcuts) -> 
 }
 
 pub fn resolve(k: KeyEvent) -> Option<Action> {
-    let k = starkit::keymap::normalise(k)?;
+    let k = starcore::keymap::normalise(k)?;
     GLOBAL.resolve(k).or_else(|| {
         for (key, action) in [
             ("alt+t", Action::NextTheme),
             ("alt+shift+t", Action::PrevTheme),
         ] {
-            if starkit::keymap::KeySpec::parse(key).is_some_and(|s| s.matches(k)) {
+            if starcore::keymap::KeySpec::parse(key).is_some_and(|s| s.matches(k)) {
                 return Some(action);
             }
         }
@@ -977,7 +977,7 @@ pub fn document() -> String {
         out.push_str(&format!(
             "| {keys:<width$} | {} |\n",
             b.label,
-            width = starkit::keymap::KEYS_COLUMN
+            width = starcore::keymap::KEYS_COLUMN
         ));
     }
 
@@ -1007,7 +1007,7 @@ right-click does the same by default; `[ui] right_click = false` disables physic
             m.group,
             m.gesture,
             m.label,
-            width = starkit::keymap::GESTURE_COLUMN
+            width = starcore::keymap::GESTURE_COLUMN
         ));
     }
     out.push_str(
@@ -1044,7 +1044,7 @@ fn module_name(m: Module) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use starkit::keymap::KeySpec;
+    use starcore::keymap::KeySpec;
 
     fn plain(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
@@ -1059,7 +1059,7 @@ mod tests {
     }
 
     fn specs(b: &Binding) -> Vec<KeySpec> {
-        starkit::keymap::alternatives(b.keys)
+        starcore::keymap::alternatives(b.keys)
             .filter_map(KeySpec::parse)
             .collect()
     }
@@ -1134,7 +1134,7 @@ mod tests {
     fn every_binding_reaches_its_action() {
         for b in BINDINGS {
             let mut reachable = false;
-            for alt in starkit::keymap::alternatives(b.keys) {
+            for alt in starcore::keymap::alternatives(b.keys) {
                 if let Some((prefix, c)) = chord_char(alt) {
                     let resolved = match prefix {
                         'g' => g_prefix(plain(c)),

@@ -21,7 +21,7 @@ fn main() -> Result<()> {
                         std::fs::metadata(&path)?.is_file(),
                         "Video source is not a regular file"
                     );
-                    let poster = starkit::media::poster(&path, Arc::new(AtomicBool::new(false)))?;
+                    let poster = starcore::media::poster(&path, Arc::new(AtomicBool::new(false)))?;
                     pixels = poster.pixels.as_raw().clone();
                     presentation = Some(Presentation {
                         kind: "Video".into(),

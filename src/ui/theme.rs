@@ -1,6 +1,6 @@
 //! STAR/FOLD's theme: the shared one, plus the roles a file manager needs.
 //!
-//! The shared built-in theme files are STAR/KIT's and are shared with
+//! The shared built-in theme files are STAR/CORE's and are shared with
 //! STAR/AMP and STAR/CORD. None of them says anything about a directory
 //! listing, and they should not have to: a theme is eight colours and a
 //! base16 scheme, and everything else is derived from those. So `[fold]` is
@@ -15,8 +15,8 @@
 use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
-use starkit::theme::color::Rgb;
-use starkit::theme::{pick, Registry, Resolve, Theme as Core, ThemeFile};
+use starcore::theme::color::Rgb;
+use starcore::theme::{pick, Registry, Resolve, Theme as Core, ThemeFile};
 
 /// Optional native palette roles, expressed as the same hex colors as the
 /// rest of a theme. This keeps light wells independent of raised frame faces.
@@ -37,8 +37,8 @@ struct GraphicalColors {
 impl GraphicalColors {
     fn apply(
         self,
-        mut palette: starkit::native_surface::style::Palette,
-    ) -> starkit::native_surface::style::Palette {
+        mut palette: starcore::native_surface::style::Palette,
+    ) -> starcore::native_surface::style::Palette {
         let rgb = |c: Rgb| [c.r, c.g, c.b];
         for (target, value) in [
             (&mut palette.bg, self.bg),
@@ -131,7 +131,7 @@ fn stated_or(stated: Option<Rgb>, derived: Rgb, against: Rgb, target: f64) -> Rg
 }
 
 impl Fold {
-    fn derive(core: &Core, f: &FoldColors, b16: Option<&starkit::theme::schema::Base16>) -> Self {
+    fn derive(core: &Core, f: &FoldColors, b16: Option<&starcore::theme::schema::Base16>) -> Self {
         let bg = core.panel_bg;
 
         // Every role names the base16 slot it comes from. The spec's own
@@ -233,7 +233,7 @@ impl Fold {
 /// The theme STAR/FOLD draws with: the shared one, plus `[fold]`.
 ///
 /// `Deref` rather than a hundred delegating accessors, so `theme.accent` and
-/// `theme.fold.dir_fg` read the same way and every STAR/KIT widget takes
+/// `theme.fold.dir_fg` read the same way and every STAR/CORE widget takes
 /// `&*theme`.
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -243,7 +243,7 @@ pub struct Theme {
     #[cfg(feature = "terminal-graphics")]
     graphical_core: Core,
     #[cfg(feature = "terminal-graphics")]
-    graphical_palette: starkit::native_surface::style::Palette,
+    graphical_palette: starcore::native_surface::style::Palette,
     #[cfg(feature = "terminal-graphics")]
     graphical_fold: Fold,
     #[cfg(feature = "terminal-graphics")]
@@ -255,7 +255,7 @@ pub struct Theme {
 impl Theme {
     #[cfg(feature = "terminal-graphics")]
     pub fn set_graphical_palette(&mut self, palette: crate::config::GraphicalPalette) {
-        use starkit::native_surface::style::REFERENCE_PALETTE;
+        use starcore::native_surface::style::REFERENCE_PALETTE;
         let palette = match palette {
             crate::config::GraphicalPalette::Classic => REFERENCE_PALETTE,
             crate::config::GraphicalPalette::Theme => self.graphical_palette,
@@ -368,42 +368,43 @@ impl Resolve for Theme {
 }
 
 /// Where the themes come from: the same directory as the rest of STAR/FOLD's
-/// files, spelled with STAR/KIT's `Paths` because that is what [`Registry`]
+/// files, spelled with STAR/CORE's `Paths` because that is what [`Registry`]
 /// takes.
-pub const THEME_PATHS: starkit::paths::Paths = crate::paths::PATHS;
+pub const THEME_PATHS: starcore::paths::Paths = crate::paths::PATHS;
 
-pub const EXTRA_THEMES: &[starkit::theme::Builtin] = &[
-    starkit::theme::Builtin {
+pub const EXTRA_THEMES: &[starcore::theme::Builtin] = &[
+    starcore::theme::Builtin {
         id: "gruvbox-light",
         toml: include_str!("../../themes/gruvbox-light.toml"),
     },
-    starkit::theme::Builtin {
+    starcore::theme::Builtin {
         id: "gruvbox-light-soft",
         toml: include_str!("../../themes/gruvbox-light-soft.toml"),
     },
-    starkit::theme::Builtin {
+    starcore::theme::Builtin {
         id: "dos-shell",
         toml: include_str!("../../themes/dos-shell.toml"),
     },
-    starkit::theme::Builtin {
+    starcore::theme::Builtin {
         id: "norton-commander",
         toml: include_str!("../../themes/norton-commander.toml"),
     },
-    starkit::theme::Builtin {
+    starcore::theme::Builtin {
         id: "windows-311",
         toml: include_str!("../../themes/windows-311.toml"),
     },
 ];
-static THEMES: std::sync::LazyLock<Vec<starkit::theme::Builtin>> = std::sync::LazyLock::new(|| {
-    starkit::theme::BUILTINS
-        .iter()
-        .chain(EXTRA_THEMES)
-        .map(|b| starkit::theme::Builtin {
-            id: b.id,
-            toml: b.toml,
-        })
-        .collect()
-});
+static THEMES: std::sync::LazyLock<Vec<starcore::theme::Builtin>> =
+    std::sync::LazyLock::new(|| {
+        starcore::theme::BUILTINS
+            .iter()
+            .chain(EXTRA_THEMES)
+            .map(|b| starcore::theme::Builtin {
+                id: b.id,
+                toml: b.toml,
+            })
+            .collect()
+    });
 pub fn registry() -> Registry<Theme> {
     Registry::new(THEME_PATHS).with_builtins(&THEMES)
 }
@@ -415,7 +416,7 @@ pub mod tests_support {
     use super::{Resolve as _, Theme, ThemeFile};
 
     pub fn theme(id: &str) -> Theme {
-        let builtin = starkit::theme::builtin::BUILTINS
+        let builtin = starcore::theme::builtin::BUILTINS
             .iter()
             .chain(super::EXTRA_THEMES)
             .find(|b| b.id == id)
@@ -428,7 +429,7 @@ pub mod tests_support {
 mod tests {
     use super::tests_support::theme;
     use super::*;
-    use starkit::theme::builtin::BUILTINS;
+    use starcore::theme::builtin::BUILTINS;
 
     #[cfg(feature = "terminal-graphics")]
     #[test]
@@ -507,7 +508,7 @@ mod tests {
         // sixteen known palettes can fail on. Skipped rather than faked where
         // no desktop theme is set, because a synthesised one would be a
         // seventeenth builtin with a misleading name.
-        if let Some((file, _)) = starkit::theme::system::theme() {
+        if let Some((file, _)) = starcore::theme::system::theme() {
             assert_legible("system", &Theme::resolve(&file));
         }
     }

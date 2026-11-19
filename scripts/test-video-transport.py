@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise shared KIT artwork and FOLD video controls with a silent temporary video."""
+"""Exercise shared CORE artwork and FOLD video controls with a silent temporary video."""
 import argparse
 import json
 import os
@@ -209,7 +209,7 @@ with tempfile.TemporaryDirectory(prefix='sf-video-', dir='/tmp') as temporary:
         server_pid = None
         assert not (root / 'amp').exists() and not (root / 'amp-config').exists()
         assert not (root / 'amp-invoked').exists(), 'Generic video controls invoked the AMP music helper'
-        print('Video transport: shared KIT artwork, play/pause, seek, drag/release, volume, stop, shutdown and no AMP files passed')
+        print('Video transport: shared CORE artwork, play/pause, seek, drag/release, volume, stop, shutdown and no AMP files passed')
     finally:
         if process.poll() is None:
             process.kill()

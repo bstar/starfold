@@ -104,7 +104,7 @@ pub fn save_bookmarks(path: &Path, bookmarks: &[Bookmark]) -> Result<(), String>
         bookmark: bookmarks.to_vec(),
     })
     .map_err(|error| format!("serializing bookmarks: {error}"))?;
-    starkit::fs::write_atomic(path, text.as_bytes())
+    starcore::fs::write_atomic(path, text.as_bytes())
         .map_err(|error| format!("saving {}: {error}", path.display()))
 }
 

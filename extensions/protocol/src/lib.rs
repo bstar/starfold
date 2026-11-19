@@ -1,7 +1,7 @@
 //! Preview executable protocol. No terminal escapes or dynamically loaded code.
 use anyhow::{ensure, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-pub use starkit::native_surface::Surface;
+pub use starcore::native_surface::Surface;
 use std::io::{Read, Write};
 
 pub const VERSION: u32 = 1;
@@ -157,11 +157,11 @@ impl CellGrid {
                 && !c.symbol.chars().any(|c| c.is_control()
                     || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
                 && c.modifiers & !15 == 0
-                && starkit::wrap::width_of(&c.symbol) <= 2),
+                && starcore::wrap::width_of(&c.symbol) <= 2),
             "invalid styled cell"
         );
         for (index, cell) in self.cells.iter().enumerate() {
-            if starkit::wrap::width_of(&cell.symbol) == 2 {
+            if starcore::wrap::width_of(&cell.symbol) == 2 {
                 ensure!(
                     index % usize::from(self.columns) + 1 < usize::from(self.columns)
                         && self.cells[index + 1].symbol.is_empty(),

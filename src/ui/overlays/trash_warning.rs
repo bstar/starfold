@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
-use starkit::chrome::overlay::{self, Anchor};
-use starkit::crossterm::event::{KeyCode, KeyEvent};
-use starkit::ratatui::{
+use starcore::chrome::overlay::{self, Anchor};
+use starcore::crossterm::event::{KeyCode, KeyEvent};
+use starcore::ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::Style,

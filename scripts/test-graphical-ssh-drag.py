@@ -49,7 +49,7 @@ parser.add_argument('--inject-host-mouse', action='store_true', required=True, h
 parser.add_argument('--origin',default='0,0',help='Fixture top-left coordinates, e.g. 2574,1106')
 parser.add_argument('--tree',action='store_true',help='Copy a nested directory and symlink instead of a file')
 parser.add_argument('--plain-ssh',action='store_true',help='Launch normally inside an existing SSH shell, through the Kitty integration')
-parser.add_argument('--watcher',help='STAR/KIT Kitty watcher path; required for --plain-ssh')
+parser.add_argument('--watcher',help='STAR/CORE Kitty watcher path; required for --plain-ssh')
 parser.add_argument('--kitty-config',default='/dev/null',help='Kitty configuration, optionally with the integration already installed')
 parser.add_argument('--payload-mib',type=int,help='Size of the transferred file, to exercise transport backpressure')
 args = parser.parse_args()
@@ -123,7 +123,7 @@ LogLevel ERROR
 """)
  daemon=subprocess.Popen(['/usr/bin/sshd','-D','-e','-f',str(root/'sshd_config')],stdout=subprocess.DEVNULL,stderr=(out/'sshd.log').open('w'),env={k:v for k,v in os.environ.items() if k!='NOTIFY_SOCKET'})
  remote_executable=root/'remote-fold'
- remote_executable.write_text('#!/bin/sh\nexec env '+shlex.quote('STARFOLD_DIR='+str(root/'remote-app'))+' '+shlex.quote('STARFOLD_CONFIG_DIR='+str(root/'remote-config'))+' '+shlex.quote('STARFOLD_LOG=starfold=debug,starkit=debug')+' '+shlex.quote(str(pathlib.Path(binary).resolve()))+' "$@"\n')
+ remote_executable.write_text('#!/bin/sh\nexec env '+shlex.quote('STARFOLD_DIR='+str(root/'remote-app'))+' '+shlex.quote('STARFOLD_CONFIG_DIR='+str(root/'remote-config'))+' '+shlex.quote('STARFOLD_LOG=starfold=debug,starcore=debug')+' '+shlex.quote(str(pathlib.Path(binary).resolve()))+' "$@"\n')
  remote_executable.chmod(0o700)
  address=f'unix:{root}/rc.sock'
  log=(out/'kitty.log').open('w')
@@ -136,7 +136,7 @@ LogLevel ERROR
   '-o','font_family=JetBrainsMono Nerd Font','-o','font_size=9','-o','window_padding_width=15',
   '-o','remember_window_size=no','-o','initial_window_width=942','-o','initial_window_height=1040',
   *(['-o','watcher='+str(pathlib.Path(args.watcher).resolve())] if args.watcher else []),*command],
- env={**os.environ,'STARFOLD_DIR':str(root/'app'),'STARFOLD_CONFIG_DIR':str(root/'config'),'STARFOLD_LOG':'starfold=debug,starkit=debug'},stdout=log,stderr=log)
+ env={**os.environ,'STARFOLD_DIR':str(root/'app'),'STARFOLD_CONFIG_DIR':str(root/'config'),'STARFOLD_LOG':'starfold=debug,starcore=debug'},stdout=log,stderr=log)
  def position(title,x,y,w,h):
   import json
   deadline=time.monotonic()+10

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use starkit::terminal_graphics::{
+use starcore::terminal_graphics::{
     client::{self, Launch, PresentationOptions},
     session,
 };
@@ -75,14 +75,14 @@ struct Relay {
 }
 
 fn terminal_event(
-    event: &starkit::crossterm::event::Event,
-) -> Option<starkit::terminal_graphics::Input> {
+    event: &starcore::crossterm::event::Event,
+) -> Option<starcore::terminal_graphics::Input> {
     match event {
-        starkit::crossterm::event::Event::FocusLost => {
-            Some(starkit::terminal_graphics::Input::CancelPointer)
+        starcore::crossterm::event::Event::FocusLost => {
+            Some(starcore::terminal_graphics::Input::CancelPointer)
         }
-        starkit::crossterm::event::Event::Osc72(text) => {
-            Some(starkit::terminal_graphics::Input::Osc72 { text: text.clone() })
+        starcore::crossterm::event::Event::Osc72(text) => {
+            Some(starcore::terminal_graphics::Input::Osc72 { text: text.clone() })
         }
         _ => None,
     }
@@ -211,11 +211,12 @@ pub fn main() -> Result<()> {
         });
         let session = options.session_name()?;
         if options.capabilities {
-            let graphics = starkit::graphics::Graphics::probe_if_tty(starkit::graphics::Mode::Auto);
+            let graphics =
+                starcore::graphics::Graphics::probe_if_tty(starcore::graphics::Mode::Auto);
             println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &starkit::terminal_graphics::capabilities::Capabilities::detected(&graphics)
+                    &starcore::terminal_graphics::capabilities::Capabilities::detected(&graphics)
                 )?
             );
             return Ok(());
@@ -249,13 +250,13 @@ pub fn main() -> Result<()> {
         // normally inside an existing SSH shell. Reuse that SSH TTY; no second
         // authentication, inferred hostname, or new connection is needed.
         if options.ssh.is_none() {
-            if let Some(terminal) = starkit::terminal_graphics::terminal_bridge::probe()? {
+            if let Some(terminal) = starcore::terminal_graphics::terminal_bridge::probe()? {
                 let socket = ensure(&session, options.directory, options.attach)?;
                 return terminal.relay_with_play(&socket, play);
             }
         }
         crate::PATHS.init_private_dirs();
-        let _log = starkit::logging::init(&crate::PATHS, true)?;
+        let _log = starcore::logging::init(&crate::PATHS, true)?;
         let config_path = crate::PATHS.config_file()?;
         let config = crate::config::Config::load(&config_path)?;
         return client::run_with_osc72_preference(
@@ -286,7 +287,7 @@ pub fn main() -> Result<()> {
     let options = Relay::parse();
     if let Some(socket) = options.graphical_terminal_client {
         crate::PATHS.init_private_dirs();
-        let _log = starkit::logging::init(&crate::PATHS, true)?;
+        let _log = starcore::logging::init(&crate::PATHS, true)?;
         let path = crate::PATHS.config_file()?;
         let config = crate::config::Config::load(&path)?;
         return client::run_terminal_socket_with_osc72_preference(
@@ -316,7 +317,7 @@ pub fn main() -> Result<()> {
     session::private_root(&root)?;
     session::socket_path(&root, &name)?;
     crate::PATHS.init_private_dirs();
-    let _log = starkit::logging::init(&crate::PATHS, true)?;
+    let _log = starcore::logging::init(&crate::PATHS, true)?;
     let saved = root.join(format!("{name}.toml"));
     if !saved.exists() {
         // Restore a snapshot, never the live controller or its writable state.
@@ -332,7 +333,7 @@ pub fn main() -> Result<()> {
         cfg,
         path,
         Some(saved),
-        starkit::graphics::Graphics::disabled(),
+        starcore::graphics::Graphics::disabled(),
     );
     app.enable_graphical();
     session::serve_exclusive(&root, &name, app)

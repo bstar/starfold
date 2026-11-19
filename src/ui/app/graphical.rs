@@ -1,6 +1,6 @@
 //! Shared graphical scene adapter over the established controller and hit geometry.
 use super::*;
-use starkit::terminal_graphics::{
+use starcore::terminal_graphics::{
     protocol::{Component, Input, Scene, ServerMessage, Span, Viewport},
     session::Controller,
 };
@@ -21,13 +21,13 @@ pub(super) struct State {
     pub(super) pixel_layout: bool,
     pub(super) base_buffer: Option<Buffer>,
     pub(super) base_scrollbars: Vec<Component>,
-    placements: Vec<starkit::terminal_graphics::placement::Placement>,
+    placements: Vec<starcore::terminal_graphics::placement::Placement>,
     rack_hits: Vec<(Rect, RackHit)>,
     breadcrumb_hits: Vec<(Rect, usize, PathBuf)>,
-    preview_close: Option<starkit::native_surface::PixelRect>,
+    preview_close: Option<starcore::native_surface::PixelRect>,
     viewport: Option<Viewport>,
     preserved_preview: Option<(u16, u16)>,
-    pointer_capture: Option<starkit::terminal_graphics::placement::Placement>,
+    pointer_capture: Option<starcore::terminal_graphics::placement::Placement>,
     pub(super) audio_pointer_held: bool,
     video_capable: bool,
     video_player: bool,
@@ -48,7 +48,7 @@ pub(super) struct State {
     pub(super) audio_relay_capable: bool,
     pub(super) audio_local: bool,
     pub(super) audio_epoch: Option<u64>,
-    video: Option<starkit::terminal_graphics::media::Host>,
+    video: Option<starcore::terminal_graphics::media::Host>,
     video_sequence: u64,
     loading_phase: Option<usize>,
     video_unmuted_volume: Option<u8>,
@@ -65,12 +65,12 @@ pub(super) struct State {
     image_sequence: u64,
     pub(super) image_zoom: Option<u16>,
     image_id: Option<String>,
-    thumbnail: Option<starkit::terminal_graphics::assets::Thumbnailer>,
+    thumbnail: Option<starcore::terminal_graphics::assets::Thumbnailer>,
     image: Option<(String, String)>,
     audio_images: std::collections::HashMap<String, String>,
     rendered_version: u64,
     drag: Option<Drag>,
-    resize_handle: Option<starkit::native_surface::PixelRect>,
+    resize_handle: Option<starcore::native_surface::PixelRect>,
     authorization: Option<Authorization>,
     pub(super) wire: Option<crossbeam_channel::Receiver<wire_dnd::Outgoing>>,
 }
@@ -116,12 +116,12 @@ struct VideoScrub {
     paused: bool,
 }
 
-fn hex(rgb: starkit::theme::color::Rgb) -> String {
+fn hex(rgb: starcore::theme::color::Rgb) -> String {
     format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b)
 }
-fn color(c: starkit::ratatui::style::Color, fallback: &str) -> String {
+fn color(c: starcore::ratatui::style::Color, fallback: &str) -> String {
     match c {
-        starkit::ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        starcore::ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
         _ => fallback.into(),
     }
 }
@@ -131,9 +131,9 @@ fn pixel_placements(
     regions: &Regions,
     commander: bool,
     v: Viewport,
-) -> Vec<starkit::terminal_graphics::placement::Placement> {
-    use starkit::native_surface::{Metrics, PixelRect as R};
-    use starkit::terminal_graphics::placement::{self, Placement};
+) -> Vec<starcore::terminal_graphics::placement::Placement> {
+    use starcore::native_surface::{Metrics, PixelRect as R};
+    use starcore::terminal_graphics::placement::{self, Placement};
     let cw = (v.width / u32::from(v.columns)).max(1) as u16;
     let ch = (v.height / u32::from(v.rows)).max(1) as u16;
     let metrics = Metrics::from_cell(cw, ch);
@@ -281,13 +281,13 @@ fn pixel_placements(
 }
 
 fn append_modal_placements(
-    placements: &mut Vec<starkit::terminal_graphics::placement::Placement>,
+    placements: &mut Vec<starcore::terminal_graphics::placement::Placement>,
     v: Viewport,
     modals: &[Rect],
     overlay: &[Span],
 ) {
-    use starkit::native_surface::PixelRect as R;
-    use starkit::terminal_graphics::placement::Placement;
+    use starcore::native_surface::PixelRect as R;
+    use starcore::terminal_graphics::placement::Placement;
     let cw = (v.width / u32::from(v.columns)).max(1) as u16;
     let ch = (v.height / u32::from(v.rows)).max(1) as u16;
     for source in modals {
@@ -332,10 +332,10 @@ fn append_modal_placements(
     }
 }
 
-pub(super) fn scrollbar(track: Rect, thumb: starkit::chrome::scrollbar::Thumb) -> Component {
+pub(super) fn scrollbar(track: Rect, thumb: starcore::chrome::scrollbar::Thumb) -> Component {
     Component::Scrollbar {
         rect: track.into(),
-        thumb: starkit::terminal_graphics::Rect {
+        thumb: starcore::terminal_graphics::Rect {
             x: track.x,
             y: track.y.saturating_add(thumb.start),
             width: track.width,
@@ -421,7 +421,7 @@ impl App {
             .find(|p| p.source == preview.into())
             .and_then(|p| p.pointer_pixels(px, py, false))
             .is_some_and(|(sx, sy)| {
-                starkit::chrome::header::hit(preview, &self.panel_words(ModuleId::Preview), sx, sy)
+                starcore::chrome::header::hit(preview, &self.panel_words(ModuleId::Preview), sx, sy)
                     == Some(panels::Word::Close)
             });
         if old_slot {
@@ -435,8 +435,8 @@ impl App {
     pub(super) fn native_audio_target(
         &self,
         body: Rect,
-    ) -> Option<starkit::native_surface::PixelRect> {
-        use starkit::native_surface::PixelRect as R;
+    ) -> Option<starcore::native_surface::PixelRect> {
+        use starcore::native_surface::PixelRect as R;
         let state = self.graphical.as_ref()?;
         if !state.uses_pixel_layout() || body.width == 0 || body.height == 0 {
             return None;
@@ -623,7 +623,7 @@ impl App {
 
     fn graphical_pointer(&mut self, action: &str, button: u8, x: u16, y: u16, modifiers: u8) {
         if action == "down" && self.video_words().is_some() {
-            tracing::debug!(x, y, button, preview = ?self.layout.last.as_ref().map(|r| r.rect_of(ModuleId::Preview)), words = ?self.layout.last.as_ref().map(|r| starkit::chrome::header::slots(r.rect_of(ModuleId::Preview), &self.panel_words(ModuleId::Preview))), "Video preview pointer");
+            tracing::debug!(x, y, button, preview = ?self.layout.last.as_ref().map(|r| r.rect_of(ModuleId::Preview)), words = ?self.layout.last.as_ref().map(|r| starcore::chrome::header::slots(r.rect_of(ModuleId::Preview), &self.panel_words(ModuleId::Preview))), "Video preview pointer");
         }
         if self.video_pointer(action, button, x, y) {
             return;
@@ -692,7 +692,7 @@ impl App {
                 return;
             }
         }
-        if modifiers == starkit::crossterm::event::KeyModifiers::CONTROL.bits()
+        if modifiers == starcore::crossterm::event::KeyModifiers::CONTROL.bits()
             && matches!(action, "scroll_up" | "scroll_down")
             && self
                 .layout
@@ -712,7 +712,7 @@ impl App {
             2 => MouseButton::Middle,
             _ => MouseButton::Left,
         };
-        let modifiers = starkit::crossterm::event::KeyModifiers::from_bits_truncate(modifiers);
+        let modifiers = starcore::crossterm::event::KeyModifiers::from_bits_truncate(modifiers);
         if action == "down"
             && button == MouseButton::Left
             && modifiers.is_empty()
@@ -962,7 +962,7 @@ impl App {
                 id: format!("video-{}-{}", video.session, video.generation),
                 png: None,
                 zoom: 100,
-                scale: starkit::terminal_graphics::protocol::ImageScale::Smooth,
+                scale: starcore::terminal_graphics::protocol::ImageScale::Smooth,
             });
             return;
         }
@@ -995,13 +995,13 @@ impl App {
                     self.cfg.preview.image_scale
                 } {
                     crate::config::Scale::One => {
-                        starkit::terminal_graphics::protocol::ImageScale::One
+                        starcore::terminal_graphics::protocol::ImageScale::One
                     }
                     crate::config::Scale::Pixels => {
-                        starkit::terminal_graphics::protocol::ImageScale::Pixels
+                        starcore::terminal_graphics::protocol::ImageScale::Pixels
                     }
                     crate::config::Scale::Smooth => {
-                        starkit::terminal_graphics::protocol::ImageScale::Smooth
+                        starcore::terminal_graphics::protocol::ImageScale::Smooth
                     }
                 },
             });
@@ -1014,8 +1014,8 @@ fn native_tree_surface(
     size: (u16, u16),
     cell: (u16, u16),
     theme: &Theme,
-) -> (starkit::native_surface::Surface, usize, usize) {
-    use starkit::native_surface::{Metrics, PixelRect as R, Primitive, Surface};
+) -> (starcore::native_surface::Surface, usize, usize) {
+    use starcore::native_surface::{Metrics, PixelRect as R, Primitive, Surface};
     let (width, height) = size;
     let font = Metrics::from_cell(cell.0, cell.1).font;
     let row_height = ((f32::from(font) * 1.2).ceil() as u16 + 1).max(1);
@@ -1077,7 +1077,7 @@ fn breadcrumb_detail(view: &panels::stack::View<'_>) -> String {
     )
 }
 fn breadcrumb_detail_width(view: &panels::stack::View<'_>) -> u16 {
-    starkit::wrap::width_of(&breadcrumb_detail(view))
+    starcore::wrap::width_of(&breadcrumb_detail(view))
 }
 
 /// Breadcrumb layout is shared by painting and pointer hit testing.
@@ -1129,7 +1129,7 @@ fn breadcrumb_slots(
     let width = |parts: &[(String, PathBuf)]| -> usize {
         parts
             .iter()
-            .map(|(label, _)| usize::from(starkit::wrap::width_of(label)))
+            .map(|(label, _)| usize::from(starcore::wrap::width_of(label)))
             .sum::<usize>()
             + parts
                 .iter()
@@ -1153,7 +1153,7 @@ fn breadcrumb_slots(
     let mut x = area.x;
     let mut slots = Vec::new();
     for (label, path) in parts {
-        let width = starkit::wrap::width_of(&label).min(area.right().saturating_sub(x));
+        let width = starcore::wrap::width_of(&label).min(area.right().saturating_sub(x));
         if width == 0 {
             break;
         }
@@ -1181,7 +1181,7 @@ fn video_image_body(area: Rect, pixel_layout: bool) -> Rect {
     body
 }
 
-fn balance_video_padding(p: &mut starkit::terminal_graphics::placement::Placement) {
+fn balance_video_padding(p: &mut starcore::terminal_graphics::placement::Placement) {
     if let Some(padding) = &mut p.padding {
         if p.source.height >= 8 {
             // The movie panel adds four pixels to the shared inset, and
@@ -1200,7 +1200,7 @@ fn video_body(area: Rect, pixel_layout: bool) -> Rect {
         let mut body = panels::preview::body(area);
         // Pixel placement already supplies the bottom border inset. The
         // cell frame's extra blank footer row would add a second inset.
-        if area.height >= 8 && starkit::chrome::frame::extra_rows() > 0 {
+        if area.height >= 8 && starcore::chrome::frame::extra_rows() > 0 {
             body.height = body.height.saturating_add(1);
         }
         body
@@ -1210,8 +1210,8 @@ fn video_body(area: Rect, pixel_layout: bool) -> Rect {
 }
 
 fn native_mnemonic(
-    surface: &mut starkit::native_surface::Surface,
-    rect: starkit::native_surface::PixelRect,
+    surface: &mut starcore::native_surface::Surface,
+    rect: starcore::native_surface::PixelRect,
     label: &str,
     mnemonic: Option<(char, u16)>,
     enabled: bool,
@@ -1235,12 +1235,12 @@ fn native_mnemonic(
         .enumerate()
         .map(|(i, ch)| if i == usize::from(offset) { ch } else { ' ' })
         .collect();
-    starkit::native_surface::classic::label(surface, rect, mask, color, 10, true);
+    starcore::native_surface::classic::label(surface, rect, mask, color, 10, true);
 }
 
 /// Same 30x24 target and ten-pixel right inset as AMP's rack headers.
-fn native_close_rect(width: u16, height: u16) -> starkit::native_surface::PixelRect {
-    starkit::native_surface::PixelRect::new(
+fn native_close_rect(width: u16, height: u16) -> starcore::native_surface::PixelRect {
+    starcore::native_surface::PixelRect::new(
         width.saturating_sub(40),
         7.min(height),
         30.min(width),
@@ -1258,8 +1258,8 @@ fn native_header(
     title_padding: u16,
 ) -> Component {
     let (cw, ch) = cell;
-    use starkit::chrome::header::{self, Word as _};
-    use starkit::native_surface::{PixelRect as R, Surface};
+    use starcore::chrome::header::{self, Word as _};
+    use starcore::native_surface::{PixelRect as R, Surface};
     let area = Rect::new(
         rect.x + 1,
         rect.y + 1,
@@ -1285,7 +1285,7 @@ fn native_header(
         .saturating_sub(inset + 8);
     surface
         .nodes
-        .push(starkit::native_surface::Primitive::Text {
+        .push(starcore::native_surface::Primitive::Text {
             rect: R::new(inset, 0, title_width, ch),
             text: title.to_string(),
             color: hex(theme.header_fg),
@@ -1295,7 +1295,7 @@ fn native_header(
         });
     let title_hit_width = title_width;
     if title_hit_width > 0 {
-        surface.hits.push(starkit::native_surface::HitRegion {
+        surface.hits.push(starcore::native_surface::HitRegion {
             rect: R::new(inset, 0, title_hit_width, ch),
             action: "focus".into(),
         });
@@ -1303,7 +1303,7 @@ fn native_header(
     for (word, slot) in slots {
         let target = R::new((slot.x - area.x) * cw, 0, slot.width * cw, ch);
         if word == panels::Word::Close {
-            starkit::native_surface::style::close_button(
+            starcore::native_surface::style::close_button(
                 &mut surface,
                 target,
                 &theme.rack.style().colors,
@@ -1311,7 +1311,7 @@ fn native_header(
                 false,
             );
         } else {
-            starkit::native_surface::classic::label(
+            starcore::native_surface::classic::label(
                 &mut surface,
                 target,
                 word.word(),
@@ -1327,9 +1327,9 @@ fn native_header(
                 hotkeys,
                 &hex(theme
                     .header_bg
-                    .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK])),
+                    .best_contrast_against(&[starcore::theme::WHITE, starcore::theme::BLACK])),
             );
-            surface.hits.push(starkit::native_surface::HitRegion {
+            surface.hits.push(starcore::native_surface::HitRegion {
                 rect: target,
                 action: "header".into(),
             });
@@ -1429,7 +1429,7 @@ impl Controller for App {
     }
     fn capabilities(
         &mut self,
-        capabilities: starkit::terminal_graphics::capabilities::Capabilities,
+        capabilities: starcore::terminal_graphics::capabilities::Capabilities,
     ) {
         if (!capabilities.audio_relay || capabilities.local_media)
             && self.graphical.as_ref().is_some_and(|s| s.audio_local)
@@ -1461,7 +1461,7 @@ impl Controller for App {
         self.graphical.as_mut().unwrap().presentation_switch = capabilities.presentation_switch;
         let cells = capabilities.cell_presentation.unwrap_or(
             capabilities.image_transport
-                == starkit::terminal_graphics::capabilities::ImageTransport::None,
+                == starcore::terminal_graphics::capabilities::ImageTransport::None,
         );
         self.graphical.as_mut().unwrap().cell_mode = cells;
         let state = self.graphical.as_mut().unwrap();
@@ -1491,7 +1491,7 @@ impl Controller for App {
     }
     fn tick(&mut self) {
         let _chrome =
-            starkit::chrome::frame::padding_scope(self.graphical.as_ref().unwrap().padded_chrome);
+            starcore::chrome::frame::padding_scope(self.graphical.as_ref().unwrap().padded_chrome);
         let _rack = panels::stack::rack_scope(
             self.layout.native_rack && self.layout.last.as_ref().is_some_and(layout::rack_browser),
         );
@@ -1589,11 +1589,11 @@ impl Controller for App {
             .set_graphical_palette(self.cfg.ui.graphical_palette);
         self.theme.set_graphical(!state.cell_mode);
         self.theme.rack.set_native_skins(state.skin_mode);
-        let _chrome = starkit::chrome::frame::padding_scope(state.padded_chrome);
+        let _chrome = starcore::chrome::frame::padding_scope(state.padded_chrome);
         if let Some((height, rows)) = state.preserved_preview.take() {
             self.layout.native_preview_rows = Some(
                 ((u32::from(height) * u32::from(viewport.rows) / u32::from(rows.max(1))) as u16)
-                    .saturating_sub(layout::COLLAPSED_ROWS + starkit::chrome::frame::extra_rows()),
+                    .saturating_sub(layout::COLLAPSED_ROWS + starcore::chrome::frame::extra_rows()),
             );
         }
         self.audio_cell_size = Some((
@@ -1623,7 +1623,7 @@ impl Controller for App {
             return scene;
         };
         if pixels {
-            scene.background = hex(starkit::theme::Resolve::core(&self.theme).bg);
+            scene.background = hex(starcore::theme::Resolve::core(&self.theme).bg);
             scene.placements = pixel_placements(&regions, self.commander, viewport);
         }
         let _rack = panels::stack::rack_scope(pixels && layout::rack_browser(&regions));
@@ -1666,7 +1666,7 @@ impl Controller for App {
                     continue;
                 }
                 if module == ModuleId::Operations && rect.height == 2 {
-                    use starkit::native_surface::{Metrics, PixelRect as R, Surface};
+                    use starcore::native_surface::{Metrics, PixelRect as R, Surface};
                     let mut surface =
                         Surface::new(rect.width * cw, rect.height * ch, hex(self.theme.panel_bg));
                     let text = if let Some(progress) = &self.view.running_bar {
@@ -1707,10 +1707,10 @@ impl Controller for App {
                             self.view.ops.len()
                         )
                     };
-                    let text_width =
-                        (starkit::wrap::width_of(&text) * cw).min(surface.width.saturating_sub(24));
+                    let text_width = (starcore::wrap::width_of(&text) * cw)
+                        .min(surface.width.saturating_sub(24));
                     if text_width > 0 {
-                        surface.hits.push(starkit::native_surface::HitRegion {
+                        surface.hits.push(starcore::native_surface::HitRegion {
                             rect: R::new(12.min(surface.width), 0, text_width, surface.height),
                             action: "operations".into(),
                         });
@@ -1802,7 +1802,7 @@ impl Controller for App {
                 } else {
                     self.stack_view()
                 };
-                let body = starkit::chrome::frame::body(rect, &panels::words(ModuleId::Stack));
+                let body = starcore::chrome::frame::body(rect, &panels::words(ModuleId::Stack));
                 let list = panels::stack::split(body, view.crumbs.len(), view.fold_rows).list;
                 // Existing column arithmetic determines metadata boundaries.
                 let width = panels::stack::graphical_name_width(list.width);
@@ -1841,7 +1841,7 @@ impl Controller for App {
                         ));
                     }
                     if self.graphical.as_ref().unwrap().uses_pixel_layout() {
-                        use starkit::native_surface::{Metrics, PixelRect as R, Surface};
+                        use starcore::native_surface::{Metrics, PixelRect as R, Surface};
                         let rule =
                             panels::stack::split(body, view.crumbs.len(), view.fold_rows).rule;
                         let mut area = rule;
@@ -1859,7 +1859,7 @@ impl Controller for App {
                             Surface::new(rule.width * cw, ch, hex(self.theme.panel_bg));
                         let crumb_font = Metrics::from_cell(cw, ch).font.min(11);
                         for (index, (r, label, target)) in slots.iter().enumerate() {
-                            starkit::native_surface::classic::label(
+                            starcore::native_surface::classic::label(
                                 &mut surface,
                                 R::new((r.x - rule.x) * cw, 0, r.width * cw, ch),
                                 label,
@@ -1882,7 +1882,7 @@ impl Controller for App {
                             }
                         }
                         let detail = breadcrumb_detail(&view);
-                        let detail_width = starkit::wrap::width_of(&detail).min(rule.width);
+                        let detail_width = starcore::wrap::width_of(&detail).min(rule.width);
                         if detail_width > 0 {
                             surface.text(
                                 R::new((rule.width - detail_width) * cw, 0, detail_width * cw, ch),
@@ -1898,7 +1898,7 @@ impl Controller for App {
                         });
                     }
                     if let Some((total, available)) = view.space.filter(|(total, _)| *total > 0) {
-                        use starkit::native_surface::{Metrics, PixelRect as R, Surface};
+                        use starcore::native_surface::{Metrics, PixelRect as R, Surface};
                         let footer = Rect::new(
                             rect.x + 1,
                             rect.bottom() - 2,
@@ -1971,7 +1971,7 @@ impl Controller for App {
                         };
                         row_hits.push(Rect::new(list.x, y, list.width, 1));
                         scene.components.push(Component::ListRow {
-                            rect: starkit::terminal_graphics::Rect {
+                            rect: starcore::terminal_graphics::Rect {
                                 x: list.x,
                                 y,
                                 width,
@@ -2129,7 +2129,7 @@ impl Controller for App {
                             scene.components.push(component);
                             continue;
                         }
-                        let convert = |r: starkit::terminal_graphics::Rect| {
+                        let convert = |r: starcore::terminal_graphics::Rect| {
                             Rect::new(r.x, r.y, r.width, r.height)
                         };
                         let painted = rack::tab(
@@ -2156,7 +2156,7 @@ impl Controller for App {
                 self.workspace_scene(&mut scene, &regions, (cw, ch));
             }
             // Panel markers supply controller identity, not a second frame.
-            // Paint focus last, over the pane's content, using KIT chrome.
+            // Paint focus last, over the pane's content, using CORE chrome.
             // Otherwise the old thick outline leaks through rounded corners.
             if !modal {
                 let focused: Vec<_> = scene
@@ -2173,7 +2173,7 @@ impl Controller for App {
                         (cw, ch),
                         &scene.placements,
                     );
-                    let mut surface = starkit::native_surface::Surface::new(
+                    let mut surface = starcore::native_surface::Surface::new(
                         target.width,
                         target.height,
                         "transparent".into(),
@@ -2181,7 +2181,7 @@ impl Controller for App {
                     .with_physical_text();
                     self.theme.rack.focus(
                         &mut surface,
-                        starkit::native_surface::PixelRect::new(0, 0, target.width, target.height),
+                        starcore::native_surface::PixelRect::new(0, 0, target.width, target.height),
                     );
                     scene.components.push(Component::Surface { rect, surface });
                 }
@@ -2302,7 +2302,8 @@ impl Controller for App {
                             u32::from(image.pixel_height),
                             image.rgba.clone(),
                         ) {
-                            if let Ok(png) = starkit::terminal_graphics::assets::encode_png(&pixels)
+                            if let Ok(png) =
+                                starcore::terminal_graphics::assets::encode_png(&pixels)
                             {
                                 cache.insert(id.clone(), png);
                             }
@@ -2310,7 +2311,7 @@ impl Controller for App {
                     }
                     if let Some(png) = cache.get(&id) {
                         scene.components.push(Component::Image {
-                            rect: starkit::terminal_graphics::Rect {
+                            rect: starcore::terminal_graphics::Rect {
                                 x: body.x + image.x,
                                 y: body.y + image.y,
                                 width: image.width,
@@ -2331,7 +2332,7 @@ impl Controller for App {
             for rect in modal_rects
                 .iter()
                 .copied()
-                .map(starkit::terminal_graphics::Rect::from)
+                .map(starcore::terminal_graphics::Rect::from)
             {
                 scene.components.retain(|component| !matches!(component, Component::Panel { rect: r, .. } if *r == rect));
                 let menu = matches!(
@@ -2355,7 +2356,7 @@ impl Controller for App {
             let y = viewport.rows.saturating_sub(6) / 2;
             scene.components.clear();
             scene.components.push(Component::Panel {
-                rect: starkit::terminal_graphics::Rect {
+                rect: starcore::terminal_graphics::Rect {
                     x,
                     y,
                     width,
@@ -2480,7 +2481,7 @@ impl Controller for App {
                         if !(pixels && layout::rack_browser(&regions)) || module != ModuleId::Stack
                         {
                             clickable.extend(
-                                starkit::chrome::header::slots(rect, &words)
+                                starcore::chrome::header::slots(rect, &words)
                                     .into_iter()
                                     .filter(|(word, _)| !pixels || *word != panels::Word::Close)
                                     .map(|(_, rect)| rect),
@@ -2510,7 +2511,7 @@ impl Controller for App {
             target.y += (target.height - surface.height) / 2;
             target.width = surface.width;
             target.height = surface.height;
-            Some(starkit::terminal_graphics::placement::Placement::new(
+            Some(starcore::terminal_graphics::placement::Placement::new(
                 body.into(),
                 target,
             ))
@@ -2557,9 +2558,9 @@ impl Controller for App {
                 .video_picker_rect
                 .filter(|_| state.video_picker.is_some())
             {
-                let mut placement = starkit::terminal_graphics::placement::Placement::new(
+                let mut placement = starcore::terminal_graphics::placement::Placement::new(
                     rect.into(),
-                    starkit::native_surface::PixelRect::new(
+                    starcore::native_surface::PixelRect::new(
                         rect.x * cw,
                         rect.y * ch,
                         rect.width * cw,
@@ -2588,7 +2589,7 @@ impl Controller for App {
                     // One terminal mouse row straddles the border and pane gap.
                     // Keep the grab strip clear of header controls below it.
                     let top = p.target.y.saturating_sub(8);
-                    let handle = starkit::native_surface::PixelRect::new(
+                    let handle = starcore::native_surface::PixelRect::new(
                         p.target.x,
                         top,
                         p.target.width,
@@ -2649,7 +2650,7 @@ impl Controller for App {
                 }
                 let hit = surface.hits.iter().find(|h| h.action == "close")?;
                 let target = rack_scene::pixel_bounds(preview, (cw, ch), &scene.placements);
-                Some(starkit::native_surface::PixelRect::new(
+                Some(starcore::native_surface::PixelRect::new(
                     target.x + hit.rect.x,
                     target.y + hit.rect.y,
                     hit.rect.width,
@@ -2661,7 +2662,7 @@ impl Controller for App {
     }
     fn input(&mut self, input: Input) {
         let _chrome =
-            starkit::chrome::frame::padding_scope(self.graphical.as_ref().unwrap().padded_chrome);
+            starcore::chrome::frame::padding_scope(self.graphical.as_ref().unwrap().padded_chrome);
         let _rack = panels::stack::rack_scope(
             self.layout.native_rack && self.layout.last.as_ref().is_some_and(layout::rack_browser),
         );
@@ -2700,7 +2701,7 @@ impl Controller for App {
                         KeyCode::Char(c)
                             if *modifiers == 0
                                 || *modifiers
-                                    == starkit::crossterm::event::KeyModifiers::SHIFT.bits() =>
+                                    == starcore::crossterm::event::KeyModifiers::SHIFT.bits() =>
                         {
                             let mut bytes = [0; 4];
                             if auth.secret.len() < 4096 {
@@ -2790,7 +2791,7 @@ impl Controller for App {
                 if let Some(code) = key_code(&code) {
                     self.key(KeyEvent::new(
                         code,
-                        starkit::crossterm::event::KeyModifiers::from_bits_truncate(modifiers),
+                        starcore::crossterm::event::KeyModifiers::from_bits_truncate(modifiers),
                     ));
                 }
             }
@@ -2834,7 +2835,7 @@ impl Controller for App {
                 if state.placements.is_empty() {
                     self.graphical_pointer(&action, button, x, y, modifiers);
                 } else if let Some(v) = state.viewport {
-                    let project = |p: &starkit::terminal_graphics::placement::Placement,
+                    let project = |p: &starcore::terminal_graphics::placement::Placement,
                                    captured| {
                         match pixel {
                             Some([px, py]) if px < v.width && py < v.height => {
@@ -2951,14 +2952,14 @@ impl Controller for App {
                     kind: MouseEventKind::Up(MouseButton::Left),
                     column: 0,
                     row: 0,
-                    modifiers: starkit::crossterm::event::KeyModifiers::empty(),
+                    modifiers: starcore::crossterm::event::KeyModifiers::empty(),
                 });
             }
             _ => {}
         }
     }
-    fn media(&mut self, message: starkit::terminal_graphics::media::ToHost) {
-        use starkit::terminal_graphics::media::ToHost;
+    fn media(&mut self, message: starcore::terminal_graphics::media::ToHost) {
+        use starcore::terminal_graphics::media::ToHost;
         let state = self.graphical.as_mut().unwrap();
         match &message {
             ToHost::AudioCredit {
@@ -2995,7 +2996,7 @@ impl Controller for App {
         }
     }
     fn media_chunks(&mut self) -> Vec<ServerMessage> {
-        use starkit::terminal_graphics::media::ToClient;
+        use starcore::terminal_graphics::media::ToClient;
         let mut messages = Vec::new();
         let state = self.graphical.as_ref().unwrap();
         for _ in 0..2 {
@@ -3058,8 +3059,8 @@ impl App {
     pub(super) fn graphical_video_snapshot(&self) -> Option<session::VideoSession> {
         let state = self.graphical.as_ref()?;
         let video = state.video.as_ref()?;
-        let remember = |selection: &starkit::media::tracks::Selection| {
-            use starkit::media::tracks::Selection;
+        let remember = |selection: &starcore::media::tracks::Selection| {
+            use starcore::media::tracks::Selection;
             match selection {
                 Selection::Auto => session::TrackSelection::Auto,
                 Selection::Off => session::TrackSelection::Off,
@@ -3100,7 +3101,7 @@ impl App {
         };
         if state.audio_epoch.take().is_some() {
             state.effects.push(ServerMessage::Media {
-                message: starkit::terminal_graphics::media::ToClient::AudioClose {
+                message: starcore::terminal_graphics::media::ToClient::AudioClose {
                     session: self.audio_activation,
                 },
             });
@@ -3209,7 +3210,7 @@ impl App {
         let cw = (scene.viewport.width / u32::from(scene.viewport.columns)).max(1) as u16;
         let ch = (scene.viewport.height / u32::from(scene.viewport.rows)).max(1) as u16;
         let target = rack_scene::pixel_bounds(rect, (cw, ch), &scene.placements);
-        let mut surface = starkit::native_surface::Surface::new(
+        let mut surface = starcore::native_surface::Surface::new(
             target.width.max(1),
             target.height.max(1),
             hex(self.theme.panel_bg),
@@ -3218,7 +3219,7 @@ impl App {
         let mid = surface.height / 2;
         let pad = 8.min(surface.width / 4);
         surface.text_centered(
-            starkit::native_surface::PixelRect::new(
+            starcore::native_surface::PixelRect::new(
                 pad,
                 mid.saturating_sub(24),
                 surface.width.saturating_sub(pad * 2),
@@ -3226,14 +3227,14 @@ impl App {
             ),
             format!("{} {stage}", self.reading_spinner()),
             &hex(self.theme.accent),
-            starkit::native_surface::Metrics::from_cell(cw, ch)
+            starcore::native_surface::Metrics::from_cell(cw, ch)
                 .font
                 .clamp(12, 18),
             true,
         );
         if surface.height >= 70 {
             surface.text_centered(
-                starkit::native_surface::PixelRect::new(
+                starcore::native_surface::PixelRect::new(
                     pad,
                     mid + 12,
                     surface.width.saturating_sub(pad * 2),
@@ -3270,11 +3271,11 @@ impl App {
         for y in body.y..body.bottom() {
             buf.set_string(body.x, y, " ".repeat(usize::from(body.width)), style);
         }
-        let text = starkit::text::truncate(
+        let text = starcore::text::truncate(
             &format!("{} {stage}", self.reading_spinner()),
             usize::from(body.width),
         );
-        let x = body.x + body.width.saturating_sub(starkit::wrap::width_of(&text)) / 2;
+        let x = body.x + body.width.saturating_sub(starcore::wrap::width_of(&text)) / 2;
         buf.set_string(x, body.y + body.height / 2, text, style);
     }
     pub(super) fn video_words(&self) -> Option<Vec<panels::Word>> {
@@ -3448,7 +3449,7 @@ impl App {
                 if let Some(saved) = self.resume_video.take() {
                     if let Some(video) = self.graphical.as_mut().unwrap().video.as_mut() {
                         let restore = |selection: session::TrackSelection| {
-                            use starkit::media::tracks::Selection;
+                            use starcore::media::tracks::Selection;
                             match selection {
                                 session::TrackSelection::Auto => Selection::Auto,
                                 session::TrackSelection::Off => Selection::Off,
@@ -3473,7 +3474,7 @@ impl App {
                             } else {
                                 position
                             },
-                            starkit::media::tracks::PlaybackOptions {
+                            starcore::media::tracks::PlaybackOptions {
                                 audio: restore(saved.audio),
                                 subtitle: restore(saved.subtitle),
                             },
@@ -3566,13 +3567,14 @@ impl App {
                     }
                     let state = self.graphical.as_mut().unwrap();
                     state.video_sequence += 1;
-                    state.video = Some(starkit::terminal_graphics::media::Host::new_with_original(
-                        path.clone(),
-                        format!("video-{}-1", state.video_sequence),
-                        state.video_sequence,
-                        state.local_media,
-                        state.original_media && state.video_mode != 2,
-                    ));
+                    state.video =
+                        Some(starcore::terminal_graphics::media::Host::new_with_original(
+                            path.clone(),
+                            format!("video-{}-1", state.video_sequence),
+                            state.video_sequence,
+                            state.local_media,
+                            state.original_media && state.video_mode != 2,
+                        ));
                     state.video.as_mut().unwrap().set_control(false, 80);
                     if let Some(placement) = state.placements.iter().find(|p| {
                         self.layout
@@ -3631,7 +3633,7 @@ impl App {
         }
         self.repaint = true;
     }
-    fn video_stream_label(video: &starkit::terminal_graphics::media::Host) -> String {
+    fn video_stream_label(video: &starcore::terminal_graphics::media::Host) -> String {
         if video.local_playback() {
             return "local".into();
         }
@@ -3650,9 +3652,9 @@ impl App {
         format!(
             "SSH stream · Preview · up to {}p · H.264/AAC",
             match video.quality {
-                starkit::media::Quality::Low => 360,
-                starkit::media::Quality::Balanced => 480,
-                starkit::media::Quality::High => 720,
+                starcore::media::Quality::Low => 360,
+                starcore::media::Quality::Balanced => 480,
+                starcore::media::Quality::High => 720,
             }
         )
     }
@@ -3666,8 +3668,8 @@ impl App {
             && state.video.as_ref().is_some_and(|video| {
                 !matches!(
                     video.options.subtitle,
-                    starkit::media::tracks::Selection::Off
-                        | starkit::media::tracks::Selection::Auto
+                    starcore::media::tracks::Selection::Off
+                        | starcore::media::tracks::Selection::Auto
                 )
             })
         {
@@ -3689,7 +3691,7 @@ impl App {
         if self.g_pending || self.d_pending {
             return false;
         }
-        if modifiers & !starkit::crossterm::event::KeyModifiers::SHIFT.bits() != 0
+        if modifiers & !starcore::crossterm::event::KeyModifiers::SHIFT.bits() != 0
             || self.layout.focus() != ModuleId::Preview
             || self.overlays.is_open()
             || self.video_words().is_none()
@@ -3718,7 +3720,7 @@ impl App {
             "f" | "F" if self.graphical.as_ref().unwrap().video_player => self
                 .toggle_video_fullscreen(
                     code == "f"
-                        && modifiers & starkit::crossterm::event::KeyModifiers::SHIFT.bits() == 0,
+                        && modifiers & starcore::crossterm::event::KeyModifiers::SHIFT.bits() == 0,
                 ),
             "f" | "F" if !self.graphical.as_ref().unwrap().video_player => {
                 self.video_action(panels::Word::VideoExpand(false))
@@ -4063,8 +4065,8 @@ impl App {
             });
         scene
     }
-    fn video_choices(&self, audio: bool) -> Vec<(String, starkit::media::tracks::Selection)> {
-        use starkit::media::tracks::Selection;
+    fn video_choices(&self, audio: bool) -> Vec<(String, starcore::media::tracks::Selection)> {
+        use starcore::media::tracks::Selection;
         let mut entries = vec![
             (
                 if audio {
@@ -4156,7 +4158,7 @@ impl App {
                 .is_some_and(|v| v.original)
             && !matches!(
                 selection,
-                starkit::media::tracks::Selection::Off | starkit::media::tracks::Selection::Auto
+                starcore::media::tracks::Selection::Off | starcore::media::tracks::Selection::Auto
             )
         {
             self.note = Some((
@@ -4221,7 +4223,7 @@ impl App {
                     self.graphical.as_mut().unwrap().video_picker = None;
                 }
                 value
-                    if modifiers & !starkit::crossterm::event::KeyModifiers::SHIFT.bits() == 0
+                    if modifiers & !starcore::crossterm::event::KeyModifiers::SHIFT.bits() == 0
                         && value.chars().count() == 1 =>
                 {
                     let input = self
@@ -4271,7 +4273,7 @@ impl App {
                 state.video_picker_request.as_ref(),
                 state.video_picker_controls.as_ref(),
             ) {
-                if rect.contains(starkit::ratatui::layout::Position::new(x, y)) {
+                if rect.contains(starcore::ratatui::layout::Position::new(x, y)) {
                     let cw = request.width / rect.width.max(1);
                     let ch = request.height / rect.height.max(1);
                     controls.pointer(
@@ -4427,15 +4429,15 @@ impl App {
         );
         let cw = (scene.viewport.width / u32::from(scene.viewport.columns.max(1))) as u16;
         let ch = (scene.viewport.height / u32::from(scene.viewport.rows.max(1))) as u16;
-        let surface = starkit::media::timeline(
+        let surface = starcore::media::timeline(
             rect.width.saturating_mul(cw).max(1),
             ch.max(1),
             position,
             poster.duration,
             hex(self.theme.panel_bg),
-            if self.theme.variant == starkit::theme::Variant::Dark {
+            if self.theme.variant == starcore::theme::Variant::Dark {
                 let bg = self.theme.panel_bg;
-                hex(starkit::theme::color::Rgb::new(
+                hex(starcore::theme::color::Rgb::new(
                     bg.r.saturating_add(16),
                     bg.g.saturating_add(16),
                     bg.b.saturating_add(16),
@@ -4497,23 +4499,23 @@ impl App {
                 scene.spans.push(Span {
                     x: info.x,
                     y: info.y,
-                    text: starkit::text::truncate(&text, usize::from(info.width)),
+                    text: starcore::text::truncate(&text, usize::from(info.width)),
                     foreground: hex(self.theme.dim),
                     background: hex(self.theme.panel_bg),
                     bold: false,
                     modifiers: 0,
                 });
             }
-            let mut surface = starkit::native_surface::Surface::new(
+            let mut surface = starcore::native_surface::Surface::new(
                 info.width.saturating_mul(cw).max(1),
                 ch.max(1),
                 hex(self.theme.panel_bg),
             );
             surface.text(
-                starkit::native_surface::PixelRect::new(0, 0, surface.width, surface.height),
-                starkit::text::truncate(&text, usize::from(info.width)),
+                starcore::native_surface::PixelRect::new(0, 0, surface.width, surface.height),
+                starcore::text::truncate(&text, usize::from(info.width)),
                 &hex(self.theme.dim),
-                starkit::native_surface::Metrics::from_cell(cw, ch).font,
+                starcore::native_surface::Metrics::from_cell(cw, ch).font,
                 false,
             );
             scene.components.push(Component::Surface {
@@ -4522,7 +4524,7 @@ impl App {
             });
         }
         if let Some(controls_rect) = controls_rect {
-            let rgb = |c: starkit::theme::color::Rgb| [c.r, c.g, c.b];
+            let rgb = |c: starcore::theme::color::Rgb| [c.r, c.g, c.b];
             let request = crate::video_transport::Request {
                 cells: state
                     .cell_mode
@@ -4597,7 +4599,7 @@ fn transport_cell_spans(
             if x < covered_until {
                 continue;
             }
-            covered_until = x.saturating_add(starkit::wrap::width_of(&cell.symbol));
+            covered_until = x.saturating_add(starcore::wrap::width_of(&cell.symbol));
             let hex = |[r, g, b]: [u8; 3]| format!("#{r:02x}{g:02x}{b:02x}");
             scene.spans.push(Span {
                 x: rect.x + x,
@@ -4767,7 +4769,7 @@ mod tests {
             )),
             extension: None,
             path: path.clone(),
-            poster: starkit::media::Poster {
+            poster: starcore::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
                 duration: 60.,
                 width: 32,
@@ -4782,9 +4784,9 @@ mod tests {
         state.video_player = true;
         state.local_media = true;
         app.video_action(panels::Word::VideoPlay(true));
-        let options = starkit::media::tracks::PlaybackOptions {
-            audio: starkit::media::tracks::Selection::Stream(2),
-            subtitle: starkit::media::tracks::Selection::Off,
+        let options = starcore::media::tracks::PlaybackOptions {
+            audio: starcore::media::tracks::Selection::Stream(2),
+            subtitle: starcore::media::tracks::Selection::Off,
         };
         app.graphical
             .as_mut()
@@ -4872,7 +4874,7 @@ mod tests {
         let session = app.audio_activation;
         Controller::media(
             &mut app,
-            starkit::terminal_graphics::media::ToHost::AudioError {
+            starcore::terminal_graphics::media::ToHost::AudioError {
                 session,
                 epoch: 7,
                 message: "No local device".into(),
@@ -4936,7 +4938,7 @@ mod tests {
             )),
             extension: None,
             path: fake.home().join("movie.mkv"),
-            poster: starkit::media::Poster {
+            poster: starcore::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
                 duration: 60.0,
                 width: 32,
@@ -4970,7 +4972,7 @@ mod tests {
         assert!(app.video_picker_key("down", 0));
         assert!(app.video_picker_key("enter", 0));
         let video = app.graphical.as_ref().unwrap().video.as_ref().unwrap();
-        assert_eq!(video.options.audio, starkit::media::tracks::Selection::Off);
+        assert_eq!(video.options.audio, starcore::media::tracks::Selection::Off);
         assert!(video.generation > generation);
         assert!(app.video_key("escape", 0));
         assert!(app.graphical.as_ref().unwrap().video_fullscreen.is_none());
@@ -4985,7 +4987,7 @@ mod tests {
         assert!(app.video_key("escape", 0));
         assert!(app.video_key(
             "char:f",
-            starkit::crossterm::event::KeyModifiers::SHIFT.bits()
+            starcore::crossterm::event::KeyModifiers::SHIFT.bits()
         ));
         assert_eq!(
             app.graphical.as_ref().unwrap().video_fullscreen,
@@ -5013,7 +5015,7 @@ mod tests {
             )),
             extension: None,
             path: fake.home().join("original.mkv"),
-            poster: starkit::media::Poster {
+            poster: starcore::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
                 duration: 60.0,
                 width: 3840,
@@ -5058,7 +5060,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .options
-            .subtitle = starkit::media::tracks::Selection::Stream(4);
+            .subtitle = starcore::media::tracks::Selection::Stream(4);
         app.word_click(panels::Word::VideoMode(2));
         assert_eq!(app.graphical.as_ref().unwrap().video_mode, 2);
         assert!(
@@ -5077,7 +5079,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .options
-            .subtitle = starkit::media::tracks::Selection::Off;
+            .subtitle = starcore::media::tracks::Selection::Off;
         app.word_click(panels::Word::VideoMode(2));
         assert!(
             app.graphical
@@ -5136,7 +5138,7 @@ mod tests {
             )),
             extension: None,
             path: path.clone(),
-            poster: starkit::media::Poster {
+            poster: starcore::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
                 duration: 60.0,
                 width: 32,
@@ -5182,7 +5184,7 @@ mod tests {
             )),
             extension: None,
             path: fake.home().join("movie.mp4"),
-            poster: starkit::media::Poster {
+            poster: starcore::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
                 duration: 60.0,
                 width: 32,
@@ -5204,7 +5206,7 @@ mod tests {
         );
         let regions = app.layout.last.clone().unwrap();
         let height = regions.rect_of(ModuleId::Preview).height;
-        let play = starkit::chrome::header::slots(
+        let play = starcore::chrome::header::slots(
             regions.rect_of(ModuleId::Preview),
             &app.panel_words(ModuleId::Preview),
         )
@@ -5260,7 +5262,7 @@ mod tests {
             .contains(&panels::Word::VideoMute(70)));
         assert!(app.video_key(
             "char:A",
-            starkit::crossterm::event::KeyModifiers::SHIFT.bits()
+            starcore::crossterm::event::KeyModifiers::SHIFT.bits()
         ));
         assert_eq!(
             app.graphical
@@ -5939,12 +5941,12 @@ mod tests {
         assert_eq!(app.active_pane, 1);
         Controller::scene(&mut app, viewport);
         // Removed per-pane header controls must not remain invisible targets.
-        let _padding = starkit::chrome::frame::padding_scope(true);
+        let _padding = starcore::chrome::frame::padding_scope(true);
         let pane = pane_rect(
             app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack),
             0,
         );
-        let sort = starkit::chrome::header::slots(pane, &app.panel_words(ModuleId::Stack))
+        let sort = starcore::chrome::header::slots(pane, &app.panel_words(ModuleId::Stack))
             .into_iter()
             .find(|(word, _)| matches!(word, panels::Word::Sort))
             .unwrap()
@@ -6018,7 +6020,7 @@ mod tests {
         assert_eq!(app.view.rows[0].name, "README.md");
         assert!(filtered.components.iter().any(|component| matches!(component,
             Component::Surface { surface, .. } if surface.nodes.iter().any(|node| matches!(node,
-                starkit::native_surface::Primitive::Text { text, .. } if text == "FILTER / README│")))));
+                starcore::native_surface::Primitive::Text { text, .. } if text == "FILTER / README│")))));
         Controller::input(
             &mut app,
             Input::Key {
@@ -6051,7 +6053,7 @@ mod tests {
         }
         use crate::config::WorkspaceNavigation;
         use crate::ui::tabs::{Action as TabAction, Hit};
-        use starkit::terminal_graphics::renderer::{RenderMessage, Renderer};
+        use starcore::terminal_graphics::renderer::{RenderMessage, Renderer};
         let mut renderer = Renderer::spawn().unwrap();
         for style in [
             WorkspaceNavigation::NumberedSessions,
@@ -6141,7 +6143,7 @@ mod tests {
                 assert_eq!(footer_surface.height, 28);
                 assert_eq!(footer_surface.background, hex(app.theme.rack.title));
                 assert!(footer_surface.nodes.iter().all(|node| match node {
-                    starkit::native_surface::Primitive::Text { size, mono, .. } =>
+                    starcore::native_surface::Primitive::Text { size, mono, .. } =>
                         *size == 11 && *mono,
                     _ => true,
                 }));
@@ -6318,7 +6320,7 @@ mod tests {
 
     #[test]
     fn rack_native_frames_preserve_pointer_projection_and_cell_fallback() {
-        use starkit::terminal_graphics::renderer::{RenderMessage, Renderer};
+        use starcore::terminal_graphics::renderer::{RenderMessage, Renderer};
         let mut renderer = Renderer::spawn().unwrap();
         for theme in [
             "terminal",
@@ -6441,7 +6443,7 @@ mod tests {
                         "native chrome must not paint legacy pane or tab outlines"
                     );
                     let focused = {
-                        let _chrome = starkit::chrome::frame::padding_scope(
+                        let _chrome = starcore::chrome::frame::padding_scope(
                             app.graphical.as_ref().unwrap().padded_chrome,
                         );
                         let _rack = panels::stack::rack_scope(
@@ -6462,7 +6464,7 @@ mod tests {
                         ),
                         &scene.placements,
                     );
-                    let mut expected = starkit::native_surface::Surface::new(
+                    let mut expected = starcore::native_surface::Surface::new(
                         target.width,
                         target.height,
                         "transparent".into(),
@@ -6470,12 +6472,12 @@ mod tests {
                     .with_physical_text();
                     app.theme.rack.focus(
                         &mut expected,
-                        starkit::native_surface::PixelRect::new(0, 0, target.width, target.height),
+                        starcore::native_surface::PixelRect::new(0, 0, target.width, target.height),
                     );
                     if theme == "kanagawa" {
                         assert!(
                             expected.nodes.iter().any(|node| matches!(node,
-                                starkit::native_surface::Primitive::Sprite { tint: Some(color), .. }
+                                starcore::native_surface::Primitive::Sprite { tint: Some(color), .. }
                                 if color == "#7e9cd8"
                             )),
                             "Kanagawa focus must match AMP's exact accent, without dimming"
@@ -6494,14 +6496,14 @@ mod tests {
                     assert!(scene.components.iter().any(|component| matches!(component,
                         Component::Surface { surface, .. }
                         if surface.nodes.iter().any(|node| matches!(node,
-                            starkit::native_surface::Primitive::Text { text, .. } if text == "FILES · LEFT"
+                            starcore::native_surface::Primitive::Text { text, .. } if text == "FILES · LEFT"
                         ))
-                    )), "short Commander panes must retain the native KIT header");
+                    )), "short Commander panes must retain the native CORE header");
                     assert!(
                         scene.components.iter().any(|component| matches!(component,
                             Component::Surface { surface, .. }
                             if surface.nodes.iter().any(|node| matches!(node,
-                                starkit::native_surface::Primitive::Text { text, .. }
+                                starcore::native_surface::Primitive::Text { text, .. }
                                 if text.contains("harbour.png") && text.contains('■')
                             ))
                         )),
@@ -6526,7 +6528,7 @@ mod tests {
                         .collect();
                     files.sort_by_key(|r| r.x);
                     assert_eq!(files.len(), 2);
-                    let gap = starkit::native_surface::Metrics::from_cell(
+                    let gap = starcore::native_surface::Metrics::from_cell(
                         (width / u32::from(columns)) as u16,
                         (height / u32::from(rows)) as u16,
                     )
@@ -6550,7 +6552,7 @@ mod tests {
                     }
                     assert_eq!(
                         scene.background,
-                        hex(starkit::theme::Resolve::core(&app.theme).bg)
+                        hex(starcore::theme::Resolve::core(&app.theme).bg)
                     );
                 }
                 for placement in &scene.placements {
@@ -6708,7 +6710,7 @@ mod tests {
                 }
                 assert!(failed.spans.iter().any(|span| span.text.contains("Permission denied")) || failed.components.iter().any(|component| matches!(component,
                     Component::Surface { surface, .. } if surface.nodes.iter().any(|primitive| matches!(primitive,
-                        starkit::native_surface::Primitive::Text { text, .. } if text.contains("Permission denied"))))));
+                        starcore::native_surface::Primitive::Text { text, .. } if text.contains("Permission denied"))))));
             }
             app.view.ops_active = false;
             app.view.ops.clear();
@@ -6928,7 +6930,7 @@ mod tests {
 
     #[test]
     fn native_tree_rows_are_compact_and_branches_connect_at_row_edges() {
-        use starkit::native_surface::Primitive;
+        use starcore::native_surface::Primitive;
         let theme = crate::ui::theme::tests_support::theme("terminal");
         let rows = vec![
             "│   ├── one".into(),
@@ -6982,7 +6984,7 @@ mod tests {
         metadata.image = Some(Arc::new(RgbaImage::from_pixel(
             40,
             60,
-            starkit::image::Rgba([10, 20, 30, 255]),
+            starcore::image::Rgba([10, 20, 30, 255]),
         )));
         metadata.field("IMDb", "https://www.imdb.com/title/tt0089839/");
         metadata.notice = Some("Enter to play in Preview".into());
@@ -6991,7 +6993,7 @@ mod tests {
             metadata: Arc::new(metadata),
             path: path.clone(),
             extension: None,
-            poster: starkit::media::Poster {
+            poster: starcore::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
                 duration: 60.,
                 width: 1920,
@@ -7136,7 +7138,7 @@ mod tests {
             } else {
                 assert!(scene.components.iter().any(|component| matches!(component,
                     Component::Surface { surface, .. } if surface.nodes.iter().any(|node| matches!(node,
-                        starkit::native_surface::Primitive::Text { text, .. }
+                        starcore::native_surface::Primitive::Text { text, .. }
                         if text.contains("Loading movie…")
                     ))
                 )));
@@ -7165,7 +7167,7 @@ mod tests {
             )),
             extension: None,
             path: path.clone(),
-            poster: starkit::media::Poster {
+            poster: starcore::media::Poster {
                 pixels: Arc::new(RgbaImage::new(32, 24)),
                 duration: 60.,
                 width: 1920,
@@ -7174,12 +7176,9 @@ mod tests {
             },
         }));
         assert_eq!(app.movie_loading_stage(), None);
-        app.graphical.as_mut().unwrap().video = Some(starkit::terminal_graphics::media::Host::new(
-            path,
-            "video-test".into(),
-            17,
-            true,
-        ));
+        app.graphical.as_mut().unwrap().video = Some(
+            starcore::terminal_graphics::media::Host::new(path, "video-test".into(), 17, true),
+        );
         assert_eq!(app.movie_loading_stage(), Some("Starting playback…"));
         {
             let state = app.graphical.as_mut().unwrap();
@@ -7239,11 +7238,11 @@ mod tests {
             )),
             extension: None,
             path: fake.home().join("movie.mkv"),
-            poster: starkit::media::Poster {
+            poster: starcore::media::Poster {
                 pixels: Arc::new(RgbaImage::from_pixel(
                     32,
                     24,
-                    starkit::image::Rgba([255, 0, 255, 255]),
+                    starcore::image::Rgba([255, 0, 255, 255]),
                 )),
                 duration: 60.,
                 width: 1920,
@@ -7277,9 +7276,9 @@ mod tests {
 
     #[test]
     fn movie_letterbox_has_equal_gaps_above_and_below() {
-        use starkit::native_surface::PixelRect;
-        use starkit::terminal_graphics::placement::{PanelPadding, Placement};
-        let _padding = starkit::chrome::frame::padding_scope(true);
+        use starcore::native_surface::PixelRect;
+        use starcore::terminal_graphics::placement::{PanelPadding, Placement};
+        let _padding = starcore::chrome::frame::padding_scope(true);
         for rows in [12, 24, 40] {
             let area = Rect::new(0, 0, 160, rows);
             let mut p = Placement::new(area.into(), PixelRect::new(0, 0, 1600, rows * 20));
@@ -7305,7 +7304,7 @@ mod tests {
 
     #[test]
     fn native_video_body_uses_panel_content_without_a_blank_metadata_row() {
-        let _padding = starkit::chrome::frame::padding_scope(true);
+        let _padding = starcore::chrome::frame::padding_scope(true);
         let area = Rect::new(0, 0, 160, 40);
         let native = video_body(area, true);
         let legacy = video_body(area, false);
@@ -7362,7 +7361,7 @@ mod tests {
             );
             assert_eq!(close.y, placement.target.y + 7);
             assert_eq!((close.width, close.height), (30, 24));
-            let old = starkit::chrome::header::slots(preview, &app.panel_words(ModuleId::Preview))
+            let old = starcore::chrome::header::slots(preview, &app.panel_words(ModuleId::Preview))
                 .into_iter()
                 .find(|(w, _)| *w == panels::Word::Close)
                 .unwrap()
@@ -7394,8 +7393,8 @@ mod tests {
 
     #[test]
     fn native_header_clips_shaped_long_titles_before_the_controls() {
-        use starkit::native_surface::Primitive;
-        let _padding = starkit::chrome::frame::padding_scope(true);
+        use starcore::native_surface::Primitive;
+        let _padding = starcore::chrome::frame::padding_scope(true);
         let theme = crate::ui::theme::tests_support::theme("terminal");
         let title = format!("Preview · {}.mkv", "Very long movie title 界 ".repeat(20));
         for width in [60, 100, 160] {
@@ -7431,9 +7430,9 @@ mod tests {
 
     #[test]
     fn graphical_headers_shape_amp_labels_inside_their_full_hit_targets() {
-        use starkit::chrome::header::{self, Word as _};
-        use starkit::native_surface::Primitive;
-        let _padding = starkit::chrome::frame::padding_scope(true);
+        use starcore::chrome::header::{self, Word as _};
+        use starcore::native_surface::Primitive;
+        let _padding = starcore::chrome::frame::padding_scope(true);
         let rect = Rect::new(0, 0, 100, 20);
         let words: Vec<_> = panels::words(ModuleId::Stack)
             .into_iter()
@@ -7520,7 +7519,7 @@ mod tests {
         assert_eq!(app.graphical.as_ref().unwrap().image_zoom, Some(125));
         app.key(KeyEvent::new(
             KeyCode::Char('-'),
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         assert_eq!(app.graphical.as_ref().unwrap().image_zoom, Some(100));
         for _ in 0..30 {
@@ -7533,7 +7532,7 @@ mod tests {
         assert_eq!(app.graphical.as_ref().unwrap().image_zoom, Some(25));
         app.key(KeyEvent::new(
             KeyCode::Char('0'),
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         assert_eq!(app.graphical.as_ref().unwrap().image_zoom, None);
         app.cfg.preview.image_scale = crate::config::Scale::Pixels;
@@ -7548,7 +7547,7 @@ mod tests {
 
     #[test]
     fn graphical_preview_scale_control_updates_image_policy_and_saved_setting() {
-        use starkit::terminal_graphics::protocol::ImageScale;
+        use starcore::terminal_graphics::protocol::ImageScale;
         let cfg = Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
         let mut app = App::new(
@@ -7590,7 +7589,7 @@ mod tests {
 
     #[test]
     fn pdf_reader_fills_its_body_without_using_pixel_art_scaling() {
-        use starkit::terminal_graphics::protocol::ImageScale;
+        use starcore::terminal_graphics::protocol::ImageScale;
         let cfg = Config::default();
         let (core, fake) = crate::ui::fake::handle(cfg.core());
         let mut app = App::new(
@@ -7662,7 +7661,7 @@ mod tests {
             .decode(png)
             .unwrap();
         assert_eq!(
-            starkit::image::load_from_memory(&bytes).unwrap().width(),
+            starcore::image::load_from_memory(&bytes).unwrap().width(),
             1800
         );
         scrolled.extension.as_mut().unwrap().session = 11;
@@ -7711,7 +7710,7 @@ mod tests {
         Controller::scene(&mut app, Viewport::default());
         let idle = Controller::frame_interval(&app);
         assert!(idle > Duration::ZERO);
-        let worker = starkit::terminal_graphics::assets::Thumbnailer::default();
+        let worker = starcore::terminal_graphics::assets::Thumbnailer::default();
         worker.request("ready".into(), Arc::new(RgbaImage::new(8, 8)));
         let deadline = Instant::now() + Duration::from_secs(5);
         while worker.output.is_empty() {
@@ -7878,7 +7877,7 @@ mod tests {
         );
         assert_eq!(app.dnd.offer.as_ref().unwrap().sources.len(), 2);
         let (hint_row, hint) = {
-            let _chrome = starkit::chrome::frame::padding_scope(
+            let _chrome = starcore::chrome::frame::padding_scope(
                 app.graphical.as_ref().unwrap().padded_chrome,
             );
             app.drop_target_row(app.layout.last.as_ref().unwrap())
@@ -7890,11 +7889,11 @@ mod tests {
             assert!(hover_scene.components.iter().any(|component| matches!(component,
                 Component::Surface { rect, surface } if *rect == hint_row.into()
                     && surface.nodes.iter().any(|node| matches!(node,
-                        starkit::native_surface::Primitive::Text { text, .. } if text == &hint
+                        starcore::native_surface::Primitive::Text { text, .. } if text == &hint
                     ))
             )), "native destination must show the same pending-file row as cells");
             let image =
-                starkit::terminal_graphics::renderer::render_reference(&hover_scene).unwrap();
+                starcore::terminal_graphics::renderer::render_reference(&hover_scene).unwrap();
             let target = rack_scene::pixel_bounds(
                 hint_row,
                 (
@@ -7962,7 +7961,7 @@ mod tests {
             let rejected = Controller::scene(&mut app, viewport);
             assert!(!rejected.components.iter().any(|component| matches!(component,
                 Component::Surface { surface, .. } if surface.nodes.iter().any(|node|
-                    matches!(node, starkit::native_surface::Primitive::Text { text, .. } if text == &hint))
+                    matches!(node, starcore::native_surface::Primitive::Text { text, .. } if text == &hint))
             )), "leaving a valid target must remove its pending-file row");
         }
         pointer(&mut app, "up", row.x + 4, row.y);
@@ -8106,7 +8105,7 @@ mod tests {
         Controller::scene(&mut app, viewport);
         let pane = app.pane_view(1);
         let _chrome =
-            starkit::chrome::frame::padding_scope(app.graphical.as_ref().unwrap().padded_chrome);
+            starcore::chrome::frame::padding_scope(app.graphical.as_ref().unwrap().padded_chrome);
         let capacity = panels::stack::visible_rows(
             pane_rect(
                 app.layout.last.as_ref().unwrap().rect_of(ModuleId::Stack),

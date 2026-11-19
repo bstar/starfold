@@ -5,12 +5,12 @@
 //! module never touches `fold::ops` directly; it only draws what it is
 //! handed, the same separation `panels::stack` keeps from `fold::listing`.
 
-use starkit::chrome::frame;
-use starkit::chrome::scrollbar;
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::Style;
-use starkit::theme::color::Rgb;
+use starcore::chrome::frame;
+use starcore::chrome::scrollbar;
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::Style;
+use starcore::theme::color::Rgb;
 
 use super::{elide_middle, empty, rgb, summary_row, width_of, words, ModuleId};
 use crate::ui::theme::Theme;
@@ -104,7 +104,7 @@ pub fn render(area: Rect, buf: &mut Buffer, v: &View<'_>, bars: &mut Bars) {
     let word_list = header_words(v.paused, v.active, v.focused);
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
-    let core: &starkit::theme::Theme = v.theme;
+    let core: &starcore::theme::Theme = v.theme;
     let body = frame::frame(
         area,
         buf,

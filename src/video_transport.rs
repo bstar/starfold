@@ -1,6 +1,6 @@
-//! Cached in-process KIT controls. No player/helper process or device is started.
-use starkit::media_controls as controls;
-use starkit::native_surface::Surface;
+//! Cached in-process CORE controls. No player/helper process or device is started.
+use starcore::media_controls as controls;
+use starcore::native_surface::Surface;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 

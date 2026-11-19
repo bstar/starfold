@@ -130,12 +130,12 @@
             cargoBuildFlags = [ "--workspace" ] ++ pkgsFor.lib.optionals graphical [ "--features" "terminal-graphics" ];
             cargoTestFlags = [ "--workspace" ] ++ pkgsFor.lib.optionals graphical [ "--features" "terminal-graphics" ];
             cargoLock.lockFile = ./Cargo.lock;
-            # STAR/KIT comes from a git tag rather than from crates.io, and
+            # STAR/CORE comes from a git tag rather than from crates.io, and
             # `cargoLock.lockFile` alone cannot fetch it: nix wants a hash for
             # every source it downloads. Two ways to give it one.
             #
             # `outputHashes` is the reproducible one, and it means a new hash
-            # to compute and commit on every STAR/KIT tag -- a second place the
+            # to compute and commit on every STAR/CORE tag -- a second place the
             # version lives, which is exactly the kind of copy that goes stale
             # between the bump and the person who notices.
             #
@@ -256,7 +256,7 @@
             rustfmt
             clippy
             rust-analyzer
-            # STAR/KIT is a git dependency, and cargo fetches it with the
+            # STAR/CORE is a git dependency, and cargo fetches it with the
             # git on PATH (`CARGO_NET_GIT_FETCH_WITH_CLI=true`, which is what
             # lets an `insteadOf` rewrite to ssh work). On a Mac with Xcode
             # selected, `/usr/bin/git` is a shim that asks xcrun where git

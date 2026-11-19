@@ -1,6 +1,6 @@
 //! Compact context menus. Drawing and pointer input use the same geometry.
 use super::{panels::rgb, theme::Theme};
-use starkit::{
+use starcore::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     ratatui::{
         buffer::Buffer,
@@ -566,7 +566,7 @@ mod tests {
     }
     #[test]
     fn unicode_width_and_theme_contrast_are_preserved() {
-        for b in starkit::theme::builtin::BUILTINS {
+        for b in starcore::theme::builtin::BUILTINS {
             let t = crate::ui::theme::tests_support::theme(b.id);
             let area = Rect::new(0, 0, 60, 21);
             let mut m = Popup::new(vec![Entry::action("資料 🗂", 1)], (0, 0));

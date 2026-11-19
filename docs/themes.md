@@ -1,9 +1,9 @@
 # Themes
 
 A theme is one TOML file. The format belongs to
-[STAR/KIT](https://github.com/bstar/starkit), the crate STAR/AMP, STAR/CORD
+[STAR/CORE](https://github.com/bstar/starcore), the crate STAR/AMP, STAR/CORD
 and STAR/FOLD share, and its
-[`docs/themes.md`](https://github.com/bstar/starkit/blob/main/docs/themes.md)
+[`docs/themes.md`](https://github.com/bstar/starcore/blob/main/docs/themes.md)
 is the reference: what the file holds, how a palette is derived from eight
 colours, and how a base16 scheme becomes a theme.
 
@@ -39,7 +39,7 @@ FOLD also ships these palettes:
 | `norton-commander` | Deep blue wells with cream text and cyan accents. |
 | `windows-311` | Gray frames, white file areas and navy accents. |
 
-They use the existing KIT controls and layout. Set `ui.theme` to an ID above,
+They use the existing CORE controls and layout. Set `ui.theme` to an ID above,
 or cycle to it live. The choice is saved automatically. Gruvbox colors follow
 the [original palette](https://github.com/morhetz/gruvbox/blob/master/colors/gruvbox.vim).
 

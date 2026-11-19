@@ -1,7 +1,7 @@
 //! The terminal.
 //!
 //! Everything under here reaches ratatui and crossterm through
-//! `starkit::ratatui::…` and `starkit::crossterm::…` rather than depending on
+//! `starcore::ratatui::…` and `starcore::crossterm::…` rather than depending on
 //! either directly -- see the crate doc. `app` is the last module to land
 //! and is declared when it does.
 
@@ -31,7 +31,7 @@ pub mod theme;
 /// A compact terminal-safe spinner shared by Places and the activity row.
 pub(crate) const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// One key per scrollbar the column can draw, shared with STAR/KIT's
+/// One key per scrollbar the column can draw, shared with STAR/CORE's
 /// `chrome::scrollbar::Scrollbars` so [`app::App`] can keep a single
 /// instance that presses, drags and releases whichever bar the mouse is
 /// over -- the stack listing, the preview, the operations queue, or the
@@ -47,4 +47,4 @@ pub enum Bar {
 
 /// The one `Scrollbars` every module records its bar with and the app's
 /// mouse handling reads back, keyed by [`Bar`].
-pub type Bars = starkit::chrome::scrollbar::Scrollbars<Bar>;
+pub type Bars = starcore::chrome::scrollbar::Scrollbars<Bar>;

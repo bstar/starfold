@@ -1,6 +1,6 @@
 STAR/FOLD native media previews
 
-STAR/KIT dynamically links FFmpeg (https://ffmpeg.org), including
+STAR/CORE dynamically links FFmpeg (https://ffmpeg.org), including
 libavcodec, libavformat, libavutil, libavfilter, libswscale and libswresample.
 The media player is native Rust; FFmpeg supplies codecs and conversion.
 

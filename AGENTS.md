@@ -48,41 +48,41 @@ and no bindgen. A change that adds a `-sys` crate has to add the library to
 On a Mac with Xcode selected, `/usr/bin/git` is a shim that asks xcrun where
 git is, and inside `nix develop` xcrun is nix's, which answers `tool 'git' not
 found`. The devshell therefore carries nix's own git first on `PATH`, which is
-what cargo's CLI fetch of STAR/KIT uses.
+what cargo's CLI fetch of STAR/CORE uses.
 
-## STAR/KIT
+## STAR/CORE
 
 The shared foundation — paths, logging, private file writes, themes,
 keymap/help, chrome, text entry, wrapping, terminal graphics — lives in
-`starkit`, the crate STAR/AMP and STAR/CORD use too. It is a git dependency
+`starcore`, the crate STAR/AMP and STAR/CORD use too. It is a git dependency
 pinned to an immutable tag or candidate revision, and the flake takes it from
 the revision `Cargo.lock` names
 through `cargoLock.allowBuiltinFetchGit`.
 
-`src/ui/layout.rs` supplies application policy to KIT's `panes` engine.
-KIT owns allocation, visibility reasons, hit geometry, focus traversal and
+`src/ui/layout.rs` supplies application policy to CORE's `panes` engine.
+CORE owns allocation, visibility reasons, hit geometry, focus traversal and
 `ResizeCapture`; Commander keeps two equal-width file panes. The legacy
 `dock` API is not used.
 
 ## Framework alignment
 
-KIT is becoming a public framework, with AMP, FOLD, CORD and WIRE as reference
-consumers. The application and every preview helper inherit one versioned KIT
+CORE is becoming a public framework, with AMP, FOLD, CORD and WIRE as reference
+consumers. The application and every preview helper inherit one versioned CORE
 pin from `[workspace.dependencies]`; the packaged AMP helper has a matching
 published source pin in the flake. Local builds use published locks by default.
 
 Preview divider capture lives in `LayoutState` for both cell and graphical
 input. Begin from the painted allocation, keep the origin across repaints and
 cancel on resize, navigation or presentation switch. Native button text gets
-its full interior rectangle; KIT owns shaping with the frontend's chosen font.
+its full interior rectangle; CORE owns shaping with the frontend's chosen font.
 Do not derive text clipping boxes from guessed glyph advances.
 
-On the Linux workstation, `~/.local/bin/star-kit-terminal` must execute this
+On the Linux workstation, `~/.local/bin/star-core-terminal` must execute this
 checkout's release binary, like `starfold` and `starfold-graphical`, rather than
 an older graphics worktree. Preserve its media environment when updating it.
 
-Responsive panes are shared with KIT. Generic movie transport and track pickers
-render in-process through KIT; only music playback/metadata uses the AMP helper.
+Responsive panes are shared with CORE. Generic movie transport and track pickers
+render in-process through CORE; only music playback/metadata uses the AMP helper.
 Private Kitty captures exercise normal and zoomed embedded AMP typography;
 they do not establish every density or physical macOS rendering/audio correctness.
 
@@ -112,31 +112,31 @@ Sessions remember view mode, Fold's directory, both Commander directories,
 and the active pane. A CLI directory overrides the active view's location.
 
 It is also the one copy of `ratatui`, `crossterm`, `ratatui-image` and `image`
-in the tree. Everything under `src/ui/` reaches them through `starkit::`, and
+in the tree. Everything under `src/ui/` reaches them through `starcore::`, and
 none of the four is a direct dependency: a widget built against a second copy
 of ratatui does not satisfy a signature expecting the first, and the compiler
 reports that as two versions carrying the same number.
 
-`src/paths.rs` is a name for `starkit::paths::Paths` and nothing else. Keep the
+`src/paths.rs` is a name for `starcore::paths::Paths` and nothing else. Keep the
 name: the core takes `crate::paths::Paths` by value throughout, and `PATHS` is
 the one place this application's three identifying strings are written down.
 
 A local checkout is used through an uncommitted `.cargo/config.toml`:
 
 ```toml
-[patch."https://github.com/bstar/starkit"]
-starkit = { path = "../starkit" }
+[patch."https://github.com/bstar/starcore"]
+starcore = { path = "../starcore" }
 ```
 
 `.gitignore` already covers it, and it has to be taken away again before
-anything is committed: with the patch in place `cargo` rewrites the `starkit`
+anything is committed: with the patch in place `cargo` rewrites the `starcore`
 entry in `Cargo.lock` to the path, and a lock file with no git source in it is
 one the flake cannot build. **Never commit `.cargo/config.toml`, and never
 commit a `Cargo.lock` written while it was in place** — one agent did exactly
 this during this milestone, and the fix was reverting `Cargo.lock` back to
 the git-sourced entry and deleting the file. If `git status` ever shows
 `Cargo.lock` changed with no dependency version bump to explain it, check for
-this before anything else. Every public `starkit` item now has four
+this before anything else. Every public `starcore` item now has four
 consumers — check STAR/AMP, STAR/CORD and STAR/WIRE before changing a signature.
 
 `Graphics::probe` has to run before `term::init`: it needs the terminal in its
@@ -417,25 +417,25 @@ tags create a draft release.
 ## Native terminal graphics experiment
 
 FOLD's vendored crossterm parser exposes OSC 72 as a complete event. Its local
-and terminal-socket frontends explicitly use KIT's OSC 72 preference entry
+and terminal-socket frontends explicitly use CORE's OSC 72 preference entry
 points; ordinary preferences now leave that extension disabled so stock
 parsers cannot turn terminal capability replies into application shortcuts.
 
-On `experiment/terminal-graphics`, STAR/KIT owns the native Rust pixel renderer
+On `experiment/terminal-graphics`, STAR/CORE owns the native Rust pixel renderer
 (`tiny-skia` and `cosmic-text`). Do not add browser engines, Electron, webviews
 or JavaScript rendering. The persistent FOLD controller and SSH scene relay
 remain shared with the cell presentation. Build through `nix develop -c cargo
 build --release --features terminal-graphics`; the local `starfold-graphical`
 wrapper invokes this checkout with the `graphical` subcommand. Leave the
 ordinary `starfold` link intact. Bundled font licensing ships in
-`LICENSES/OFL-Liberation.txt`. Renderer tests belong in KIT; FOLD tests cover
+`LICENSES/OFL-Liberation.txt`. Renderer tests belong in CORE; FOLD tests cover
 application behavior and the relay. Physical macOS Kitty interaction remains
 a separate gate from headless CI.
 
 ## Native surface experiment
 
-Pixel chrome uses structured panel regions and KIT surfaces; it must not infer
-panels by scanning border characters. The cell controller supplies logical hit coordinates; KIT pixel placements
+Pixel chrome uses structured panel regions and CORE surfaces; it must not infer
+panels by scanning border characters. The cell controller supplies logical hit coordinates; CORE pixel placements
 map terminal cell-centre input onto those coordinates.
 STAR/AMP owns `native_surface_v1`; this repository only negotiates, validates,
 places and forwards input. The graphical Nix package pins its matching helper
@@ -447,10 +447,10 @@ helper when Preview closes. FOLD maps returned actions to its video controls.
 
 ### Native pixel layout and verification
 
-`graphical::pixel_placements` uses KIT column/split helpers and Metrics for
+`graphical::pixel_placements` uses CORE column/split helpers and Metrics for
 actual pane gaps, margins and header/border insets. `ui/layout.rs` still supplies
 logical controller rectangles for compatibility; its cell gaps are not painted
-by a `pixel_layout` frontend. KIT uses the same placement row edges for raster
+by a `pixel_layout` frontend. CORE uses the same placement row edges for raster
 painting and pointer projection. Scrollbar captures stay in their source region,
 while file drags resolve the current receiving region. Unoccluded base buffers
 are captured before modal painting, and popup spans are separate layers.
@@ -462,7 +462,7 @@ interaction remains separately unverified; green headless CI is not that proof.
 ### Kitty desktop fullscreen
 
 Kitty desktop fullscreen must not create another reader on the frontend's TTY.
-KIT sends terminal controls with `no_response`; socket controls retain their own
+CORE sends terminal controls with `no_response`; socket controls retain their own
 reply channel. A `kitten @` child using the shared TTY can leak its DCS response
 into crossterm as Escape/text input, leaving fullscreen and stopping playback.
 2026-10-06: An isolated Mac Kitty window verified enter/enter/leave/leave restores
@@ -483,14 +483,14 @@ Kitty's cursor policy. A real Mac Kitty check verified hide/show visibility.
 
 ### Original remote movies
 
-KIT's negotiated `original_media` capability streams opaque, generation-scoped
-256 KiB file ranges over the existing relay. KIT owns seekable custom IO, local
+CORE's negotiated `original_media` capability streams opaque, generation-scoped
+256 KiB file ranges over the existing relay. CORE owns seekable custom IO, local
 decode/audio, bounded cache (64 MiB), read-ahead and cancellation; FOLD owns the
 Auto/Original/Preview preference and status presentation. Original must not
 silently downgrade on bandwidth stalls. Auto may use Preview after a decode/open
 failure. Older clients keep the proxy. Subtitle selections currently require
 Preview; switching to Original must not silently discard explicit subtitles.
-Original bytes and 4K decode are covered by KIT's movie integration test. Physical
+Original bytes and 4K decode are covered by CORE's movie integration test. Physical
 Kitty playback is a separate gate; its SDR presentation does not prove native HDR.
 2026-10-06: A muted Mac frontend check read the user's remote 4K80 MKV through
 SSH range requests and decoded 124 original 3840×2160 frames across five seconds
@@ -502,7 +502,7 @@ This checked transport and local decoding, not visible Kitty pacing or listening
 Preview offers `audio: host` / `audio: local` (`a`) to graphical SSH clients
 that negotiate `audio_relay`. AMP owns decoding, queue, volume and seeking;
 its `audio_relay_v1` embed capability exports bounded 48 kHz stereo PCM instead
-of opening the host device. KIT plays it on the presentation machine. Credits
+of opening the host device. CORE plays it on the presentation machine. Credits
 bound both transport and playback queues. Stream epochs invalidate queued audio
 on seeks and reattachments; closing Preview closes the local output and reaps
 AMP. Ordinary cell clients and older helpers retain host playback. The toggle
@@ -539,7 +539,7 @@ failures remain visible in OPERATIONS. Same-device recovery uses atomic rename.
 The Linux restart test sets Trash environment variables only in subprocesses,
 using disposable private bins; normal tests must not empty the user's Trash.
 
-## KIT 0.13 candidate compatibility
+## CORE 0.13 candidate compatibility
 
 The bundled `starfold-preview-comic` reads CBZ/CBR through the versioned preview
 protocol, using the existing archive engines inside its supervised process.
@@ -550,13 +550,13 @@ directly so it cannot recurse into the reader. Never extract an entire comic
 or decode every page eagerly. `STARFOLD_COMIC_TEST_FILE` enables optional tests
 against a local comic without copying it into the repository.
 
-Development main pins an immutable KIT 0.13 candidate revision with a git-sourced
+Development main pins an immutable CORE 0.13 candidate revision with a git-sourced
 lockfile, so ordinary builds need no sibling checkout. This is an unreleased
 testing candidate; use immutable version tags when making a framework release.
 Keep dependency updates in their own commit, with the manifest and lock together.
 
-`scripts/check-kit.sh` checks every target and feature against the sibling KIT
-checkout in a disposable tracked copy. `STAR_KIT_CHECKOUT` selects another
+`scripts/check-core.sh` checks every target and feature against the sibling CORE
+checkout in a disposable tracked copy. `STAR_CORE_CHECKOUT` selects another
 candidate. No candidate path or path-patched lock is committed. Live canvases
 and embedded input are opt-in; ordinary application keys, media, SSH and
 presentation retain their current contracts.

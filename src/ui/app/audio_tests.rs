@@ -4,7 +4,7 @@ use super::*;
 use crate::config::Config;
 use crate::fold::sort::SortOrder;
 use crate::ui::fake;
-use starkit::crossterm::event::{
+use starcore::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use std::time::{Duration, Instant};
@@ -892,8 +892,8 @@ fn decoder_error_after_handshake_stays_in_embedded_preview() {
 #[cfg(all(unix, feature = "terminal-graphics"))]
 #[test]
 fn native_player_owns_one_unscaled_canvas_and_precise_pointer_after_zoom() {
-    use starkit::native_surface::{PixelRect as R, Primitive, Surface};
-    use starkit::terminal_graphics::{
+    use starcore::native_surface::{PixelRect as R, Primitive, Surface};
+    use starcore::terminal_graphics::{
         protocol::{Component, Input, Viewport},
         session::Controller,
     };
@@ -919,8 +919,8 @@ fn native_player_owns_one_unscaled_canvas_and_precise_pointer_after_zoom() {
             app.tick();
             app.audio.transport_images_available()
         });
-        let pixels = RgbaImage::from_pixel(8, 8, starkit::image::Rgba([255, 0, 169, 255]));
-        let (asset, payload) = starkit::terminal_graphics::assets::encode_skin(&pixels).unwrap();
+        let pixels = RgbaImage::from_pixel(8, 8, starcore::image::Rgba([255, 0, 169, 255]));
+        let (asset, payload) = starcore::terminal_graphics::assets::encode_skin(&pixels).unwrap();
         for (columns, rows, width, height) in [
             (160, 54, 1601, 1081),
             (100, 40, 1207, 803),
@@ -991,7 +991,7 @@ fn native_player_owns_one_unscaled_canvas_and_precise_pointer_after_zoom() {
                 copies, 1,
                 "enclosing preview must not paint the player again"
             );
-            let rendered = starkit::terminal_graphics::renderer::render_reference(&scene).unwrap();
+            let rendered = starcore::terminal_graphics::renderer::render_reference(&scene).unwrap();
             assert_eq!(
                 rendered
                     .pixels()
@@ -1049,7 +1049,7 @@ fn native_player_owns_one_unscaled_canvas_and_precise_pointer_after_zoom() {
 #[test]
 #[ignore = "requires STARFOLD_TEST_AMP pointing to a built AMP executable"]
 fn installed_amp_renders_full_artwork_in_native_preview() {
-    use starkit::terminal_graphics::{protocol::Viewport, session::Controller};
+    use starcore::terminal_graphics::{protocol::Viewport, session::Controller};
     let executable = std::env::var_os("STARFOLD_TEST_AMP").expect("STARFOLD_TEST_AMP");
     let (mut app, fake, selected, _) = media_app();
     // A minute of silence, sniffed as WAV by the real decoder. Playback and all
@@ -1103,10 +1103,10 @@ fn installed_amp_renders_full_artwork_in_native_preview() {
             app.tick();
             let scene = Controller::scene(&mut app, viewport);
             let mounted = scene.components.iter().any(|component| {
-                matches!(component, starkit::terminal_graphics::protocol::Component::Surface { surface, .. }
+                matches!(component, starcore::terminal_graphics::protocol::Component::Surface { surface, .. }
                     if surface.width == w && surface.height == h && !surface.assets.is_empty()
                         && surface.nodes.iter().any(|node| matches!(node,
-                            starkit::native_surface::Primitive::Text { text, .. } if text == "PLAY · STEREO")))
+                            starcore::native_surface::Primitive::Text { text, .. } if text == "PLAY · STEREO")))
             });
             if mounted {
                 captured = Some(scene);
@@ -1114,7 +1114,7 @@ fn installed_amp_renders_full_artwork_in_native_preview() {
             mounted
         });
         let scene = captured.unwrap();
-        let image = starkit::terminal_graphics::renderer::render_reference(&scene).unwrap();
+        let image = starcore::terminal_graphics::renderer::render_reference(&scene).unwrap();
         if let Some(dir) = std::env::var_os("STARFOLD_AMP_CAPTURES") {
             std::fs::create_dir_all(&dir).unwrap();
             image

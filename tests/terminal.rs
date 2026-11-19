@@ -118,7 +118,7 @@ fn fragmented_focus_poll_child() {
     if std::env::var_os("STARFOLD_TEST_POLL_CHILD").is_none() {
         return;
     }
-    use starkit::crossterm::{event, terminal};
+    use starcore::crossterm::{event, terminal};
     terminal::enable_raw_mode().unwrap();
     // SAFETY: F_GETFL only inspects these inherited, live descriptors.
     let flags = unsafe { [libc::fcntl(0, libc::F_GETFL), libc::fcntl(1, libc::F_GETFL)] };

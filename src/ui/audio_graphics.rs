@@ -1,16 +1,16 @@
 //! Terminal-native raster overlays for the embedded player's transport.
 //!
 //! The child sends pixels, never terminal escapes. The host owns encoding,
-//! placement and release through STAR/KIT's shared graphics cache.
+//! placement and release through STAR/CORE's shared graphics cache.
 
 use std::sync::Arc;
 
-use starkit::graphics::{Graphics, ImageId};
-use starkit::image::RgbaImage;
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::widgets::Widget as _;
-use starkit::ratatui_image::Image;
+use starcore::graphics::{Graphics, ImageId};
+use starcore::image::RgbaImage;
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::widgets::Widget as _;
+use starcore::ratatui_image::Image;
 
 use crate::audio_embed::TransportImage;
 
@@ -107,11 +107,11 @@ fn pixels_for_area(source: &RgbaImage, width: u32, height: u32) -> RgbaImage {
     if source.width() == width && source.height() == height {
         source.clone()
     } else {
-        starkit::image::imageops::resize(
+        starcore::image::imageops::resize(
             source,
             width,
             height,
-            starkit::image::imageops::FilterType::Triangle,
+            starcore::image::imageops::FilterType::Triangle,
         )
     }
 }

@@ -10,7 +10,7 @@ use crate::{
         theme::Theme,
     },
 };
-use starkit::{
+use starcore::{
     chrome::overlay::{self, Anchor},
     crossterm::event::{KeyCode, KeyEvent},
     input::TextInput,

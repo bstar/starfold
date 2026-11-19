@@ -302,7 +302,7 @@ pub struct Session {
     sequence: u64,
     provider: String,
     revision: String,
-    image: Option<std::sync::Arc<starkit::image::RgbaImage>>,
+    image: Option<std::sync::Arc<starcore::image::RgbaImage>>,
     pub(super) interactive: bool,
     pub(super) modified: bool,
     pub(super) reusable: bool,
@@ -525,7 +525,7 @@ impl Session {
                 Some(image.clone())
             } else {
                 Some(std::sync::Arc::new(
-                    starkit::image::RgbaImage::from_raw(r.width, r.height, packet.bytes)
+                    starcore::image::RgbaImage::from_raw(r.width, r.height, packet.bytes)
                         .ok_or_else(|| anyhow::anyhow!("Invalid preview image"))?,
                 ))
             }
@@ -560,7 +560,7 @@ impl Session {
             return Ok(Preview::Video {
                 metadata: std::sync::Arc::new(crate::fold::preview::providers::movie_details(path)),
                 path: path.to_owned(),
-                poster: starkit::media::Poster {
+                poster: starcore::media::Poster {
                     pixels,
                     duration: media.duration,
                     width: media.width,

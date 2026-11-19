@@ -5,7 +5,7 @@ use crate::ui::{
     panels::{fit, rgb},
     theme::Theme,
 };
-use starkit::{
+use starcore::{
     chrome::overlay,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     input::TextInput,
@@ -346,7 +346,7 @@ pub fn numbered(
     *offset = (*offset).min(active_index);
     let available = area.width.saturating_sub(24);
     let width = |item: &Item| {
-        (starkit::wrap::width_of(&item.label) + 14)
+        (starcore::wrap::width_of(&item.label) + 14)
             .clamp(20, 48)
             .min(available)
     };
@@ -441,7 +441,7 @@ pub fn rail(
     let controls_width = if native { 3 } else { 7 };
     let tab_width = |item: &Item| {
         if native {
-            (starkit::wrap::width_of(&item.label) + 8).clamp(14, 36)
+            (starcore::wrap::width_of(&item.label) + 8).clamp(14, 36)
         } else {
             24
         }

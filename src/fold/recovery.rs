@@ -516,7 +516,7 @@ pub fn trash_one(source: &Path, journal: Option<&Path>) -> Result<(), String> {
         let (_, info) = entry.keep().map_err(|e| e.to_string())?;
         // Durable intent precedes the OS move, so an interrupted process can
         // recover the original location by locating the inode in the Trash.
-        if let Err(error) = starkit::fs::write_private(
+        if let Err(error) = starcore::fs::write_private(
             &info,
             &serde_json::to_vec(&data).map_err(|e| e.to_string())?,
         ) {
@@ -539,7 +539,7 @@ pub fn trash_one(source: &Path, journal: Option<&Path>) -> Result<(), String> {
                 data.created = created(&meta);
             }
             data.actual = Some(actual.to_string().into_bytes());
-            if let Err(error) = starkit::fs::write_private(
+            if let Err(error) = starcore::fs::write_private(
                 &info,
                 &serde_json::to_vec(&data).map_err(|e| e.to_string())?,
             ) {

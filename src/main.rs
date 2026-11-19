@@ -71,7 +71,7 @@ fn main() -> Result<()> {
     PATHS.init_private_dirs();
     // The guard must outlive everything that logs; dropping it early loses
     // whatever the writer thread had buffered.
-    let _log = starkit::logging::init(&PATHS, cli.verbose)?;
+    let _log = starcore::logging::init(&PATHS, cli.verbose)?;
 
     match cli.command {
         Some(cli::Command::List {

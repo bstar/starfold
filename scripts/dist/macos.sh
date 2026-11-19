@@ -18,7 +18,7 @@ fi
 . scripts/dist/build-amp-helper.sh
 cargo build --workspace --release --locked --target aarch64-apple-darwin "${build_args[@]}"
 bin="${CARGO_TARGET_DIR:-target}/aarch64-apple-darwin/release/starfold"
-# KIT's standalone updater replaces only FOLD. Include matching compressed
+# CORE's standalone updater replaces only FOLD. Include matching compressed
 # helpers so future updates/rollbacks cannot select stale adjacent providers.
 gzip -n -c "$(dirname "$bin")/starfold-preview-pdf" > "$work/pdf.gz"
 gzip -n -c "$(dirname "$bin")/starfold-preview-video" > "$work/video.gz"

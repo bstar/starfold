@@ -1,8 +1,8 @@
 //! Native Commander chrome. All rectangles stay in the controller's geometry.
-use starkit::native_surface::{PixelRect as R, Primitive, Surface};
-use starkit::ratatui::layout::Rect;
-use starkit::terminal_graphics::protocol::Component;
-use starkit::theme::{color::Rgb, Theme as Core};
+use starcore::native_surface::{PixelRect as R, Primitive, Surface};
+use starcore::ratatui::layout::Rect;
+use starcore::terminal_graphics::protocol::Component;
+use starcore::theme::{color::Rgb, Theme as Core};
 
 #[derive(Clone)]
 pub struct Colors {
@@ -14,7 +14,7 @@ pub struct Colors {
     pub accent: Rgb,
     pub highlight: Rgb,
     pub shadow: Rgb,
-    shared: std::sync::Arc<starkit::native_surface::style::Style>,
+    shared: std::sync::Arc<starcore::native_surface::style::Style>,
     native_skins: bool,
 }
 impl std::fmt::Debug for Colors {
@@ -26,15 +26,15 @@ impl std::fmt::Debug for Colors {
     }
 }
 impl Colors {
-    pub fn palette(theme: &Core) -> starkit::native_surface::style::Palette {
-        starkit::native_surface::style::Palette::for_chrome(theme)
+    pub fn palette(theme: &Core) -> starcore::native_surface::style::Palette {
+        starcore::native_surface::style::Palette::for_chrome(theme)
     }
 
-    pub fn from_palette(palette: starkit::native_surface::style::Palette) -> Self {
-        use starkit::native_surface::style::Style;
+    pub fn from_palette(palette: starcore::native_surface::style::Palette) -> Self {
+        use starcore::native_surface::style::Style;
         let mut style = Style::new(palette);
         style.metrics.small_font = 12;
-        let rgb = |s: &str| Rgb::parse_hex(s).expect("KIT workspace color");
+        let rgb = |s: &str| Rgb::parse_hex(s).expect("CORE workspace color");
         Self {
             frame: rgb(&style.colors.panel),
             title: rgb(&style.colors.title),
@@ -49,7 +49,7 @@ impl Colors {
         }
     }
 
-    pub fn style(&self) -> &starkit::native_surface::style::Style {
+    pub fn style(&self) -> &starcore::native_surface::style::Style {
         &self.shared
     }
 
@@ -82,8 +82,8 @@ impl Colors {
             return;
         }
         let palette = self.shared.palette;
-        let color = starkit::native_surface::style::hex(
-            if palette == starkit::native_surface::style::SILVER_PALETTE {
+        let color = starcore::native_surface::style::hex(
+            if palette == starcore::native_surface::style::SILVER_PALETTE {
                 palette.fg
             } else {
                 palette.accent
@@ -92,12 +92,12 @@ impl Colors {
         if self.native_skins {
             static MASK: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
             let (asset, png) = MASK.get_or_init(|| {
-                let image = starkit::image::load_from_memory(include_bytes!(
+                let image = starcore::image::load_from_memory(include_bytes!(
                     "../../assets/chrome/amp-focus-rounded.png"
                 ))
                 .expect("original AMP focus mask")
                 .to_rgba8();
-                starkit::terminal_graphics::assets::encode_skin(&image)
+                starcore::terminal_graphics::assets::encode_skin(&image)
                     .expect("bounded AMP focus mask")
             });
             surface.assets.insert(asset.clone(), Some(png.clone()));
@@ -196,7 +196,7 @@ pub fn tab(
         };
     }
     let face = R::new(2, 2, s.width.saturating_sub(4), height.saturating_sub(4));
-    // KIT's compact tools give tabs a quiet face and an active underline.
+    // CORE's compact tools give tabs a quiet face and an active underline.
     // Legacy Tab markers are removed before painting this surface.
     p.style().tool(&mut s, face, "", "tab", active);
     let end = close.map_or(s.width, |r| (r.x - rect.x) * cw);
@@ -210,7 +210,7 @@ pub fn tab(
         false,
     );
     if let Some(close) = close {
-        starkit::native_surface::style::close_button(
+        starcore::native_surface::style::close_button(
             &mut s,
             R::new((close.x - rect.x) * cw, 0, close.width * cw, height),
             &p.style().colors,
@@ -241,7 +241,7 @@ pub fn workspace(rect: Rect, cell: (u16, u16), p: &Colors, view: Workspace<'_>) 
     } = view;
     let (cw, ch) = cell;
     let mut s = Surface::new(rect.width * cw, rect.height * ch, hex(p.frame));
-    let font = starkit::native_surface::Metrics::from_cell(cw, ch).font;
+    let font = starcore::native_surface::Metrics::from_cell(cw, ch).font;
     let title_height = ch.min(s.height);
     if ch < 10 || s.width < 100 {
         let width = s.width;

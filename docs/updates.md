@@ -1,6 +1,6 @@
 # Release updates
 
-STAR/FOLD uses STAR/KIT's optional `update` feature to check GitHub's latest
+STAR/FOLD uses STAR/CORE's optional `update` feature to check GitHub's latest
 published stable release. Standalone Apple Silicon macOS archives and Linux
 AppImages check in the background every six hours while the browser/client is
 running. A verified update is staged privately and installed at the next
@@ -69,7 +69,7 @@ trigger updates. This implementation does not publish a new release itself.
 
 ## Other fleet applications
 
-STAR/KIT owns repository requests, version/platform/flavor selection, checksum
+STAR/CORE owns repository requests, version/platform/flavor selection, checksum
 verification, extraction, process checks, staging, locking, activation and rollback.
 Each app supplies `update::Application`, its cache path, a writable standalone
 target, its CLI/UI and the startup exec. Apps opt into the `update` Cargo feature;

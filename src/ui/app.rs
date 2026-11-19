@@ -35,8 +35,8 @@
 //!
 //! [`Graphics::probe_if_tty`] writes a capability query and reads the answer
 //! off stdin, which only works before raw mode is on -- see
-//! `starkit::term::init`'s own doc and `docs/graphics.md`. So it happens in
-//! [`App::run`], before [`starkit::term::init`], never inside [`App::new`].
+//! `starcore::term::init`'s own doc and `docs/graphics.md`. So it happens in
+//! [`App::run`], before [`starcore::term::init`], never inside [`App::new`].
 
 mod dnd;
 mod editing;
@@ -53,22 +53,22 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use starkit::chrome::header;
-use starkit::crossterm::event::{
+use starcore::chrome::header;
+use starcore::crossterm::event::{
     self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent,
     MouseEventKind,
 };
-use starkit::crossterm::SynchronizedUpdate;
-use starkit::graphics::{Graphics, ImageId, Mode};
-use starkit::image::RgbaImage;
-use starkit::input::TextInput;
-use starkit::mouse::ClickTracker;
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::{Modifier, Style};
-use starkit::ratatui::widgets::Widget as _;
-use starkit::ratatui_image::Image;
-use starkit::term::{self, Tui};
+use starcore::crossterm::SynchronizedUpdate;
+use starcore::graphics::{Graphics, ImageId, Mode};
+use starcore::image::RgbaImage;
+use starcore::input::TextInput;
+use starcore::mouse::ClickTracker;
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::{Modifier, Style};
+use starcore::ratatui::widgets::Widget as _;
+use starcore::ratatui_image::Image;
+use starcore::term::{self, Tui};
 
 use super::dnd as wire_dnd;
 use super::editor::Editor;
@@ -196,7 +196,7 @@ impl ViewData {
 /// rebuilt only when the picture, the mode or the target size changes, and
 /// there is exactly one of these because exactly one picture is ever on
 /// screen: the preview's. Everything downstream -- the encoded protocol --
-/// is STAR/KIT's cache's problem, keyed on the identity this carries.
+/// is STAR/CORE's cache's problem, keyed on the identity this carries.
 struct Scaled {
     source: ImageId,
     mode: Scale,
@@ -344,9 +344,9 @@ pub struct App {
     suppressed_trash_warnings: HashSet<trash_warning::DriveKey>,
     unmount_started: Option<(PathBuf, Instant)>,
     animation_started: Instant,
-    preview_animation: Option<(Arc<starkit::animation::Animation>, Instant, usize)>,
+    preview_animation: Option<(Arc<starcore::animation::Animation>, Instant, usize)>,
     /// Every scrollbar the column drew last frame, and the one a press is
-    /// holding -- see `starkit::chrome::scrollbar::Scrollbars`'s own doc for
+    /// holding -- see `starcore::chrome::scrollbar::Scrollbars`'s own doc for
     /// the contract [`App::scroll_bar_to`] keeps with it.
     bars: Bars,
     /// A late OSC 72 offer still belongs to the last scrollbar gesture
@@ -375,7 +375,7 @@ pub struct App {
     /// currently in the preview, the source's own included.
     ///
     /// `ImageId::of_arc` is an address, and an address is only an identity
-    /// for as long as something holds the allocation. STAR/KIT's cache holds
+    /// for as long as something holds the allocation. STAR/CORE's cache holds
     /// the source picture, but the ids derived from it name pixels this
     /// application made, and nothing in the cache ties those back to the
     /// address they came from. So when the preview's picture changes, every
@@ -521,7 +521,7 @@ impl App {
             .graphical
             .as_ref()
             .is_some_and(|s| !s.cell_mode && s.surface_mode);
-        let rgb = |c: starkit::theme::color::Rgb| [c.r, c.g, c.b];
+        let rgb = |c: starcore::theme::color::Rgb| [c.r, c.g, c.b];
         let (bg, inset_bg) = (rgb(self.theme.panel_bg), None);
         #[cfg(feature = "terminal-graphics")]
         let (bg, inset_bg) = if native {
@@ -639,11 +639,11 @@ impl App {
             }
             AudioButtons::Auto => "STAR/AMP buttons: pictures",
         };
-        if let Err(error) = starkit::config::edit::set(
+        if let Err(error) = starcore::config::edit::set(
             &self.cfg_path,
             "preview",
             "audio_buttons",
-            &starkit::config::edit::Value::Str(next.name().to_owned()),
+            &starcore::config::edit::Value::Str(next.name().to_owned()),
         ) {
             self.note = Some((
                 format!("{message}; could not save preference: {error}"),
@@ -677,8 +677,8 @@ impl App {
                     if let Some(state) = self.graphical.as_mut().filter(|s| s.audio_local) {
                         state.audio_epoch = Some(epoch);
                         state.effects.push(
-                            starkit::terminal_graphics::protocol::ServerMessage::Media {
-                                message: starkit::terminal_graphics::media::ToClient::AudioOpen {
+                            starcore::terminal_graphics::protocol::ServerMessage::Media {
+                                message: starcore::terminal_graphics::media::ToClient::AudioOpen {
                                     session: generation,
                                     epoch,
                                 },
@@ -763,7 +763,7 @@ impl App {
     }
 
     fn audio_key(&mut self, key: KeyEvent) -> bool {
-        use starkit::crossterm::event::KeyModifiers;
+        use starcore::crossterm::event::KeyModifiers;
         if key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
@@ -818,7 +818,7 @@ impl App {
     }
 
     fn draw_audio(&mut self, area: Rect, buf: &mut Buffer) {
-        use starkit::chrome::frame;
+        use starcore::chrome::frame;
         let words = self.panel_words(ModuleId::Preview);
         frame::frame(
             area,
@@ -850,9 +850,9 @@ impl App {
             self.audio_graphics.clear(&mut self.graphics);
             let text =
                 format!("STAR/AMP: {error}\n\nO external open · o buttons · x stop · i close");
-            starkit::ratatui::widgets::Paragraph::new(text)
+            starcore::ratatui::widgets::Paragraph::new(text)
                 .style(Style::default().fg(panels::rgb(self.theme.error)))
-                .wrap(starkit::ratatui::widgets::Wrap { trim: true })
+                .wrap(starcore::ratatui::widgets::Wrap { trim: true })
                 .render(body, buf);
             return;
         }
@@ -872,7 +872,7 @@ impl App {
             if y >= usize::from(body.height) {
                 break;
             }
-            let rgb = |c: [u8; 3]| starkit::ratatui::style::Color::Rgb(c[0], c[1], c[2]);
+            let rgb = |c: [u8; 3]| starcore::ratatui::style::Color::Rgb(c[0], c[1], c[2]);
             buf[(body.x + x as u16, body.y + y as u16)]
                 .set_symbol(&cell.symbol)
                 .set_style(
@@ -1992,13 +1992,13 @@ impl App {
                 self.layout.fold_rows,
             );
             let entry = self.scroll.entry(self.view.frame_id).or_insert(0);
-            *entry = starkit::list::clamp_scroll(self.view.cursor, *entry, list_rows);
+            *entry = starcore::list::clamp_scroll(self.view.cursor, *entry, list_rows);
         }
         if self.commander {
             for (i, pane) in self.panes.iter().enumerate() {
                 let rows = panels::stack::visible_rows(pane_rect(stack_rect, i), 0, 0);
                 let scroll = self.scroll.entry(pane.key).or_insert(0);
-                *scroll = starkit::list::clamp_scroll(pane.cursor, *scroll, rows);
+                *scroll = starcore::list::clamp_scroll(pane.cursor, *scroll, rows);
             }
         }
 
@@ -2024,7 +2024,7 @@ impl App {
 
         let ops_visible = self.operations_visible(&regions);
         self.ops_scroll =
-            starkit::list::clamp_scroll(self.ops_cursor, self.ops_scroll, ops_visible);
+            starcore::list::clamp_scroll(self.ops_cursor, self.ops_scroll, ops_visible);
     }
 
     fn operations_visible(&self, regions: &Regions) -> usize {
@@ -2051,7 +2051,7 @@ impl App {
             && self.editor.is_none()
             && k.code == KeyCode::Char('s')
             && k.modifiers
-                .contains(starkit::crossterm::event::KeyModifiers::CONTROL)
+                .contains(starcore::crossterm::event::KeyModifiers::CONTROL)
             && crate::fold::location::is_archive(&self.view.active_dir)
         {
             let dir = self.view.active_dir.clone();
@@ -2081,7 +2081,7 @@ impl App {
                     Action::NextTheme | Action::PrevTheme | Action::TogglePresentation
                 ) || (action == Action::Quit
                     && k.modifiers
-                        .contains(starkit::crossterm::event::KeyModifiers::CONTROL))
+                        .contains(starcore::crossterm::event::KeyModifiers::CONTROL))
                 {
                     self.act(action);
                     return;
@@ -2098,7 +2098,7 @@ impl App {
         }
         if !self.overlays.is_open()
             && k.modifiers
-                .contains(starkit::crossterm::event::KeyModifiers::CONTROL)
+                .contains(starcore::crossterm::event::KeyModifiers::CONTROL)
         {
             if k.code == KeyCode::PageUp {
                 self.cycle_tab(-1);
@@ -2130,7 +2130,7 @@ impl App {
         if self.places.is_some()
             && k.code == KeyCode::Char('c')
             && k.modifiers
-                .contains(starkit::crossterm::event::KeyModifiers::CONTROL)
+                .contains(starcore::crossterm::event::KeyModifiers::CONTROL)
         {
             self.places = None;
             self.act(Action::Quit);
@@ -2153,7 +2153,7 @@ impl App {
         if k.code == KeyCode::Menu
             || (k.code == KeyCode::F(10)
                 && k.modifiers
-                    .contains(starkit::crossterm::event::KeyModifiers::SHIFT))
+                    .contains(starcore::crossterm::event::KeyModifiers::SHIFT))
         {
             self.open_file_menu(2, 2);
             return;
@@ -2197,7 +2197,8 @@ impl App {
             }
             return;
         }
-        if k.modifiers.is_empty() || k.modifiers == starkit::crossterm::event::KeyModifiers::SHIFT {
+        if k.modifiers.is_empty() || k.modifiers == starcore::crossterm::event::KeyModifiers::SHIFT
+        {
             let extension_key = match k.code {
                 KeyCode::Char(' ') => Some("space".into()),
                 KeyCode::Char(c) => Some(c.to_string()),
@@ -2223,7 +2224,7 @@ impl App {
             && self.layout.focus() == ModuleId::Preview
             && matches!(self.view.preview.as_deref(), Some(Preview::Image { .. }))
             && (k.modifiers.is_empty()
-                || k.modifiers == starkit::crossterm::event::KeyModifiers::SHIFT)
+                || k.modifiers == starcore::crossterm::event::KeyModifiers::SHIFT)
         {
             let direction = match k.code {
                 KeyCode::Char('+') | KeyCode::Char('=') => Some(1),
@@ -2770,7 +2771,7 @@ impl App {
                 if let Some(state) = self.graphical.as_mut() {
                     if state.presentation_switch {
                         state.effects.push(
-                            starkit::terminal_graphics::protocol::ServerMessage::TogglePresentation,
+                            starcore::terminal_graphics::protocol::ServerMessage::TogglePresentation,
                         );
                     } else {
                         self.note = Some((
@@ -2919,11 +2920,11 @@ impl App {
         self.theme = theme;
         self.theme_name = name.clone();
         self.cfg.ui.theme = name.clone();
-        if let Err(e) = starkit::config::edit::set(
+        if let Err(e) = starcore::config::edit::set(
             &self.cfg_path,
             "ui",
             "theme",
-            &starkit::config::edit::Value::Str(name.clone()),
+            &starcore::config::edit::Value::Str(name.clone()),
         ) {
             tracing::warn!("could not save the theme: {e}");
         }
@@ -2940,11 +2941,11 @@ impl App {
     fn cycle_picture_scale(&mut self) {
         let next = self.cfg.preview.image_scale.next();
         self.cfg.preview.image_scale = next;
-        if let Err(e) = starkit::config::edit::set(
+        if let Err(e) = starcore::config::edit::set(
             &self.cfg_path,
             "preview",
             "image_scale",
-            &starkit::config::edit::Value::Str(next.name().to_string()),
+            &starcore::config::edit::Value::Str(next.name().to_string()),
         ) {
             tracing::warn!("could not save the picture scale: {e}");
         }
@@ -2974,7 +2975,7 @@ impl App {
         if !matches {
             let (w, h) = scaling.pixels;
             let started = Instant::now();
-            let image = starkit::image::imageops::resize(&**data, w, h, scaling.filter);
+            let image = starcore::image::imageops::resize(&**data, w, h, scaling.filter);
             tracing::debug!(
                 "scaled a picture to {w}x{h} ({}) in {:?}",
                 scaling.mode,
@@ -3014,7 +3015,7 @@ impl App {
         // as the same action before scrollbar, pane, and preview dispatch.
         let kind = if m.kind == MouseEventKind::Down(MouseButton::Left)
             && m.modifiers
-                .contains(starkit::crossterm::event::KeyModifiers::CONTROL)
+                .contains(starcore::crossterm::event::KeyModifiers::CONTROL)
         {
             MouseEventKind::Down(MouseButton::Right)
         } else {
@@ -3325,7 +3326,7 @@ impl App {
     /// untouched value is still sitting.
     ///
     /// The stack and the operations queue both scroll a cursor into view
-    /// with them (`starkit::list::cursor_into_view`), the same inverse of
+    /// with them (`starcore::list::cursor_into_view`), the same inverse of
     /// `clamp_scroll` their own keyboard paging needs -- otherwise the next
     /// `clamp_scrolls` would re-derive the scroll from wherever the cursor
     /// still is and drag it right back. The stack's cursor also goes back
@@ -3340,7 +3341,7 @@ impl App {
                 self.focus_pane(pane);
                 let p = &self.panes[pane];
                 let height = self.bars.track_of(bar).map(|r| r.height).unwrap_or(0);
-                let cursor = starkit::list::cursor_into_view(
+                let cursor = starcore::list::cursor_into_view(
                     p.cursor,
                     above,
                     usize::from(height),
@@ -3363,7 +3364,7 @@ impl App {
                     .last
                     .as_ref()
                     .map_or(1, |r| self.operations_visible(r));
-                self.ops_cursor = starkit::list::cursor_into_view(
+                self.ops_cursor = starcore::list::cursor_into_view(
                     self.ops_cursor,
                     above,
                     height,
@@ -3377,7 +3378,7 @@ impl App {
                     .track_of(Bar::Stack)
                     .map(|r| r.height)
                     .unwrap_or(0);
-                let cursor = starkit::list::cursor_into_view(
+                let cursor = starcore::list::cursor_into_view(
                     self.view.cursor,
                     above,
                     usize::from(height),
@@ -3848,7 +3849,7 @@ impl App {
         #[cfg(feature = "terminal-graphics")]
         if let Some(graphical) = self.graphical.as_mut() {
             graphical.effects.push(
-                starkit::terminal_graphics::protocol::ServerMessage::Clipboard {
+                starcore::terminal_graphics::protocol::ServerMessage::Clipboard {
                     text: text.into(),
                 },
             );
@@ -4435,9 +4436,9 @@ fn transport_cell_size(graphics: &mut Graphics) -> Option<(u16, u16)> {
     let mode = graphics.mode();
     if matches!(
         mode,
-        starkit::graphics::Mode::Off | starkit::graphics::Mode::Blocks
+        starcore::graphics::Mode::Off | starcore::graphics::Mode::Blocks
     ) {
-        graphics.set_mode(starkit::graphics::Mode::Auto);
+        graphics.set_mode(starcore::graphics::Mode::Auto);
         let size = graphics.cell_size();
         graphics.set_mode(mode);
         size
@@ -4772,8 +4773,8 @@ mod tests {
     use super::*;
     use crate::ui::fake;
     use crate::ui::overlays;
-    use starkit::crossterm::event::KeyModifiers;
-    use starkit::ratatui::style::Color;
+    use starcore::crossterm::event::KeyModifiers;
+    use starcore::ratatui::style::Color;
 
     fn key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
@@ -5099,7 +5100,7 @@ mod tests {
         let mut e = spawn();
         e.key(KeyEvent::new(
             KeyCode::Char('i'),
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ))
         .unwrap();
         app.editor = Some(e);
@@ -5333,21 +5334,21 @@ mod tests {
     fn gif_preview_tick_advances_cell_image_and_keeps_scaling() {
         let (mut app, _, _dir) = app();
         let delay = Duration::from_millis(100);
-        let sequence = Arc::new(starkit::anim::FrameSequence {
+        let sequence = Arc::new(starcore::anim::FrameSequence {
             frames: vec![
-                starkit::anim::Frame {
+                starcore::anim::Frame {
                     img: Arc::new(RgbaImage::from_pixel(
                         2,
                         2,
-                        starkit::image::Rgba([255, 0, 0, 255]),
+                        starcore::image::Rgba([255, 0, 0, 255]),
                     )),
                     delay,
                 },
-                starkit::anim::Frame {
+                starcore::anim::Frame {
                     img: Arc::new(RgbaImage::from_pixel(
                         2,
                         2,
-                        starkit::image::Rgba([0, 255, 0, 255]),
+                        starcore::image::Rgba([0, 255, 0, 255]),
                     )),
                     delay,
                 },
@@ -5361,17 +5362,17 @@ mod tests {
             .frames
             .iter()
             .map(|f| {
-                Ok(starkit::image::Frame::from_parts(
+                Ok(starcore::image::Frame::from_parts(
                     (*f.img).clone(),
                     0,
                     0,
-                    starkit::image::Delay::from_numer_denom_ms(f.delay.as_millis() as u32, 1),
+                    starcore::image::Delay::from_numer_denom_ms(f.delay.as_millis() as u32, 1),
                 ))
             })
             .collect::<Vec<_>>();
         let sequence = Arc::new(
-            starkit::animation::Animation::collect(
-                starkit::image::Frames::new(Box::new(frames.into_iter())),
+            starcore::animation::Animation::collect(
+                starcore::image::Frames::new(Box::new(frames.into_iter())),
                 0,
                 64_000_000,
                 || false,
@@ -5890,7 +5891,7 @@ mod tests {
         let bright = panels::rgb(
             app.theme
                 .panel_bg
-                .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]),
+                .best_contrast_against(&[starcore::theme::WHITE, starcore::theme::BLACK]),
         );
         let dim = panels::rgb(app.theme.dim);
         assert_eq!(

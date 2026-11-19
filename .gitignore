@@ -13,7 +13,7 @@
 *.swp
 *~
 
-# The local starkit checkout override, documented in AGENTS.md. Never committed.
+# The local starcore checkout override, documented in AGENTS.md. Never committed.
 /.cargo/config.toml
 
 # Python recorder bytecode; generated lab evidence lives under target/.

@@ -1,24 +1,26 @@
-//! FOLD's pane policy over KIT's shared responsive layout engine.
+//! FOLD's pane policy over CORE's shared responsive layout engine.
 //!
 //! The browser remains primary. Preview opens independently of Operations;
-//! media/editor activity and queue state supply preferred heights. KIT owns
+//! media/editor activity and queue state supply preferred heights. CORE owns
 //! allocation, gaps, visibility reasons, focus traversal and resize arithmetic.
 //! `regions` solves once per frame; painting and hit testing read the same result.
 //!
 //! Cell presentation keeps its established 60x21 floor and vertical stack.
 //! Native presentation uses full-width Preview and conditional Operations rows;
-//! KIT pixel placements preserve its physical browser density. User preview
+//! CORE pixel placements preserve its physical browser density. User preview
 //! height survives temporary window clamping and focus never reallocates panes.
 
-use starkit::chrome::header;
-use starkit::panes::{self, Focus, FocusPolicy, Node, ResizeCapture, ResizeEdge, Size, Visibility};
-use starkit::ratatui::layout::Rect;
+use starcore::chrome::header;
+use starcore::panes::{
+    self, Focus, FocusPolicy, Node, ResizeCapture, ResizeEdge, Size, Visibility,
+};
+use starcore::ratatui::layout::Rect;
 
 use super::panels::{ModuleId, COLUMN};
 
 /// Shared geometry for drawing and hit-testing Commander's two file panes.
 pub fn pane_rect(area: Rect, pane: usize) -> Rect {
-    let gap = starkit::chrome::frame::extra_rows().max(1).min(area.width);
+    let gap = starcore::chrome::frame::extra_rows().max(1).min(area.width);
     let width = area.width.saturating_sub(gap);
     let left = width / 2;
     if pane == 0 {
@@ -168,7 +170,7 @@ impl LayoutState {
         if self.last.as_ref().is_some_and(|last| last.area != area) {
             self.preview_resize = None;
         }
-        let extra = starkit::chrome::frame::extra_rows();
+        let extra = starcore::chrome::frame::extra_rows();
         let gap = extra / 2;
         let gutters = gap * 2;
         let min_rows = MIN_ROWS + 3 * extra + gutters;
@@ -234,7 +236,7 @@ impl LayoutState {
             // Keep this bottom edge independent of Preview's requested height,
             // so a divider drag exchanges rows with the browser without drift.
             // Use every available logical row. Reserving an eighth of the
-            // grid made KIT stretch the remaining file rows over the same
+            // grid made CORE stretch the remaining file rows over the same
             // pixel area, adding padding around the fixed-size filenames.
             let logical_height = body.height;
             let available = logical_height.saturating_sub(stack_floor + ops + gaps);
@@ -393,7 +395,7 @@ impl LayoutState {
         let Some(regions) = &self.last else {
             return false;
         };
-        let extra = starkit::chrome::frame::extra_rows();
+        let extra = starcore::chrome::frame::extra_rows();
         let rows = regions
             .rect_of(ModuleId::Preview)
             .height
@@ -480,7 +482,7 @@ impl LayoutState {
                     || self.ops_active
                     || self.last.as_ref().is_some_and(|r| {
                         r.rect_of(ModuleId::Operations).height
-                            > COLLAPSED_ROWS + starkit::chrome::frame::extra_rows()
+                            > COLLAPSED_ROWS + starcore::chrome::frame::extra_rows()
                     })
             }
         }
@@ -513,7 +515,7 @@ mod tests {
 
     #[test]
     fn native_rows_collapse_and_expanded_content_keeps_full_width() {
-        let _padding = starkit::chrome::frame::padding_scope(true);
+        let _padding = starcore::chrome::frame::padding_scope(true);
         let mut layout = LayoutState::new(10, 8, 3);
         layout.native_rack = true;
         layout.tabs_visible = true;
@@ -560,7 +562,7 @@ mod tests {
 
     #[test]
     fn native_operations_row_appears_for_work_and_releases_its_geometry_when_cleared() {
-        let _padding = starkit::chrome::frame::padding_scope(true);
+        let _padding = starcore::chrome::frame::padding_scope(true);
         let mut layout = state();
         layout.native_rack = true;
         for width in [80, 160] {
@@ -593,7 +595,7 @@ mod tests {
 
     #[test]
     fn native_preview_focus_never_changes_height_and_manual_size_survives_clamping() {
-        let _padding = starkit::chrome::frame::padding_scope(true);
+        let _padding = starcore::chrome::frame::padding_scope(true);
         let mut layout = state();
         for rows in [None, Some(2), Some(20), Some(500)] {
             layout.native_preview_rows = rows;
@@ -610,7 +612,7 @@ mod tests {
 
     #[test]
     fn native_operations_do_not_resize_panes_as_work_starts_or_finishes() {
-        let _chrome = starkit::chrome::frame::padding_scope(true);
+        let _chrome = starcore::chrome::frame::padding_scope(true);
         let mut layout = state();
         let area = Rect::new(0, 0, 160, 60);
         let idle = layout.regions(area, (1, 0), 0).cloned().unwrap();
@@ -624,7 +626,7 @@ mod tests {
 
     #[test]
     fn native_gutters_separate_panes_and_do_not_capture_clicks() {
-        let _chrome = starkit::chrome::frame::padding_scope(true);
+        let _chrome = starcore::chrome::frame::padding_scope(true);
         let mut layout = state();
         let regions = layout
             .regions(Rect::new(0, 0, 100, MIN_ROWS + 8), (0, 0), 0)

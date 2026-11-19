@@ -37,10 +37,10 @@ pub mod unsaved;
 
 use std::path::PathBuf;
 
-use starkit::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use starkit::keymap::{help_rect, HelpView};
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
+use starcore::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use starcore::keymap::{help_rect, HelpView};
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
 
 use crate::fold::create::Kind as CreateKind;
 use crate::fold::ops::{ConflictPolicy, OpId};
@@ -471,16 +471,16 @@ impl Overlays {
                 },
                 _ => (false, Answer::Consumed),
             },
-            Overlay::Confirm(c) => match starkit::chrome::confirm::answer(k) {
-                starkit::chrome::confirm::Answer::Yes => {
+            Overlay::Confirm(c) => match starcore::chrome::confirm::answer(k) {
+                starcore::chrome::confirm::Answer::Yes => {
                     (true, Answer::Confirmed(c.pending.clone()))
                 }
-                starkit::chrome::confirm::Answer::No => (true, Answer::Closed),
+                starcore::chrome::confirm::Answer::No => (true, Answer::Closed),
                 // `ctrl+c` is caught above, ahead of every overlay's own
                 // keys, so this arm is unreached in practice; kept exhaustive
                 // rather than assumed away.
-                starkit::chrome::confirm::Answer::Quit => (true, Answer::Quit),
-                starkit::chrome::confirm::Answer::Waiting => (false, Answer::Consumed),
+                starcore::chrome::confirm::Answer::Quit => (true, Answer::Quit),
+                starcore::chrome::confirm::Answer::Waiting => (false, Answer::Consumed),
             },
             Overlay::Unsaved(_) => match k.code {
                 KeyCode::Char('s') => (true, Answer::EditorChanges(true)),
@@ -845,10 +845,10 @@ impl Overlays {
             }
             Overlay::Destination(d) => d.render(area, buf, theme),
             Overlay::Help { scroll } => {
-                // `HelpView` takes STAR/KIT's own `Theme`, which this crate's
+                // `HelpView` takes STAR/CORE's own `Theme`, which this crate's
                 // wrapper derefs to; a struct literal is not a coercion site,
                 // so the target type is spelled out to reach it explicitly.
-                let core: &starkit::theme::Theme = theme;
+                let core: &starcore::theme::Theme = theme;
                 HelpView {
                     theme: core,
                     bindings: BINDINGS,
@@ -906,12 +906,12 @@ impl Overlays {
     }
 }
 
-/// Footer labels use the exact right alignment and fit rule of KIT's frame.
+/// Footer labels use the exact right alignment and fit rule of CORE's frame.
 /// Separators, clipped labels and body text must never submit an operation.
 fn footer_key(rect: Rect, footer: &str, x: u16, y: u16) -> Option<KeyCode> {
-    let width = starkit::wrap::width_of(footer).saturating_add(2);
+    let width = starcore::wrap::width_of(footer).saturating_add(2);
     // Native chrome reserves two extra cells; the ordinary frame reserves two.
-    let inset = if starkit::chrome::frame::extra_rows() > 0 {
+    let inset = if starcore::chrome::frame::extra_rows() > 0 {
         4
     } else {
         2
@@ -921,7 +921,7 @@ fn footer_key(rect: Rect, footer: &str, x: u16, y: u16) -> Option<KeyCode> {
     }
     let mut start = rect.right() - width;
     for word in footer.split(" · ") {
-        let end = start + starkit::wrap::width_of(word);
+        let end = start + starcore::wrap::width_of(word);
         if x >= start && x < end {
             return match word.split_whitespace().next()? {
                 "enter" => Some(KeyCode::Enter),
@@ -951,7 +951,7 @@ mod tests {
     use super::*;
     use crate::fold::ops::Conflict;
     use crate::ui::theme::tests_support::theme;
-    use starkit::crossterm::event::KeyModifiers;
+    use starcore::crossterm::event::KeyModifiers;
 
     fn key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
@@ -1038,7 +1038,7 @@ mod tests {
     #[test]
     fn mouse_submits_destination_and_conflict_names_in_both_presentations() {
         for native in [false, true] {
-            let _scope = starkit::chrome::frame::padding_scope(native);
+            let _scope = starcore::chrome::frame::padding_scope(native);
             let mut o = Overlays::new();
             for kind in [
                 crate::fold::ops::OpKind::Copy,
@@ -1101,7 +1101,7 @@ mod tests {
     fn footer_separators_and_hidden_actions_do_not_submit() {
         let rect = Rect::new(10, 10, 60, 4);
         let text = rename::FOOTER;
-        let start = rect.right() - starkit::wrap::width_of(text) - 2;
+        let start = rect.right() - starcore::wrap::width_of(text) - 2;
         assert_eq!(footer_key(rect, text, start + 12, rect.bottom() - 1), None);
         assert_eq!(footer_key(Rect::new(0, 0, 10, 4), text, 1, 3), None);
         assert_eq!(footer_key(rect, text, start, rect.y + 1), None);

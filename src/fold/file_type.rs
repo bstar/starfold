@@ -33,7 +33,7 @@ impl FileType {
 }
 pub fn classify(path: &Path, head: &[u8]) -> FileType {
     use FileType::*;
-    if starkit::image::guess_format(head).is_ok() {
+    if starcore::image::guess_format(head).is_ok() {
         return Image;
     }
     if head.starts_with(b"%PDF-") {

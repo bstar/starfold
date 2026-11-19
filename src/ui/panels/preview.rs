@@ -23,7 +23,7 @@
 //!
 //! ## Growing one
 //!
-//! `Resize::Fit`, which STAR/KIT encodes with, never upsizes -- its own
+//! `Resize::Fit`, which STAR/CORE encodes with, never upsizes -- its own
 //! documentation says so. A picture smaller than the panel therefore sits in
 //! the middle of it at whatever size it happens to be, and growing it is
 //! this application's own work: scale the pixels first, to exactly the size
@@ -35,14 +35,14 @@
 
 use std::sync::Arc;
 
-use starkit::chrome::frame;
-use starkit::chrome::scrollbar;
-use starkit::graphics::{Graphics, ImageId};
-use starkit::image::imageops::FilterType;
-use starkit::image::RgbaImage;
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::{Modifier, Style};
+use starcore::chrome::frame;
+use starcore::chrome::scrollbar;
+use starcore::graphics::{Graphics, ImageId};
+use starcore::image::imageops::FilterType;
+use starcore::image::RgbaImage;
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::{Modifier, Style};
 
 use super::{empty, fit, rgb, width_of, words, ModuleId};
 use crate::config::Scale;
@@ -288,7 +288,7 @@ pub fn render(
     };
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
-    let core: &starkit::theme::Theme = v.theme;
+    let core: &starcore::theme::Theme = v.theme;
     let detail = v.name.map(|n| {
         format!(
             "{} {n}",
@@ -338,12 +338,12 @@ pub fn render(
                         let cell = &grid.cells
                             [usize::from(y) * usize::from(grid.columns) + usize::from(x)];
                         let mut style = Style::default()
-                            .fg(starkit::ratatui::style::Color::Rgb(
+                            .fg(starcore::ratatui::style::Color::Rgb(
                                 cell.foreground[0],
                                 cell.foreground[1],
                                 cell.foreground[2],
                             ))
-                            .bg(starkit::ratatui::style::Color::Rgb(
+                            .bg(starcore::ratatui::style::Color::Rgb(
                                 cell.background[0],
                                 cell.background[1],
                                 cell.background[2],
@@ -370,7 +370,7 @@ pub fn render(
                             })
                             .set_style(style);
                         if cell.symbol.is_empty() {
-                            target.set_diff_option(starkit::ratatui::buffer::CellDiffOption::Skip);
+                            target.set_diff_option(starcore::ratatui::buffer::CellDiffOption::Skip);
                         }
                     }
                 }
@@ -642,7 +642,7 @@ pub fn body(area: Rect) -> Rect {
 }
 
 fn pad_body(body: Rect) -> Rect {
-    if starkit::chrome::frame::extra_rows() > 0 || body.width < 3 {
+    if starcore::chrome::frame::extra_rows() > 0 || body.width < 3 {
         return body;
     }
     Rect {
@@ -659,7 +659,7 @@ pub fn page_rows(page: &crate::fold::preview::model::Page, width: u16) -> usize 
             page.text
                 .lines()
                 .map(|l| {
-                    starkit::wrap::wrap(&l.replace('\t', "    "), width)
+                    starcore::wrap::wrap(&l.replace('\t', "    "), width)
                         .len()
                         .max(1)
                 })
@@ -699,7 +699,7 @@ fn document_lines(d: &crate::fold::preview::model::Document, width: u16) -> Vec<
                 } else {
                     for line in p.text.lines() {
                         let line = line.replace('\t', "    ");
-                        let wrapped = starkit::wrap::wrap(&line, width);
+                        let wrapped = starcore::wrap::wrap(&line, width);
                         if wrapped.is_empty() {
                             lines.push(String::new());
                         } else {
@@ -798,7 +798,7 @@ fn movie_lines(d: &crate::fold::preview::model::Document, width: u16) -> Vec<Str
             if row.is_empty() {
                 return vec![row];
             }
-            starkit::wrap::wrap(&row, width)
+            starcore::wrap::wrap(&row, width)
                 .iter()
                 .map(|r| r.drawn(&row).to_string())
                 .collect()
@@ -995,7 +995,7 @@ fn render_image(
             scale: p.scale,
         })
     } else if width == 0 || height == 0 {
-        starkit::graphics::placeholder(p.rect, buf, Style::default().fg(rgb(v.theme.dim)));
+        starcore::graphics::placeholder(p.rect, buf, Style::default().fg(rgb(v.theme.dim)));
         None
     } else {
         // No pre-scaling: half blocks sample the picture themselves, at
@@ -1003,7 +1003,7 @@ fn render_image(
         // only cost the time and change nothing on screen. The rectangle
         // still follows the mode, so `1x` and `pixels` are honest about size
         // wherever a cell has been measured.
-        starkit::graphics::halfblocks(data, p.rect, buf);
+        starcore::graphics::halfblocks(data, p.rect, buf);
         None
     };
 
@@ -1403,7 +1403,7 @@ mod tests {
         let data = Arc::new(RgbaImage::from_pixel(
             4,
             4,
-            starkit::image::Rgba([200, 100, 50, 255]),
+            starcore::image::Rgba([200, 100, 50, 255]),
         ));
         for (mode, want) in [
             (Scale::One, "png \u{b7} 320 \u{d7} 200 \u{b7} 1x"),
@@ -1469,7 +1469,7 @@ mod tests {
         let data = Arc::new(RgbaImage::from_pixel(
             4,
             4,
-            starkit::image::Rgba([200, 100, 50, 255]),
+            starcore::image::Rgba([200, 100, 50, 255]),
         ));
         let mut v = view(&t, None, Some("harbour.png"));
         v.pixel_image = true;
@@ -1487,7 +1487,7 @@ mod tests {
         let t = theme("terminal");
         let mut img = RgbaImage::new(4, 4);
         for p in img.pixels_mut() {
-            *p = starkit::image::Rgba([200, 100, 50, 255]);
+            *p = starcore::image::Rgba([200, 100, 50, 255]);
         }
         let data = Arc::new(img);
         let mut v = view(&t, None, Some("harbour.png"));

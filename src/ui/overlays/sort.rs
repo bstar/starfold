@@ -1,8 +1,8 @@
 //! A direct picker for the active listing order.
 
-use starkit::chrome::overlay::{self};
-use starkit::crossterm::event::{KeyCode, KeyEvent};
-use starkit::ratatui::{
+use starcore::chrome::overlay::{self};
+use starcore::crossterm::event::{KeyCode, KeyEvent};
+use starcore::ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::Style,
@@ -137,7 +137,7 @@ impl Picker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use starkit::crossterm::event::KeyModifiers;
+    use starcore::crossterm::event::KeyModifiers;
 
     #[test]
     fn picker_selects_every_key_and_toggles_order_settings() {

@@ -2,7 +2,7 @@
 //! queue, and stopping something that is running (plus quitting while it
 //! still is).
 //!
-//! The box itself is STAR/KIT's `chrome::confirm` now -- raw keys, not the
+//! The box itself is STAR/CORE's `chrome::confirm` now -- raw keys, not the
 //! key table, because while this is open the keyboard means exactly one
 //! thing, and `y`/`n` rather than `Enter` for the same reason the shared
 //! widget documents: a dialogue whose default key is the one a reader's
@@ -19,9 +19,9 @@
 //! person sees and the box [`super::Overlays::click`] tests against can
 //! never drift from what the shared widget actually draws.
 
-use starkit::chrome::confirm;
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
+use starcore::chrome::confirm;
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
 use std::path::PathBuf;
 
 use crate::fold::ops::OpId;
@@ -176,7 +176,7 @@ impl Confirm {
 /// This question, as the shared widget spells it: a title lower-cased here
 /// (`chrome::frame` capitals every panel's own title, this one included) and
 /// the body and answers copied across as they are.
-fn kit(c: &Confirm) -> confirm::Confirm {
+fn core_confirm(c: &Confirm) -> confirm::Confirm {
     confirm::Confirm {
         title: c.title.clone(),
         body: c.body.clone(),
@@ -189,11 +189,11 @@ fn kit(c: &Confirm) -> confirm::Confirm {
 /// tested against the same geometry [`render`] draws -- both read straight
 /// through to `chrome::confirm`'s own, so the two can never disagree.
 pub(super) fn layout(area: Rect, c: &Confirm) -> Option<confirm::Layout> {
-    confirm::layout(area, &kit(c))
+    confirm::layout(area, &core_confirm(c))
 }
 
 pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, c: &Confirm) {
-    confirm::render(area, buf, theme, &kit(c));
+    confirm::render(area, buf, theme, &core_confirm(c));
 }
 
 #[cfg(test)]
@@ -255,7 +255,7 @@ mod tests {
         let l = layout(area, &c).expect("it fits");
         assert!(l.body_rows.len() > 1, "a long line should wrap");
         for row in &l.body_rows {
-            assert!(starkit::wrap::width_of(row) < l.inner.width);
+            assert!(starcore::wrap::width_of(row) < l.inner.width);
         }
     }
 }

@@ -67,10 +67,10 @@ unknown-registry = "deny"
 unknown-git = "deny"
 
 # The one exception, named rather than allowed by loosening the rule above.
-# STAR/KIT is the foundation this and its two siblings stand on and is pinned
+# STAR/CORE is the foundation this and its two siblings stand on and is pinned
 # to a tag; it is not published to crates.io because its API is whatever its
 # consumers need and a version on a registry would suggest otherwise.
-allow-git = ["https://github.com/bstar/starkit"]
+allow-git = ["https://github.com/bstar/starcore"]
 
 # Permissive licenses introduced by the pure-Rust BZip2/PPMd backends.
 [[licenses.exceptions]]
@@ -93,7 +93,7 @@ allow = ["WTFPL"]
 name = "libloading"
 allow = ["ISC"]
 
-# HTTPS updates use the same Rust TLS stack as KIT's existing HTTP consumers.
+# HTTPS updates use the same Rust TLS stack as CORE's existing HTTP consumers.
 [[licenses.exceptions]]
 name = "ring"
 allow = ["ISC"]

@@ -135,8 +135,8 @@ impl Shortcuts {
     fn validate(&self) -> Result<()> {
         let mut specs = Vec::new();
         for keys in [&self.next_theme, &self.previous_theme, &self.presentation] {
-            for key in starkit::keymap::alternatives(keys) {
-                let spec = starkit::keymap::KeySpec::parse(key)
+            for key in starcore::keymap::alternatives(keys) {
+                let spec = starcore::keymap::KeySpec::parse(key)
                     .ok_or_else(|| anyhow::anyhow!("Invalid application shortcut: {key}"))?;
                 anyhow::ensure!(
                     !specs.contains(&spec),
@@ -290,7 +290,7 @@ impl AudioPlayer {
 /// How much bigger than itself a picture may be drawn.
 ///
 /// The terminal is handed pixels and places them over cells, and
-/// `Resize::Fit` -- what STAR/KIT encodes with -- never upsizes. So a picture
+/// `Resize::Fit` -- what STAR/CORE encodes with -- never upsizes. So a picture
 /// smaller than the panel sits in the middle of it at whatever size it
 /// happens to be, unless something scales it first, and that is a question
 /// of taste rather than of correctness: a screenshot wants its own pixels
@@ -384,7 +384,7 @@ impl Config {
         if path.exists() {
             return Ok(false);
         }
-        starkit::fs::write_atomic(path, TEMPLATE.as_bytes())
+        starcore::fs::write_atomic(path, TEMPLATE.as_bytes())
             .with_context(|| format!("writing {}", path.display()))?;
         Ok(true)
     }

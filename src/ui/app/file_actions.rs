@@ -405,7 +405,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use starkit::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use starcore::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -447,7 +447,7 @@ mod tests {
             cfg,
             PathBuf::from("/nonexistent/config.toml"),
             None,
-            starkit::graphics::Graphics::disabled(),
+            starcore::graphics::Graphics::disabled(),
         );
         fake.pump();
         app.tick();
@@ -792,7 +792,7 @@ mod tests {
         }
         #[cfg(feature = "terminal-graphics")]
         {
-            use starkit::terminal_graphics::{
+            use starcore::terminal_graphics::{
                 protocol::{Component, Viewport},
                 session::Controller,
             };
@@ -834,7 +834,7 @@ mod tests {
         app.refresh();
         app.key(KeyEvent::new(
             KeyCode::Char('2'),
-            starkit::crossterm::event::KeyModifiers::ALT,
+            starcore::crossterm::event::KeyModifiers::ALT,
         ));
         assert_eq!(app.layout.focus(), ModuleId::Preview);
         let cursor_before = app.view.cursor_path.clone();
@@ -845,7 +845,7 @@ mod tests {
         assert_eq!(d.image_page, Some(1));
         app.key(KeyEvent::new(
             KeyCode::Char('n'),
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         fake.pump();
         app.refresh();
@@ -856,7 +856,7 @@ mod tests {
         assert_eq!(app.view.cursor_path, cursor_before);
         app.key(KeyEvent::new(
             KeyCode::Char('t'),
-            starkit::crossterm::event::KeyModifiers::NONE,
+            starcore::crossterm::event::KeyModifiers::NONE,
         ));
         fake.pump();
         app.refresh();

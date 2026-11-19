@@ -16,7 +16,7 @@ checks signatures. A Nerd Font is not required.
 - Audio: common tags plus duration, bitrate, sample rate and channel count through
   Lofty. Extra textual tags are included; cover artwork is not decoded here.
 - Video: the bundled video extension supplies posters and playback actions,
-  using the existing KIT media services and AMP transport controls. Local and
+  using the existing CORE media services and AMP transport controls. Local and
   SSH playback retain their audio, subtitle and fullscreen controls. Container
   metadata remains available when the extension cannot open a file.
 - PDF: the bundled Hayro extension renders pages on demand and retains the parsed

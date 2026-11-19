@@ -16,26 +16,26 @@ pub mod stack;
 use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
-use starkit::chrome::header;
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::{Modifier, Style};
+use starcore::chrome::header;
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::{Modifier, Style};
 
 use crate::ui::theme::Theme;
 
 use super::keymap::Module;
 
-// The border, corners, titles and header row are STAR/KIT's now -- see
-// `starkit::chrome::frame` -- and so are the small text helpers every panel
+// The border, corners, titles and header row are STAR/CORE's now -- see
+// `starcore::chrome::frame` -- and so are the small text helpers every panel
 // used to keep its own copy of. Re-exported under their old names so the
 // rest of this module's callers keep the imports they already have.
-pub use starkit::chrome::{empty, rgb};
-pub use starkit::text::fit;
-pub use starkit::wrap::width_of;
+pub use starcore::chrome::{empty, rgb};
+pub use starcore::text::fit;
+pub use starcore::wrap::width_of;
 
 // The app's own `Theme` does not exist until Phase 2a resolves `[fold]`
 // roles out of a theme file on top of this one, so every call in this file
-// that would take it takes `starkit::theme::Theme` instead.
+// that would take it takes `starcore::theme::Theme` instead.
 // TODO(2a): Phase 2a's `Theme` derefs to this one, so the call sites below
 // are unchanged once `crate::ui::theme::Theme` replaces it here.
 
@@ -242,7 +242,7 @@ pub fn highlight_header_hotkeys_for_words(
     }
     let color = theme
         .panel_bg
-        .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]);
+        .best_contrast_against(&[starcore::theme::WHITE, starcore::theme::BLACK]);
     for (word, slot) in header::slots(area, word_list) {
         let Some((key, offset)) = word.mnemonic() else {
             continue;
@@ -294,7 +294,7 @@ pub fn elide_middle(text: &str, width: u16) -> String {
     let keep = usize::from(width - 1);
     let head = keep / 2;
     let tail = keep - head;
-    let clusters: Vec<&str> = starkit::wrap::clusters(text).map(|(_, c)| c).collect();
+    let clusters: Vec<&str> = starcore::wrap::clusters(text).map(|(_, c)| c).collect();
     let mut out = String::new();
     let mut used = 0usize;
     for c in &clusters {
@@ -340,13 +340,13 @@ mod tests {
             let theme = crate::ui::theme::tests_support::theme(theme_name);
             let expected = rgb(theme
                 .panel_bg
-                .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]));
+                .best_contrast_against(&[starcore::theme::WHITE, starcore::theme::BLACK]));
             assert_eq!(
                 expected,
                 rgb(if theme_name == "terminal" {
-                    starkit::theme::WHITE
+                    starcore::theme::WHITE
                 } else {
-                    starkit::theme::BLACK
+                    starcore::theme::BLACK
                 })
             );
             for (module, width) in [

@@ -13,12 +13,12 @@
 
 use std::path::{Path, PathBuf};
 
-use starkit::chrome::overlay::{self, Anchor};
-use starkit::crossterm::event::KeyEvent;
-use starkit::input::{Edit, TextInput};
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::Style;
+use starcore::chrome::overlay::{self, Anchor};
+use starcore::crossterm::event::KeyEvent;
+use starcore::input::{Edit, TextInput};
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::Style;
 
 use crate::ui::panels::{fit, rgb};
 use crate::ui::theme::Theme;
@@ -136,7 +136,7 @@ pub fn rect(area: Rect) -> Rect {
     overlay::rect(
         area,
         (24, 60),
-        4 + starkit::chrome::frame::extra_rows(),
+        4 + starcore::chrome::frame::extra_rows(),
         3,
         Anchor::Centre,
     )
@@ -151,7 +151,7 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, r: &mut Rename) -> Op
     }
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
-    let core: &starkit::theme::Theme = theme;
+    let core: &starcore::theme::Theme = theme;
     let inner = overlay::render(
         rr,
         buf,
@@ -204,7 +204,7 @@ pub fn render(area: Rect, buf: &mut Buffer, theme: &Theme, r: &mut Rename) -> Op
 mod tests {
     use super::*;
     use crate::ui::theme::tests_support::theme;
-    use starkit::crossterm::event::{KeyCode, KeyModifiers};
+    use starcore::crossterm::event::{KeyCode, KeyModifiers};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)

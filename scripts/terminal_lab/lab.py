@@ -121,7 +121,7 @@ class Display:
             if key.startswith(('KITTY_', 'WEZTERM_', 'GHOSTTY_', 'SSH_')) or key in (
                     'DISPLAY', 'WAYLAND_DISPLAY', 'TMUX', 'STY', 'WINDOWID',
                     'TERM', 'COLORTERM', 'COLUMNS', 'LINES', 'DBUS_SESSION_BUS_ADDRESS',
-                    'NO_COLOR', 'STAR_KIT_ASCII', 'STAR_GRAPHICS_SCALE'):
+                    'NO_COLOR', 'STAR_CORE_ASCII', 'STAR_GRAPHICS_SCALE'):
                 self.env.pop(key, None)
         self.runtime = tempfile.TemporaryDirectory(prefix='foldlab-display-', dir='/tmp')
         runtime = Path(self.runtime.name)
@@ -522,7 +522,7 @@ class Case:
         env.update(HOME=str(self.home), XDG_CONFIG_HOME=str(self.home / '.config'),
                    XDG_CACHE_HOME=str(self.home / '.cache'), XDG_DATA_HOME=str(self.home / '.local/share'),
                    STARFOLD_DIR=str(self.app), STARFOLD_CONFIG_DIR=str(self.app), STARFOLD_LOG='debug',
-                   STAR_KIT_ASCII='1' if self.profile == 'ascii' else '0',
+                   STAR_CORE_ASCII='1' if self.profile == 'ascii' else '0',
                    QT_QPA_PLATFORM='xcb', GDK_BACKEND='x11', WINIT_UNIX_BACKEND='x11')
         if self.profile == 'mono':
             env['NO_COLOR'] = '1'
@@ -768,7 +768,7 @@ class Case:
         self.check('video', 'not-run', 'Use --media for pause/resume and visual movie captures.')
 
     def graphical_pointer(self):
-        # Locate the actual painted filename, rather than guessing KIT's hit
+        # Locate the actual painted filename, rather than guessing CORE's hit
         # rectangles from font sizes or assuming a cell-aligned pixel layout.
         capture = self.bridge / 'pointer.png'
         self.display.screenshot(capture)

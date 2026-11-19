@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix='fold-drag-pixels-') as temp:
   '-o','font_family=JetBrainsMono Nerd Font','-o','font_size=9','-o','window_padding_width=15',
   '-o','remember_window_size=no','-o','initial_window_width=1800','-o','initial_window_height=1000',
   str(pathlib.Path(binary).resolve()),'graphical','--session','dragpixels',str(files)],
- env={**os.environ,'STARFOLD_DIR':str(root/'app'),'STARFOLD_CONFIG_DIR':str(root/'config'),'STARFOLD_LOG':'starfold=debug,starkit=debug'},stdout=log,stderr=log)
+ env={**os.environ,'STARFOLD_DIR':str(root/'app'),'STARFOLD_CONFIG_DIR':str(root/'config'),'STARFOLD_LOG':'starfold=debug,starcore=debug'},stdout=log,stderr=log)
  def rc(*args):return subprocess.check_output([kitten,'@','--to',address,*args],stderr=subprocess.PIPE,timeout=10)
  def key(k):rc('send-key',k);time.sleep(.35)
  def locate(image, word, crop=None):

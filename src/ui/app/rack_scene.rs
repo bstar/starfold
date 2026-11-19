@@ -1,7 +1,7 @@
 //! Native rack contents, painted from the controller's cached views.
 use super::*;
 use crate::ui::rack::{self, Colors};
-use starkit::native_surface::{PixelRect as R, Surface};
+use starcore::native_surface::{PixelRect as R, Surface};
 
 #[derive(Clone, Copy)]
 pub(super) enum RackHit {
@@ -14,7 +14,7 @@ pub(super) enum RackHit {
 pub(super) fn pixel_bounds(
     rect: Rect,
     cell: (u16, u16),
-    placements: &[starkit::terminal_graphics::placement::Placement],
+    placements: &[starcore::terminal_graphics::placement::Placement],
 ) -> R {
     placements
         .iter()
@@ -38,7 +38,7 @@ struct Canvas<'a> {
     cell: (u16, u16),
     colors: &'a Colors,
     surface: Surface,
-    placement: Option<starkit::terminal_graphics::placement::Placement>,
+    placement: Option<starcore::terminal_graphics::placement::Placement>,
     target: R,
     hits: Vec<(Rect, RackHit)>,
 }
@@ -47,7 +47,7 @@ impl<'a> Canvas<'a> {
         rect: Rect,
         cell: (u16, u16),
         colors: &'a Colors,
-        placements: &[starkit::terminal_graphics::placement::Placement],
+        placements: &[starcore::terminal_graphics::placement::Placement],
     ) -> Self {
         let placement = placements
             .iter()
@@ -70,7 +70,7 @@ impl<'a> Canvas<'a> {
             hits: vec![],
         }
     }
-    fn project(p: &starkit::terminal_graphics::placement::Placement, r: Rect) -> R {
+    fn project(p: &starcore::terminal_graphics::placement::Placement, r: Rect) -> R {
         let x = |column: u16| {
             p.target.x
                 + (u32::from(column.saturating_sub(p.source.x)) * u32::from(p.target.width)
@@ -98,7 +98,7 @@ impl<'a> Canvas<'a> {
             r.height * self.cell.1,
         )
     }
-    fn fill(&mut self, r: Rect, color: starkit::theme::color::Rgb) {
+    fn fill(&mut self, r: Rect, color: starcore::theme::color::Rgb) {
         self.surface.fill(self.pixels(r), &rack::hex(color), 0);
     }
     fn text(&mut self, r: Rect, text: impl Into<String>, accent: bool, small: bool) {
@@ -111,7 +111,7 @@ impl<'a> Canvas<'a> {
         let mut pixels = self.pixels(r);
         pixels.x += 6;
         pixels.width = pixels.width.saturating_sub(12);
-        starkit::native_surface::classic::label(
+        starcore::native_surface::classic::label(
             &mut self.surface,
             pixels,
             text,
@@ -170,11 +170,11 @@ impl<'a> Canvas<'a> {
     }
     fn header_action(&mut self, r: Rect, label: &str, hit: RackHit, hotkeys: bool) {
         // AMP's title-strip actions are quiet labels; ordinary toolbar buttons
-        // retain KIT's shared button artwork below the list.
+        // retain CORE's shared button artwork below the list.
         let mut pixels = self.pixels(r);
         pixels.y = 7;
         pixels.height = 24.min(self.surface.height.saturating_sub(7));
-        starkit::native_surface::classic::label(
+        starcore::native_surface::classic::label(
             &mut self.surface,
             pixels,
             label,
@@ -192,7 +192,7 @@ impl<'a> Canvas<'a> {
                 &rack::hex(
                     self.colors
                         .title
-                        .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]),
+                        .best_contrast_against(&[starcore::theme::WHITE, starcore::theme::BLACK]),
                 ),
             );
         }
@@ -231,7 +231,7 @@ pub(super) fn image_rect(area: Rect) -> Rect {
     )
 }
 
-/// Use the same KIT panel as AMP even when content still comes from cells.
+/// Use the same CORE panel as AMP even when content still comes from cells.
 /// Content and header controls share the controller's physical projection.
 pub(super) fn pane(
     scene: &Scene,
@@ -242,7 +242,7 @@ pub(super) fn pane(
     cell: (u16, u16),
     hotkeys: bool,
 ) -> Component {
-    use starkit::chrome::header::{self, Word as _};
+    use starcore::chrome::header::{self, Word as _};
     let mut c = Canvas::new(rect, cell, colors, &scene.placements);
     c.title(title);
     if rect.width > 2 && rect.height > 3 {
@@ -257,8 +257,8 @@ pub(super) fn pane(
             let mut start = None;
             let mut end = 0;
             let mut column = 0;
-            for (byte, cluster) in starkit::wrap::clusters(&span.text) {
-                let width = starkit::wrap::width_of(cluster);
+            for (byte, cluster) in starcore::wrap::clusters(&span.text) {
+                let width = starcore::wrap::width_of(cluster);
                 if x >= body.x && x + width <= body.right() {
                     if start.is_none() {
                         start = Some(byte);
@@ -272,7 +272,7 @@ pub(super) fn pane(
                 continue;
             };
             let text = &span.text[start..end];
-            let background = c.pixels(Rect::new(column, span.y, starkit::wrap::width_of(text), 1));
+            let background = c.pixels(Rect::new(column, span.y, starcore::wrap::width_of(text), 1));
             c.surface.fill(background, &span.background, 0);
             // Cell rows carry padding to the terminal's right edge. It is
             // background, not content for the native font to ellipsize.
@@ -294,7 +294,7 @@ pub(super) fn pane(
         // Finish backgrounds before native text: later cell-padding spans
         // must not paint over glyphs shaped beyond their old cell allocation.
         for (pixels, text, foreground, bold) in labels {
-            starkit::native_surface::classic::label(
+            starcore::native_surface::classic::label(
                 &mut c.surface,
                 pixels,
                 text,
@@ -317,7 +317,7 @@ pub(super) fn pane(
         .min()
         .unwrap_or(c.surface.width.saturating_sub(18));
     for node in &mut c.surface.nodes {
-        if let starkit::native_surface::Primitive::Text { rect, .. } = node {
+        if let starcore::native_surface::Primitive::Text { rect, .. } = node {
             // The title's full shaping box ends before the header actions.
             if rect.y == 7 {
                 rect.width = end.saturating_sub(rect.x + 8);
@@ -330,7 +330,7 @@ pub(super) fn pane(
         pixels.height = 24.min(c.surface.height.saturating_sub(7));
         if word == panels::Word::Close {
             pixels = native_close_rect(c.surface.width, c.surface.height);
-            starkit::native_surface::style::close_button(
+            starcore::native_surface::style::close_button(
                 &mut c.surface,
                 pixels,
                 &colors.style().colors,
@@ -338,7 +338,7 @@ pub(super) fn pane(
                 false,
             );
         } else {
-            starkit::native_surface::classic::label(
+            starcore::native_surface::classic::label(
                 &mut c.surface,
                 pixels,
                 word.word(),
@@ -355,7 +355,7 @@ pub(super) fn pane(
                 &rack::hex(
                     colors
                         .title
-                        .best_contrast_against(&[starkit::theme::WHITE, starkit::theme::BLACK]),
+                        .best_contrast_against(&[starcore::theme::WHITE, starcore::theme::BLACK]),
                 ),
             );
         }
@@ -384,7 +384,7 @@ impl App {
             rack::hex(self.theme.row_cursor_bg),
         )
         .with_physical_text();
-        starkit::native_surface::classic::label(
+        starcore::native_surface::classic::label(
             &mut surface,
             R::new(8, 0, target.width.saturating_sub(16), target.height),
             label,
@@ -441,7 +441,7 @@ impl App {
                 self.stack_view()
             };
             let split = panels::stack::split(
-                starkit::chrome::frame::body(rect, &panels::words(ModuleId::Stack)),
+                starcore::chrome::frame::body(rect, &panels::words(ModuleId::Stack)),
                 view.crumbs.len(),
                 view.fold_rows,
             );
@@ -510,7 +510,7 @@ impl App {
             .style()
             .surface(c.target.width.max(1), c.target.height.max(1));
         let sidebar = regions.workspace_sidebar;
-        let background = starkit::theme::Resolve::core(&self.theme).bg;
+        let background = starcore::theme::Resolve::core(&self.theme).bg;
         if sidebar {
             c.surface.background = rack::hex(background);
         }
@@ -809,7 +809,7 @@ impl App {
             } else {
                 self.stack_view()
             };
-            let body = starkit::chrome::frame::body(rect, &panels::words(ModuleId::Stack));
+            let body = starcore::chrome::frame::body(rect, &panels::words(ModuleId::Stack));
             let split = panels::stack::split(body, view.crumbs.len(), view.fold_rows);
             let list = split.list;
             for span in &scene.spans {
@@ -845,7 +845,7 @@ impl App {
                 1,
             );
             let crumbs = breadcrumb_slots(path_area, path, &self.view.home);
-            let crumb_font = starkit::native_surface::Metrics::from_cell(cell.0, cell.1)
+            let crumb_font = starcore::native_surface::Metrics::from_cell(cell.0, cell.1)
                 .font
                 .min(12);
             let show_path =
@@ -858,7 +858,7 @@ impl App {
                     .width
                     .saturating_add(2)
                     .min(c.surface.width.saturating_sub(px.x));
-                starkit::native_surface::classic::label(
+                starcore::native_surface::classic::label(
                     &mut c.surface,
                     px,
                     label,

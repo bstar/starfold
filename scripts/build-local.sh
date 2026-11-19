@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build FOLD and its matching AMP helper through Nix.
-# Published pins are the default; a KIT source override is development-only.
+# Published pins are the default; a CORE source override is development-only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 fold_root=$PWD
-kit_root=${STARFOLD_KIT_SOURCE:-}
+core_root=${STARFOLD_KIT_SOURCE:-}
 amp_default="$fold_root/../staramp"
 amp_root=${STARFOLD_AMP_SOURCE:-"$amp_default"}
 [ -f "$amp_root/Cargo.toml" ] || {
@@ -13,9 +13,9 @@ amp_root=${STARFOLD_AMP_SOURCE:-"$amp_default"}
 }
 export CARGO_NET_GIT_FETCH_WITH_CLI=true
 build_args=(--locked)
-if [ -n "$kit_root" ]; then
-    [ -f "$kit_root/Cargo.toml" ] || { echo 'Invalid STARFOLD_KIT_SOURCE' >&2; exit 1; }
-    kit_root=$(cd "$kit_root" && pwd)
+if [ -n "$core_root" ]; then
+    [ -f "$core_root/Cargo.toml" ] || { echo 'Invalid STARFOLD_KIT_SOURCE' >&2; exit 1; }
+    core_root=$(cd "$core_root" && pwd)
     backup=$(mktemp -d)
     cp Cargo.lock "$backup/fold.lock"
     cp "$amp_root/Cargo.lock" "$backup/amp.lock"
@@ -28,7 +28,7 @@ if [ -n "$kit_root" ]; then
     trap 'exit 130' INT
     trap 'exit 143' TERM
     # Cargo receives one literal argument; no shell evaluates the TOML value.
-    build_args=(--config "patch.\"https://github.com/bstar/starkit\".starkit.path=\"$kit_root\"")
+    build_args=(--config "patch.\"https://github.com/bstar/starcore\".starcore.path=\"$core_root\"")
 fi
 (cd "$amp_root" && nix develop -c cargo build --release "${build_args[@]}")
 nix develop -c cargo build --workspace --release "${build_args[@]}"

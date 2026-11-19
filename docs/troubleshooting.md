@@ -75,9 +75,9 @@ is most likely large, or the destination is a slow mount. `ctrl+x` stops the
 running operation: what has already completed stays done, the file currently
 being copied finishes, and nothing after it is touched.
 
-## Building on a Mac and `cargo` cannot fetch STAR/KIT
+## Building on a Mac and `cargo` cannot fetch STAR/CORE
 
-STAR/KIT is a git dependency, so a build needs `git` on `PATH`. On a Mac with
+STAR/CORE is a git dependency, so a build needs `git` on `PATH`. On a Mac with
 Xcode selected, `/usr/bin/git` is a shim that asks `xcrun` where the real
 `git` is — and inside `nix develop`, that `xcrun` is Nix's own, which answers
 "tool 'git' not found" rather than falling through to Xcode's. The Nix

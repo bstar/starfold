@@ -6,12 +6,12 @@
 //! is -- [`render`] draws from it and [`hit`] tests against it, so a click
 //! can never land on a row the renderer did not draw.
 
-use starkit::chrome::frame::{self, Badge, Tone};
-use starkit::chrome::scrollbar;
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::Style;
-use starkit::theme::color::Rgb;
+use starcore::chrome::frame::{self, Badge, Tone};
+use starcore::chrome::scrollbar;
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::Style;
+use starcore::theme::color::Rgb;
 
 use super::{empty, fit, rgb, width_of, words, ModuleId, HEADING};
 use crate::ui::theme::Theme;
@@ -242,7 +242,7 @@ pub fn render_named(
     let word_list = words(ModuleId::Stack);
     // The core theme type -- a struct literal is not a coercion site, so the
     // deref from this crate's own `Theme` is spelled out here.
-    let core: &starkit::theme::Theme = t;
+    let core: &starcore::theme::Theme = t;
     let body = frame::frame(
         area,
         buf,
@@ -285,7 +285,7 @@ pub fn render_named(
     // next frame has something to answer to.
     let track = scrollbar::track(area, s.list);
     bars.draw(bar, track, buf, t, v.rows.len() as u32, v.scroll as u32);
-    if starkit::chrome::frame::extra_rows() == 0 {
+    if starcore::chrome::frame::extra_rows() == 0 {
         render_space(area, buf, t, v.space);
     }
 }
@@ -947,7 +947,7 @@ mod tests {
 
     #[test]
     fn every_builtin_has_a_legible_file_cursor() {
-        for builtin in starkit::theme::builtin::BUILTINS {
+        for builtin in starcore::theme::builtin::BUILTINS {
             let t = theme(builtin.id);
             let bg = t.row_cursor_bg.ensure_contrast(t.panel_bg, 3.0);
             let fg = t.row_cursor_fg.ensure_contrast(bg, 4.5);

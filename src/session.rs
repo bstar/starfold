@@ -137,7 +137,7 @@ impl Session {
     /// interrupted write cannot leave a truncated session behind.
     pub fn save(&self, path: &Path) -> Result<()> {
         let text = toml::to_string_pretty(self).context("serialising the session")?;
-        starkit::fs::write_private(path, text.as_bytes())
+        starcore::fs::write_private(path, text.as_bytes())
             .with_context(|| format!("writing {}", path.display()))
     }
 }

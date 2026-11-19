@@ -1,7 +1,7 @@
 use anyhow::{ensure, Result};
 use rmpv::Value;
+use starcore::native_surface::{PixelRect, Primitive};
 use starfold_preview_protocol::{Surface, Viewport};
-use starkit::native_surface::{PixelRect, Primitive};
 use std::collections::BTreeMap;
 #[derive(Clone)]
 struct Cell {

@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use starkit::ratatui::layout::Rect;
+use starcore::ratatui::layout::Rect;
 
 use super::super::dnd::{self as wire, Active, Choice, Message, Offer};
 use super::*;

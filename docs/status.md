@@ -41,7 +41,7 @@ study remains the visual target; specialized document and media content retain
 their existing layouts. Automated scene rendering and pointer checks
 cover light/dark themes and the terminal floor; desktop review remains. The older separate GPUI
 frontend remains on `experiment/graphical-presentation`; the active renderer uses
-STAR/KIT's `tiny-skia` and `cosmic-text` inside the terminal.
+STAR/CORE's `tiny-skia` and `cosmic-text` inside the terminal.
 
 Milestone 0's automated Linux checks and release build passed on 2026-09-25;
 its [interactive checklist](baseline-validation.md) is ready for desktop

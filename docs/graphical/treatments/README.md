@@ -44,7 +44,7 @@ Marks, cursors and directory history are independent per pane and workspace. The
 
 Chromium review on 2026-10-09 covered pane and workspace switching, independent marks, yank/paste queueing, stop/resume, clearing waiting entries, filtering, searched Places, text previews and double-click navigation. Layout checks passed at 1536, 1280, 930, 768 and 390 px widths, including the mobile Places dialog, with no page script exceptions.
 
-`native-classic.png`, `native-mocha.png` and `native-latte.png` are 1400×1147 captures from STAR/KIT's Rust renderer using FOLD's real application scene over `Fixture::tree()`, including a marked image, smooth image preview and completed copy. The low-resolution harbour image comes from the shared fixture. These are application captures, separate from the HTML target. Native transfer readouts use measured worker progress and show a dash when speed or ETA is unavailable. Recreate them with:
+`native-classic.png`, `native-mocha.png` and `native-latte.png` are 1400×1147 captures from STAR/CORE's Rust renderer using FOLD's real application scene over `Fixture::tree()`, including a marked image, smooth image preview and completed copy. The low-resolution harbour image comes from the shared fixture. These are application captures, separate from the HTML target. Native transfer readouts use measured worker progress and show a dash when speed or ETA is unavailable. Recreate them with:
 
 ```sh
 STARFOLD_RACK_CAPTURES=/tmp/starfold-native-rack-review \

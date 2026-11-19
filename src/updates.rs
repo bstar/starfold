@@ -1,8 +1,8 @@
-//! Application identity and startup/CLI glue for KIT's shared release updater.
+//! Application identity and startup/CLI glue for CORE's shared release updater.
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use starkit::update::{Application, Package, Policy, Updater};
+use starcore::update::{Application, Package, Policy, Updater};
 
 fn updater() -> Result<Updater> {
     let package = if cfg!(target_os = "macos") {
@@ -66,7 +66,7 @@ pub fn startup() {
         return;
     }
     let result = (|| -> Result<()> {
-        let target = starkit::update::standalone_target(&target()?)?;
+        let target = starcore::update::standalone_target(&target()?)?;
         let updater = updater()?;
         if updater.policy()? == Policy::Off {
             return Ok(());
@@ -101,7 +101,7 @@ pub fn command(action: Option<crate::cli::UpdateAction>) -> Result<()> {
             }
         }
         UpdateAction::Install => {
-            let target = starkit::update::standalone_target(&target()?)?;
+            let target = starcore::update::standalone_target(&target()?)?;
             anyhow::ensure!(updater.policy()? != Policy::Off, "Updates are disabled; run starfold update enable first");
             match updater.check()? {
                 Some(candidate) => {
@@ -112,12 +112,12 @@ pub fn command(action: Option<crate::cli::UpdateAction>) -> Result<()> {
             }
         }
         UpdateAction::Enable => {
-            starkit::update::standalone_target(&target()?)?;
+            starcore::update::standalone_target(&target()?)?;
             updater.set_policy(Policy::Automatic)?;
             println!("Automatic updates enabled. Stable releases are checked in the background every six hours and installed on the next launch.");
         }
         UpdateAction::Notify => {
-            starkit::update::standalone_target(&target()?)?;
+            starcore::update::standalone_target(&target()?)?;
             updater.set_policy(Policy::Notify)?;
             println!("Notify-only updates enabled. Check starfold update status for available releases; install them with starfold update install.");
         }
@@ -128,7 +128,7 @@ pub fn command(action: Option<crate::cli::UpdateAction>) -> Result<()> {
         UpdateAction::Status => {
             println!("Build: {} {} ({})", if cfg!(feature = "terminal-graphics") { "graphical" } else { "terminal" }, env!("CARGO_PKG_VERSION"), std::env::consts::ARCH);
             println!("Policy: {:?}", updater.policy()?);
-            match target().and_then(|target| starkit::update::standalone_target(&target)) {
+            match target().and_then(|target| starcore::update::standalone_target(&target)) {
                 Ok(target) => println!("Installation: {}", target.display()),
                 Err(error) => println!("Self-update unavailable: {error:#}"),
             }
@@ -144,7 +144,7 @@ pub fn command(action: Option<crate::cli::UpdateAction>) -> Result<()> {
             }
         }
         UpdateAction::Rollback => {
-            let target = starkit::update::standalone_target(&target()?)?;
+            let target = starcore::update::standalone_target(&target()?)?;
             updater.rollback(&target)?;
             updater.set_policy(Policy::Off)?;
             println!("Restored the previous executable and disabled automatic updates. Relaunch STAR/FOLD to use it.");
@@ -161,7 +161,7 @@ pub struct Notices {
 impl Notices {
     pub fn start() -> Option<Self> {
         target()
-            .and_then(|p| starkit::update::standalone_target(&p))
+            .and_then(|p| starcore::update::standalone_target(&p))
             .ok()?;
         let updater = updater().ok()?;
         let marker = crate::PATHS
@@ -227,7 +227,7 @@ impl Notices {
 }
 
 fn notice_lines(
-    candidate: &starkit::update::Candidate,
+    candidate: &starcore::update::Candidate,
     heading: &str,
     detail: &str,
 ) -> Vec<String> {
@@ -282,7 +282,7 @@ mod notice_tests {
     use super::*;
     #[test]
     fn changelog_is_plain_text_bounded_and_preserves_version_and_link() {
-        let candidate: starkit::update::Candidate = serde_json::from_value(serde_json::json!({
+        let candidate: starcore::update::Candidate = serde_json::from_value(serde_json::json!({
             "tag":"v9.0.0", "version":"9.0.0", "asset":"test", "url":"", "size":0,
             "sha256":"", "release_url":"https://github.com/bstar/starfold/releases/tag/v9.0.0",
             "release_notes":format!("Playback fixed\n\u{1b}]2;bad\u{7}{}", "x".repeat(50000))
@@ -298,7 +298,7 @@ mod notice_tests {
     proptest::proptest! {
         #[test]
         fn foreign_release_notes_cannot_emit_terminal_controls(notes in ".{0,1024}") {
-            let candidate: starkit::update::Candidate = serde_json::from_value(serde_json::json!({
+            let candidate: starcore::update::Candidate = serde_json::from_value(serde_json::json!({
                 "tag":"v9.0.0", "version":"9.0.0", "asset":"test", "url":"", "size":0,
                 "sha256":"", "release_url":"https://github.com/bstar/starfold/releases/tag/v9.0.0",
                 "release_notes":notes

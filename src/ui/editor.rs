@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::{bounded, Receiver};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-use starkit::chrome::{frame, header};
-use starkit::crossterm::event::{
+use starcore::chrome::{frame, header};
+use starcore::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use starkit::ratatui::buffer::Buffer;
-use starkit::ratatui::layout::Rect;
-use starkit::ratatui::style::{Color, Modifier, Style};
+use starcore::ratatui::buffer::Buffer;
+use starcore::ratatui::layout::Rect;
+use starcore::ratatui::style::{Color, Modifier, Style};
 
 use crate::fold::entry::{Entry, EntryKind};
 use crate::ui::panels::rgb;

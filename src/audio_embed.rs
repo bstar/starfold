@@ -75,7 +75,7 @@ pub struct Frame {
     pub height: u16,
     pub cells: Vec<Cell>,
     pub images: Vec<TransportImage>,
-    pub surface: Option<starkit::native_surface::Surface>,
+    pub surface: Option<starcore::native_surface::Surface>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -331,7 +331,7 @@ enum ChildMessage {
         #[serde(default)]
         images: Vec<TransportImage>,
         #[serde(default)]
-        surface: Option<starkit::native_surface::Surface>,
+        surface: Option<starcore::native_surface::Surface>,
     },
     Status {
         playing: bool,
@@ -1456,7 +1456,7 @@ fn validate_frame_at_size(
         if cell.symbol.is_empty()
             || cell.symbol.len() > 64
             || cell.symbol.chars().any(char::is_control)
-            || starkit::wrap::width_of(&cell.symbol) > 2
+            || starcore::wrap::width_of(&cell.symbol) > 2
         {
             return Err("STAR/AMP sent an unsafe frame symbol".into());
         }
@@ -1745,7 +1745,7 @@ mod tests {
             let graphics = GraphicsConfig { cell_width: 8, cell_height: 16 };
             let frame = Frame {
                 generation: 1, width: 58, height: 5, cells: vec![], images: vec![],
-                surface: Some(starkit::native_surface::Surface::new(w, h, "#101010".into())),
+                surface: Some(starcore::native_surface::Surface::new(w, h, "#101010".into())),
             };
             proptest::prop_assert!(validate_frame_at_size(&frame, Some(&graphics), Some([w, h])).is_ok());
             proptest::prop_assert!(validate_frame_at_size(&frame, Some(&graphics), Some([w + 1, h])).is_err());

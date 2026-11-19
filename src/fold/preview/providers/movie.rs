@@ -72,7 +72,7 @@ fn choose(titles: Vec<Title>, name: &str, year: Option<u16>, id: Option<&str>) -
     let result = matches.next()?;
     matches.next().is_none().then_some(result)
 }
-fn fetch(agent: &starkit::ureq::Agent, url: &str, limit: usize) -> anyhow::Result<Vec<u8>> {
+fn fetch(agent: &starcore::ureq::Agent, url: &str, limit: usize) -> anyhow::Result<Vec<u8>> {
     let mut response = agent.get(url).call()?;
     anyhow::ensure!(
         response.status().is_success(),
@@ -117,8 +117,8 @@ pub(super) fn enrich(document: &mut Document, path: &Path, id: Option<&str>) {
         .and_then(|p| std::fs::read(p).ok())
         .filter(|bytes| bytes.len() <= 64 * 1024)
         .and_then(|bytes| serde_json::from_slice::<Title>(&bytes).ok());
-    let agent: starkit::ureq::Agent =
-        starkit::net::builder(concat!("starfold/", env!("CARGO_PKG_VERSION")))
+    let agent: starcore::ureq::Agent =
+        starcore::net::builder(concat!("starfold/", env!("CARGO_PKG_VERSION")))
             .https_only(true)
             .timeout_global(Some(Duration::from_secs(3)))
             .build()
@@ -198,9 +198,9 @@ pub(super) fn enrich(document: &mut Document, path: &Path, id: Option<&str>) {
         });
     if let Some(bytes) = bytes {
         if let Ok(mut reader) =
-            starkit::image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()
+            starcore::image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()
         {
-            let mut limits = starkit::image::Limits::default();
+            let mut limits = starcore::image::Limits::default();
             limits.max_image_width = Some(2048);
             limits.max_image_height = Some(2048);
             limits.max_alloc = Some(16 * 1024 * 1024);
