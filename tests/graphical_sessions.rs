@@ -63,13 +63,13 @@ impl Host {
             files,
         }
     }
-    fn connect(&self) -> (UnixStream, BufReader<UnixStream>) {
+    fn connect(&self) -> (UnixStream, Reader) {
         self.connect_with_capabilities(None)
     }
     fn connect_with_capabilities(
         &self,
         capabilities: Option<starcore::terminal_graphics::capabilities::Capabilities>,
-    ) -> (UnixStream, BufReader<UnixStream>) {
+    ) -> (UnixStream, Reader) {
         // bind creates the filesystem entry before listen completes. macOS
         // can expose that short interval to the test's existence check.
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -100,26 +100,37 @@ impl Host {
             &mut socket,
         )
         .unwrap();
-        let reader = BufReader::new(socket.try_clone().unwrap());
+        let reader = Reader {
+            inner: BufReader::new(socket.try_clone().unwrap()),
+            skipped: std::collections::VecDeque::new(),
+        };
         (socket, reader)
     }
 }
-fn wait(
-    reader: &mut BufReader<UnixStream>,
-    test: impl Fn(&ServerMessage) -> bool,
-) -> ServerMessage {
+/// A session's message stream. `key` keeps the messages it reads before its
+/// acknowledgement, because the host may send the resulting scene first.
+struct Reader {
+    inner: BufReader<UnixStream>,
+    skipped: std::collections::VecDeque<ServerMessage>,
+}
+fn next(reader: &mut Reader) -> ServerMessage {
+    reader.skipped.pop_front().unwrap_or_else(|| {
+        read_message::<ServerMessage>(&mut reader.inner)
+            .unwrap()
+            .expect("session unexpectedly closed")
+    })
+}
+fn wait(reader: &mut Reader, test: impl Fn(&ServerMessage) -> bool) -> ServerMessage {
     let start = Instant::now();
     loop {
-        let m = read_message::<ServerMessage>(reader)
-            .unwrap()
-            .expect("session unexpectedly closed");
+        let m = next(reader);
         assert!(start.elapsed() < Duration::from_secs(30));
         if test(&m) {
             return m;
         }
     }
 }
-fn key(socket: &mut UnixStream, reader: &mut BufReader<UnixStream>, id: u64, code: &str) -> bool {
+fn key(socket: &mut UnixStream, reader: &mut Reader, id: u64, code: &str) -> bool {
     write_message(
         &ClientMessage::Input {
             id,
@@ -133,13 +144,25 @@ fn key(socket: &mut UnixStream, reader: &mut BufReader<UnixStream>, id: u64, cod
         socket,
     )
     .unwrap();
-    matches!(
-        wait(
-            reader,
-            |m| matches!(m,ServerMessage::Ack{id:received,..} if *received==id)
-        ),
-        ServerMessage::Ack { accepted: true, .. }
-    )
+    let start = Instant::now();
+    let mut kept = std::collections::VecDeque::new();
+    loop {
+        let m = next(reader);
+        assert!(start.elapsed() < Duration::from_secs(30));
+        if let ServerMessage::Ack {
+            id: received,
+            accepted,
+            ..
+        } = m
+        {
+            if received == id {
+                kept.extend(reader.skipped.drain(..));
+                reader.skipped = kept;
+                return accepted;
+            }
+        }
+        kept.push_back(m);
+    }
 }
 #[test]
 fn marked_copy_survives_detach_and_duplicate_input_is_rejected() {
@@ -220,7 +243,7 @@ fn send_key(socket: &mut UnixStream, id: u64, code: &str, modifiers: u8) {
 /// The host may send the resulting scene before or after acknowledging the
 /// key, so wait for both rather than discarding messages until the Ack.
 /// Returns whether the key was accepted.
-fn ack_and_scene(reader: &mut BufReader<UnixStream>, id: u64, text: &str) -> bool {
+fn ack_and_scene(reader: &mut Reader, id: u64, text: &str) -> bool {
     let (mut accepted, mut scene) = (None, false);
     while accepted.is_none() || !scene {
         match wait(reader, |m| {
@@ -320,9 +343,9 @@ fn remote_desktop_drop_routes_acknowledged_effects_to_the_controller() {
         )
         .unwrap();
     };
-    fn effect(socket: &mut UnixStream, reader: &mut BufReader<UnixStream>, prefix: &str) {
+    fn effect(socket: &mut UnixStream, reader: &mut Reader, prefix: &str) {
         loop {
-            let message = read_message::<ServerMessage>(reader).unwrap().unwrap();
+            let message = next(reader);
             if let ServerMessage::Osc72 { id, meta, .. } = message {
                 write_message(&ClientMessage::EffectAck { id }, socket).unwrap();
                 if meta.starts_with(prefix) {

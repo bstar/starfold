@@ -8203,6 +8203,9 @@ mod tests {
             Graphics::disabled(),
         );
         app.enable_graphical();
+        // Rows are rebuilt when the wall-clock minute changes (relative file
+        // ages); pin the clock so a minute boundary cannot fail the test.
+        app.set_now(crate::fold::testing::now());
         let pointer = app.view.rows.as_ptr();
         let mut times = vec![];
         for _ in 0..100 {
