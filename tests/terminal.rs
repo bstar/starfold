@@ -27,9 +27,16 @@ impl Drop for Running {
 }
 
 fn temporary_dir() -> tempfile::TempDir {
-    // macOS exposes /var through /private/var. Match the canonical paths
+    // macOS's per-user temporary directory is too long for the Unix socket
+    // paths a graphical session creates beneath it, so use /tmp there.
+    let base = if cfg!(target_os = "macos") {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        std::env::temp_dir()
+    };
+    // macOS exposes /var and /tmp through /private. Match the canonical paths
     // emitted by startup listings and drag offers.
-    tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap()
+    tempfile::tempdir_in(base.canonicalize().unwrap()).unwrap()
 }
 
 fn pty() -> (File, File) {
