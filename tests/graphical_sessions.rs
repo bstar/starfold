@@ -194,33 +194,44 @@ fn headless_host_retains_places_and_operations_actions() {
     let host = Host::start();
     let (mut socket, mut reader) = host.connect();
     wait(&mut reader, |m| matches!(m, ServerMessage::Hello { .. }));
-    assert!(key(&mut socket, &mut reader, 1, "char:b"));
-    wait(
-        &mut reader,
-        |m| matches!(m,ServerMessage::Scene{scene} if scene.spans.iter().any(|s|s.text.contains("PLACES"))),
-    );
+    send_key(&mut socket, 1, "char:b", 0);
+    assert!(ack_and_scene(&mut reader, 1, "PLACES"));
     assert!(key(&mut socket, &mut reader, 2, "escape"));
+    send_key(&mut socket, 3, "char:3", 4);
+    ack_and_scene(&mut reader, 3, "OPERATIONS");
+}
+
+fn send_key(socket: &mut UnixStream, id: u64, code: &str, modifiers: u8) {
     write_message(
         &ClientMessage::Input {
-            id: 3,
+            id,
             revision: 0,
             generation: 1,
             input: Input::Key {
-                code: "char:3".into(),
-                modifiers: 4,
+                code: code.into(),
+                modifiers,
             },
         },
-        &mut socket,
+        socket,
     )
     .unwrap();
-    wait(&mut reader, |m| {
-        matches!(m, ServerMessage::Ack { id: 3, .. })
-    });
-    let scene = wait(
-        &mut reader,
-        |m| matches!(m,ServerMessage::Scene{scene} if scene.spans.iter().any(|s|s.text.contains("OPERATIONS"))),
-    );
-    assert!(matches!(scene, ServerMessage::Scene { .. }));
+}
+
+/// The host may send the resulting scene before or after acknowledging the
+/// key, so wait for both rather than discarding messages until the Ack.
+/// Returns whether the key was accepted.
+fn ack_and_scene(reader: &mut BufReader<UnixStream>, id: u64, text: &str) -> bool {
+    let (mut accepted, mut scene) = (None, false);
+    while accepted.is_none() || !scene {
+        match wait(reader, |m| {
+            matches!(m, ServerMessage::Ack { id: received, .. } if *received == id)
+                || matches!(m, ServerMessage::Scene { scene } if scene.spans.iter().any(|s| s.text.contains(text)))
+        }) {
+            ServerMessage::Ack { accepted: a, .. } => accepted = Some(a),
+            _ => scene = true,
+        }
+    }
+    accepted.unwrap()
 }
 
 #[test]
