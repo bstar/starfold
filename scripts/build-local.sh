@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 fold_root=$PWD
-core_root=${STARFOLD_KIT_SOURCE:-}
+core_root=${STARFOLD_CORE_SOURCE:-}
 amp_default="$fold_root/../staramp"
 amp_root=${STARFOLD_AMP_SOURCE:-"$amp_default"}
 [ -f "$amp_root/Cargo.toml" ] || {
@@ -14,7 +14,7 @@ amp_root=${STARFOLD_AMP_SOURCE:-"$amp_default"}
 export CARGO_NET_GIT_FETCH_WITH_CLI=true
 build_args=(--locked)
 if [ -n "$core_root" ]; then
-    [ -f "$core_root/Cargo.toml" ] || { echo 'Invalid STARFOLD_KIT_SOURCE' >&2; exit 1; }
+    [ -f "$core_root/Cargo.toml" ] || { echo 'Invalid STARFOLD_CORE_SOURCE' >&2; exit 1; }
     core_root=$(cd "$core_root" && pwd)
     backup=$(mktemp -d)
     cp Cargo.lock "$backup/fold.lock"

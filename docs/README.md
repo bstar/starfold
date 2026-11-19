@@ -61,5 +61,5 @@ For a coordinated local build, run `scripts/build-local.sh`. It builds FOLD and
 the sibling `staramp` checkout through their Nix devshells with locked, published
 CORE pins, then installs the matching private AMP helper beside FOLD.
 `STARFOLD_AMP_SOURCE` overrides the AMP source. For unreleased CORE development,
-set `STARFOLD_KIT_SOURCE` explicitly; the script restores both git-sourced
+set `STARFOLD_CORE_SOURCE` explicitly; the script restores both git-sourced
 lockfiles after the temporary path override. Never commit a path-patched lockfile.
