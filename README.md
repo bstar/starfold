@@ -26,6 +26,8 @@ nix run github:bstar/starfold        # Nix, on Linux or Apple Silicon macOS
 
 [Installing](docs/installing.md) covers every route, including building from
 source. There are no system libraries to install first.
+On Omarchy, [STAR/FOLD on Omarchy](docs/omarchy.md) covers the launcher, a
+file manager key and themes.
 
 ## Release updates
 

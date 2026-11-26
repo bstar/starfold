@@ -89,8 +89,9 @@ variables are parsed, and the file path is passed as one separate argument.
 
 `theme = "system"` follows the desktop: STAR/FOLD reads Stylix's
 `~/.config/stylix/palette.json` (or `palette.yaml`) first, so whatever base16
-scheme the rest of the desktop is set to, it matches it, and falls back to
-COSMIC's own settings when there is no Stylix file to read.
+scheme the rest of the desktop is set to, it matches it. Without Stylix it
+uses the active Omarchy theme's colours and light or dark mode, and falls back
+to COSMIC's own settings when there is neither.
 
 The shared themes ship built in; `F8` / `Shift+F8` and `alt+t` /
 `alt+shift+t` cycle them live:
